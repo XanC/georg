@@ -40,6 +40,11 @@ This writes the three MP3 renditions, the sermon transcript, and `report.json`
 with the detected boundaries. Classification and transcription are cached, so
 re-running with `--boundaries 0:02:10,0:31:20,0:52:05,1:14:30` only re-cuts the audio.
 
+With the database: `uv run georg discover` records new recordings from the
+configured inputs and queues them, and `uv run georg worker` processes the queue,
+storing the renditions and a proposed sermon revision for review. A
+`local_folder` input (one subfolder per service) works without Google Drive.
+
 ## License
 
 Georg is licensed under the **GNU Affero General Public License, version 3 only** (`AGPL-3.0-only`); see [LICENSE](LICENSE). If you run a modified version of Georg as a network service, the AGPL requires you to offer its source code to that service's users.

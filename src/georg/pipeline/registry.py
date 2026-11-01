@@ -5,10 +5,11 @@ import importlib
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from georg.core.config import ModuleConfig, ProcessorsConfig
+from georg.core.config import ModuleConfig, NamedModuleConfig, ProcessorsConfig
 from georg.core.contracts import (
     AudioClassifier,
     BoundaryDetector,
+    InputSource,
     MetadataGenerator,
     Transcriber,
     TranscriptFormatter,
@@ -29,6 +30,27 @@ PROCESSOR_TYPES: dict[Role, dict[str, str]] = {
     "metadata": {"rules": f"{_P}.metadata:RulesMetadataGenerator"},
 }
 
+INPUT_TYPES: dict[str, str] = {
+    "local_folder": "georg.modules.inputs.local_folder:LocalFolderInput",
+}
+
+
+def _construct(target: str, options: dict[str, Any]) -> Any:
+    module_name, _, attr = target.partition(":")
+    cls = getattr(importlib.import_module(module_name), attr)
+    factory = getattr(cls, "from_options", cls)
+    return factory(dict(options))
+
+
+def build_input(config: NamedModuleConfig) -> InputSource:
+    """Construct the input registered for `config.type`."""
+    target = INPUT_TYPES.get(config.type)
+    if target is None:
+        known = ", ".join(sorted(INPUT_TYPES))
+        raise ConfigError(f"unknown input type {config.type!r} (known: {known})")
+    source: InputSource = _construct(target, config.options)
+    return source
+
 
 def build_processor(role: Role, config: ModuleConfig) -> Any:
     """Construct the module registered for `config.type` in `role`."""
@@ -36,10 +58,7 @@ def build_processor(role: Role, config: ModuleConfig) -> Any:
     if target is None:
         known = ", ".join(sorted(PROCESSOR_TYPES[role]))
         raise ConfigError(f"unknown {role} type {config.type!r} (known: {known})")
-    module_name, _, attr = target.partition(":")
-    cls = getattr(importlib.import_module(module_name), attr)
-    factory = getattr(cls, "from_options", cls)
-    return factory(dict(config.options))
+    return _construct(target, config.options)
 
 
 @dataclass(frozen=True)

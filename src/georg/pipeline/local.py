@@ -69,6 +69,8 @@ class LocalRunResult:
     metadata: SermonMetadata
     formatted: FormattedTranscript | None
     files: dict[str, Path]
+    duration_ms: int
+    """Length of the joined recording."""
     timings: dict[str, float] = field(default_factory=dict)
     """Seconds per stage; 0 for cache hits."""
 
@@ -92,6 +94,7 @@ def run_local(
     language: str | None = None,
     service_date: date | None = None,
     documents: Sequence[str] = (),
+    source: SourceItem | None = None,
     defaults: SermonMetadata | None = None,
     boundaries: ServiceBoundaries | None = None,
     mastering_params: mastering.MasteringParams | None = None,
@@ -100,7 +103,9 @@ def run_local(
 
     Writes the renditions (`<name>.mp3`), `transcript.md` (the sermon), and
     `report.json` (boundaries, explanation, metadata, timings). Pass
-    `boundaries` to render reviewed timestamps instead of the detector's.
+    `boundaries` to render reviewed timestamps instead of the detector's, and
+    `source` to give the metadata generator the discovered item (otherwise one is
+    made from the files, `service_date` and `documents`).
     """
     p = processors
     timings: dict[str, float] = {}
@@ -153,7 +158,8 @@ def run_local(
     chosen = boundaries or proposal.boundaries
     sermon_transcript = transcript.within(chosen.sermon)
 
-    source = SourceItem(
+    service_date = service_date or (source.service_date if source else None)
+    source = source or SourceItem(
         source_type="local",
         source_ref=source_key,
         parts=tuple(SourcePart(ref=str(part), name=part.name) for part in parts),
@@ -205,7 +211,7 @@ def run_local(
 
     files = {name: ref.path for name, ref in refs.items()}
     files["transcript"] = transcript_md
-    result = LocalRunResult(proposal, chosen, metadata, formatted, files, timings)
+    result = LocalRunResult(proposal, chosen, metadata, formatted, files, duration_ms, timings)
     _write_report(out_dir / "report.json", result)
     return result
 
