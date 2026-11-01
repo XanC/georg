@@ -4,7 +4,7 @@ Tags: sermons, church, rest-api
 Requires at least: 5.6
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.2.0
+Stable tag: 0.2.1
 License: AGPL-3.0-only
 License URI: https://www.gnu.org/licenses/agpl-3.0.html
 
@@ -67,6 +67,9 @@ than five minutes are refused). PHP's `upload_max_filesize` and `post_max_size` 
 exceed the largest sermon MP3.
 
 == Changelog ==
+
+= 0.2.1 =
+* Delete the temporary upload with unlink() so media plugins hooking wp_delete_file (e.g. WebP Express) do not log errors.
 
 = 0.2.0 =
 * Authenticate georg/v1 requests only by HMAC-SHA256 signature (key id, timestamp,

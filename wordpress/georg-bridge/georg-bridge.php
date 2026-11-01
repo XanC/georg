@@ -4,7 +4,7 @@
  * Plugin Name:       Georg Bridge
  * Plugin URI:        https://github.com/XanC/georg
  * Description:       REST endpoints that let Georg upload sermon audio and create or update Church Content sermons.
- * Version:           0.2.0
+ * Version:           0.2.1
  * Requires at least: 5.6
  * Requires PHP:      7.4
  * License:           AGPL-3.0-only
@@ -479,8 +479,10 @@ function georg_bridge_upload_audio( $request ) {
 	try {
 		return georg_bridge_store_audio( $request, $tmp );
 	} finally {
+		// Not wp_delete_file(): its filter makes media plugins (e.g. WebP Express) log errors
+		// for a path outside the uploads directory.
 		if ( file_exists( $tmp ) ) {
-			wp_delete_file( $tmp );
+			unlink( $tmp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink
 		}
 	}
 }
