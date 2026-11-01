@@ -50,7 +50,8 @@ class WordPressOptions(BaseModel):
     filename: str = "sermon_{date}_{slug}.mp3"
     """Audio file name under `uploads/sermons/`; fields {date} (YYYY-MM-DD) and {slug}."""
     timezone: str | None = None
-    """IANA zone for the post date; defaults to the instance timezone."""
+    """IANA zone for the post date, e.g. "America/Chicago"; defaults to `default_timezone`
+    (UTC unless the caller passes the instance timezone)."""
     service_time: str = "00:00"
     """Local "HH:MM" used when the metadata has no service time."""
     term_fields: dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_TERM_FIELDS))
