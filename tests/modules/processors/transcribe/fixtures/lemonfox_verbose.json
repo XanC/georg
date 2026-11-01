@@ -1,0 +1,12 @@
+{
+  "task": "transcribe",
+  "language": "english",
+  "duration": 21.5,
+  "text": "Grace to you and peace from God our Father. Today is All Saints Day. Let us pray.",
+  "segments": [
+    {"id": 0, "seek": 0, "start": 0.0, "end": 4.2, "text": " Grace to you and peace from God our Father.", "tokens": [1, 2], "temperature": 0.0, "avg_logprob": -0.12, "compression_ratio": 1.3, "no_speech_prob": 0.01,
+     "words": [{"word": "Grace", "start": 0.0, "end": 0.5, "probability": 0.99}, {"word": "to", "start": 0.5, "end": 0.6, "probability": 0.98}]},
+    {"id": 1, "seek": 0, "start": 4.2, "end": 9.8, "text": " Today is All Saints Day.", "tokens": [3], "temperature": 0.0, "avg_logprob": -0.31, "compression_ratio": 1.2, "no_speech_prob": 0.02},
+    {"id": 2, "seek": 0, "start": 20.0, "end": 20.0, "text": " Let us pray.", "tokens": [4], "temperature": 0.0, "avg_logprob": -0.05, "compression_ratio": 1.0, "no_speech_prob": 0.0}
+  ]
+}
