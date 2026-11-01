@@ -21,6 +21,9 @@ georg = "georg.cli:main"
 classify = [
     "inaspeechsegmenter>=0.8",
 ]
+whisper = [
+    "faster-whisper>=1.1",
+]
 
 [dependency-groups]
 dev = [
@@ -60,7 +63,7 @@ packages = ["georg"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["inaSpeechSegmenter", "inaSpeechSegmenter.*"]
+module = ["inaSpeechSegmenter", "inaSpeechSegmenter.*", "faster_whisper", "faster_whisper.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

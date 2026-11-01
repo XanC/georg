@@ -337,7 +337,7 @@ Georg typically handles one service per week, so the instance is **stopped most 
 | D1 | Web UI: server-rendered htmx vs SPA | htmx + Jinja2 | No |
 | D2 | Job queue: SQLite table vs Redis/Celery | SQLite table | No |
 | D3 | Transcribe full service vs sermon only | Full service, slice by timestamps | Light (cost) |
-| D4 | Transcription provider | OpenAI-compatible `Transcriber`; lemonfox.ai by default (as today), configurable base URL | No |
+| D4 | Transcription provider | Local Whisper via faster-whisper (CPU, int8) by default, to drop the lemonfox subscription; OpenAI-compatible `Transcriber` (lemonfox.ai, OpenAI, self-hosted servers) kept as an option | No |
 | D5 | Audio classifier dependency | inaSpeechSegmenter (confirmed from POC), whole service once, as an optional extra; drop the unused SVM | No |
 | D6 | Media hosting for published audio | Unchanged: `uploads/sermons/` on the web server, synced to R2 by the existing cron | No |
 | D7 | WordPress integration mechanism | REST + application password + `georg-bridge` plugin (meta + attachment endpoint), §5.4 | Confirm plugin OK |
