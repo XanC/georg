@@ -5,12 +5,13 @@ import importlib
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from georg.core.config import ModuleConfig, NamedModuleConfig, ProcessorsConfig
+from georg.core.config import ModuleConfig, NamedModuleConfig, OutputConfig, ProcessorsConfig
 from georg.core.contracts import (
     AudioClassifier,
     BoundaryDetector,
     InputSource,
     MetadataGenerator,
+    OutputTarget,
     Transcriber,
     TranscriptFormatter,
 )
@@ -33,6 +34,21 @@ PROCESSOR_TYPES: dict[Role, dict[str, str]] = {
 INPUT_TYPES: dict[str, str] = {
     "local_folder": "georg.modules.inputs.local_folder:LocalFolderInput",
 }
+
+OUTPUT_TYPES: dict[str, str] = {
+    "sftp": "georg.modules.outputs.sftp:SftpOutput",
+}
+"""Output classes are constructed with their whole `OutputConfig`."""
+
+
+def build_output(config: OutputConfig) -> OutputTarget:
+    target = OUTPUT_TYPES.get(config.type)
+    if target is None:
+        known = ", ".join(sorted(OUTPUT_TYPES))
+        raise ConfigError(f"unknown output type {config.type!r} (known: {known})")
+    module_name, _, attr = target.partition(":")
+    output: OutputTarget = getattr(importlib.import_module(module_name), attr)(config)
+    return output
 
 
 def _construct(target: str, options: dict[str, Any]) -> Any:

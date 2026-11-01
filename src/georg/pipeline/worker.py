@@ -14,7 +14,16 @@ from georg.core.config import GeorgConfig
 from georg.db.engine import session_factory
 from georg.jobs.queue import JobQueue, LeasedJob, LeaseLostError
 from georg.pipeline.registry import Processors, build_processors
-from georg.pipeline.service import DISCOVER, PROCESS, discover, process_service
+from georg.pipeline.service import (
+    DISCOVER,
+    PROCESS,
+    PUBLISH,
+    RENDER,
+    discover,
+    process_service,
+    publish_sermon,
+    render_revision,
+)
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +72,12 @@ class Worker:
             DISCOVER: lambda _: discover(self.config, self.sessions, self.queue),
             PROCESS: lambda payload: process_service(
                 self.config, self.sessions, int(payload["service_id"]), self.processors
+            ),
+            RENDER: lambda payload: render_revision(
+                self.config, self.sessions, int(payload["revision_id"]), self.processors
+            ),
+            PUBLISH: lambda payload: publish_sermon(
+                self.config, self.sessions, int(payload["sermon_id"])
             ),
         }
 

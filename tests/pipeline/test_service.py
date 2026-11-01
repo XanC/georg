@@ -8,10 +8,18 @@ from sqlalchemy import Engine
 from test_local_run import PROPOSED, processors, tone
 
 from georg.core.config import GeorgConfig
+from georg.core.errors import ModuleError
+from georg.core.types import ExternalRef, PublicationRequest
 from georg.db.engine import session_factory
-from georg.db.repositories import ArtifactRepository, SermonRepository, ServiceRepository
+from georg.db.repositories import (
+    ArtifactRepository,
+    PublicationRepository,
+    SermonRepository,
+    ServiceRepository,
+    UserRepository,
+)
 from georg.jobs.queue import JobQueue
-from georg.pipeline import Worker, discover, process_service
+from georg.pipeline import Worker, discover, process_service, publish_sermon, render_revision
 
 
 @pytest.fixture
@@ -79,3 +87,93 @@ def test_failed_job_is_recorded(config: GeorgConfig, engine: Engine) -> None:
     [job] = queue.list()
     assert job.status == "failed"
     assert job.last_error is not None and "gone" in job.last_error
+
+
+class FakeOutput:
+    def __init__(self, name: str, renditions: set[str], fail: Exception | None = None) -> None:
+        self.name, self.renditions, self.fail = name, frozenset(renditions), fail
+        self.wants_transcript = True
+        self.requests: list[PublicationRequest] = []
+
+    def find_existing(self, publication_key: str) -> ExternalRef | None:
+        return None
+
+    def publish(self, request: PublicationRequest) -> ExternalRef:
+        self.requests.append(request)
+        if self.fail:
+            raise self.fail
+        assert all(ref.path.is_file() for ref in request.files.values())
+        return ExternalRef(target=self.name, external_id=f"id-{len(self.requests)}")
+
+
+def processed(config: GeorgConfig, engine: Engine) -> tuple[int, int]:
+    sessions = session_factory(engine)
+    [service_id] = discover(config, sessions, JobQueue(engine))
+    revision_id = process_service(config, sessions, service_id, processors())
+    assert revision_id is not None
+    with sessions() as s:
+        [sermon] = SermonRepository(s).for_service(service_id)
+        return sermon.id, revision_id
+
+
+def test_render_edited_boundaries(config: GeorgConfig, engine: Engine) -> None:
+    sessions = session_factory(engine)
+    sermon_id, first = processed(config, engine)
+    edited = PROPOSED.model_copy(update={"sermon_start_ms": 2_000})
+    with sessions.begin() as s:
+        repo = SermonRepository(s)
+        old = repo.revision(first)
+        revision_id = repo.add_revision(sermon_id, author="user:1", boundaries=edited,
+                                        metadata=repo.metadata(old),
+                                        transcript_markdown=old.transcript_markdown).id  # fmt: skip
+    procs = processors()
+    render_revision(config, sessions, revision_id, procs)
+    assert procs.formatter.calls == 0  # type: ignore[union-attr]
+    with sessions() as s:
+        revision = SermonRepository(s).revision(revision_id)
+        audio = ArtifactRepository(s).get(revision.sermon_audio_artifact_id or 0)
+        assert audio.meta["boundaries"] == [1_000, 2_000, 8_000, 11_000]
+        assert abs((audio.duration_ms or 0) - 6_000) < 200
+        count = len(ArtifactRepository(s).for_service(audio.service_id))
+    render_revision(config, sessions, revision_id, procs)  # already rendered: no-op
+    with sessions() as s:
+        assert len(ArtifactRepository(s).for_service(audio.service_id)) == count
+
+
+def test_publish_requires_approval_then_publishes_once(config: GeorgConfig, engine: Engine) -> None:
+    sessions = session_factory(engine)
+    sermon_id, revision_id = processed(config, engine)
+    good = FakeOutput("phone", {"service_phone"})
+    with pytest.raises(ModuleError, match="not approved"):
+        publish_sermon(config, sessions, sermon_id, outputs=[good])
+    with sessions.begin() as s:
+        user = UserRepository(s).add("rev", "x", "admin")
+        SermonRepository(s).approve(revision_id, approved_by=user.id)
+
+    bad = FakeOutput("website", {"sermon"}, fail=ModuleError("down", retryable=True))
+    with pytest.raises(ModuleError, match="website: down") as err:
+        publish_sermon(config, sessions, sermon_id, outputs=[good, bad])
+    assert err.value.retryable
+    [request] = good.requests
+    assert request.publication_key == "georg:test:sermon-1:phone"
+    assert request.transcript_markdown is not None and request.service_date.day == 1
+
+    bad.fail = None
+    statuses = publish_sermon(config, sessions, sermon_id, outputs=[good, bad])
+    assert statuses == {"phone": "published", "website": "published"}
+    assert len(good.requests) == 1  # not re-sent
+    with sessions() as s:
+        pubs = {p.target_name: p for p in PublicationRepository(s).for_sermon(sermon_id)}
+        assert pubs["website"].status == "published"
+        assert pubs["website"].external_id == "id-2"
+
+
+def test_publish_waits_for_missing_renditions(config: GeorgConfig, engine: Engine) -> None:
+    config = config.model_copy(
+        update={"review": config.review.model_copy(update={"require_approval": False})}
+    )
+    sermon_id, _ = processed(config, engine)
+    with pytest.raises(ModuleError, match="not rendered yet") as err:
+        publish_sermon(config, session_factory(engine), sermon_id,
+                       outputs=[FakeOutput("x", {"nope"})])  # fmt: skip
+    assert err.value.retryable
