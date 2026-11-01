@@ -3,7 +3,7 @@
 
 from georg.pipeline.local import LocalRunResult, StageCache, run_local
 from georg.pipeline.registry import Processors, build_input, build_processor, build_processors
-from georg.pipeline.service import discover, process_service
+from georg.pipeline.service import discover, process_service, publish_sermon, render_revision
 from georg.pipeline.worker import Worker
 
 __all__ = [
@@ -16,5 +16,7 @@ __all__ = [
     "build_processors",
     "discover",
     "process_service",
+    "publish_sermon",
+    "render_revision",
     "run_local",
 ]
