@@ -170,6 +170,59 @@ def _worker(args: argparse.Namespace) -> int:
     return 0
 
 
+def _web(args: argparse.Namespace) -> int:
+    import secrets
+
+    import uvicorn
+
+    from georg.web import create_app
+    from georg.web.app import SECRET_ENV
+
+    secret = os.environ.get(SECRET_ENV)
+    if not secret:
+        if not args.dev:
+            raise GeorgError(f"{SECRET_ENV} is not set (use --dev for a throwaway key)")
+        secret = secrets.token_urlsafe(32)
+        logging.getLogger(__name__).warning("--dev: throwaway session key; logins end on restart")
+    config, engine = _open(args)
+    app = create_app(config, engine, secret_key=secret, https_only=not args.dev)
+    uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True)
+    return 0
+
+
+def _read_password(from_stdin: bool) -> str:
+    import getpass
+
+    if from_stdin:
+        password = sys.stdin.readline().rstrip("\n")
+    else:
+        password = getpass.getpass("Password: ")
+        if getpass.getpass("Repeat password: ") != password:
+            raise GeorgError("passwords do not match")
+    if len(password) < 8:
+        raise GeorgError("password must be at least 8 characters")
+    return password
+
+
+def _user_add(args: argparse.Namespace) -> int:
+    from sqlalchemy.exc import IntegrityError
+
+    from georg.db.engine import session_factory
+    from georg.db.repositories import UserRepository
+    from georg.web.auth import hash_password
+
+    _, engine = _open(args)
+    password_hash = hash_password(_read_password(args.password_stdin))
+    try:
+        with session_factory(engine).begin() as session:
+            user = UserRepository(session).add(args.username, password_hash, args.role)
+            user_id = user.id
+    except IntegrityError:
+        raise GeorgError(f"user {args.username!r} already exists") from None
+    print(f"added {args.role} {args.username!r} (id {user_id})")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="georg", description=__doc__)
     parser.add_argument("--version", action="version", version=f"georg {__version__}")
@@ -219,6 +272,32 @@ def build_parser() -> argparse.ArgumentParser:
     work.add_argument("--once", action="store_true", help="exit when the queue is empty")
     work.add_argument("--poll", type=float, default=30.0, help="seconds between idle polls")
     work.set_defaults(handler=_worker)
+
+    web = commands.add_parser(
+        "web",
+        help="serve the review UI",
+        description="Serve the review UI. Session cookies are signed with $GEORG_SECRET_KEY.",
+    )
+    web.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    web.add_argument("--host", default="127.0.0.1")
+    web.add_argument("--port", type=int, default=8000)
+    web.add_argument(
+        "--dev",
+        action="store_true",
+        help="allow a throwaway session key and session cookies over plain HTTP",
+    )
+    web.set_defaults(handler=_web)
+
+    user = commands.add_parser("user", help="manage review UI users")
+    user_commands = user.add_subparsers(dest="user_command", metavar="COMMAND", required=True)
+    user_add = user_commands.add_parser("add", help="add a user (prompts for the password)")
+    user_add.add_argument("username")
+    user_add.add_argument("--role", choices=("admin", "reviewer"), required=True)
+    user_add.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    user_add.add_argument(
+        "--password-stdin", action="store_true", help="read the password from standard input"
+    )
+    user_add.set_defaults(handler=_user_add)
 
     db = commands.add_parser("db", help="manage the database")
     db_commands = db.add_subparsers(dest="db_command", metavar="COMMAND", required=True)

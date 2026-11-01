@@ -1,0 +1,24 @@
+<div id="jobs-table" hx-get="/jobs/table" hx-trigger="every 10s" hx-swap="outerHTML">
+{% if jobs %}
+<div class="scroll">
+<table>
+  <thead><tr><th scope="col">#</th><th scope="col">Kind</th><th scope="col">Payload</th><th scope="col">Status</th><th scope="col">Attempts</th><th scope="col">Created</th><th scope="col">Last error</th></tr></thead>
+  <tbody>
+  {% for job in jobs %}
+    <tr>
+      <td>{{ job.id }}</td>
+      <td>{{ job.kind }}</td>
+      <td><code>{{ job.payload | tojson }}</code></td>
+      <td><span class="badge {{ job.status }}">{{ job.status }}</span></td>
+      <td>{{ job.attempts }}/{{ job.max_attempts }}</td>
+      <td class="nowrap">{{ job.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</td>
+      <td>{% if job.last_error %}<pre class="error">{{ job.last_error }}</pre>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p>No queued, running, or failed jobs.</p>
+{% endif %}
+</div>

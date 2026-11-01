@@ -102,6 +102,15 @@ class ServiceRepository:
     def get(self, service_id: int) -> Service:
         return _get(self.session, Service, service_id)
 
+    def newest_first(self, limit: int | None = None) -> Sequence[Service]:
+        """Services by service date (undated last), then by discovery, newest first."""
+        stmt = select(Service).order_by(
+            Service.service_date.desc().nulls_last(),
+            Service.discovered_at.desc(),
+            Service.id.desc(),
+        )
+        return self.session.scalars(stmt.limit(limit)).all()
+
     def by_source(self, source_type: str, source_ref: str) -> Service | None:
         stmt = select(Service).where(
             Service.source_type == source_type, Service.source_ref == source_ref
@@ -341,6 +350,16 @@ class SermonRepository:
             .limit(1)
         )
         return self.session.scalars(stmt).first()
+
+    def approvals(self, sermon_id: int) -> Sequence[Approval]:
+        """Every approval of any of the sermon's revisions, oldest first."""
+        stmt = (
+            select(Approval)
+            .join(SermonRevision, SermonRevision.id == Approval.revision_id)
+            .where(SermonRevision.sermon_id == sermon_id)
+            .order_by(Approval.id)
+        )
+        return self.session.scalars(stmt).all()
 
     def is_approved(self, sermon_id: int) -> bool:
         return self.current_approval(sermon_id) is not None

@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}{{ values.title or service.title or "Sermon" }}{% endblock %}
+{% block content %}
+<h1>{{ values.title or service.title or service.source_ref }}</h1>
+<p class="meta">
+  Service {{ service.service_date or "date unknown" }} · {{ service.status_summary or "processing" }} ·
+  revision {{ revision.number }} by {{ author_name(revision.author) }} · <span class="badge">{{ review_state }}</span>
+</p>
+
+{% if errors %}
+<div class="flash error" role="alert">
+  <p>Not saved:</p>
+  <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+{% include "_render_status.html" %}
+
+<section aria-labelledby="audio-h">
+  <h2 id="audio-h">Audio</h2>
+  {% for f in audio %}
+  <figure class="player">
+    <figcaption>{{ f.name }}{% if not f.current and f.artifact.meta.get("boundaries") %} (earlier boundaries){% endif %}</figcaption>
+    <audio controls preload="metadata" src="/artifacts/{{ f.artifact.id }}"
+      {% if seek and f.artifact.id == seek.artifact.id %}id="seek-audio" data-origin-ms="{{ f.origin_ms or 0 }}"{% endif %}></audio>
+  </figure>
+  {% else %}
+  <p>No audio has been rendered yet.</p>
+  {% endfor %}
+</section>
+
+{% if report %}
+<section aria-labelledby="detect-h">
+  <h2 id="detect-h">Boundary detection</h2>
+  {% set proposal = report.get("proposal") or {} %}
+  {% if proposal.get("confidence") is not none %}<p>Confidence: {{ "%.0f"|format(proposal.confidence * 100) }}%</p>{% endif %}
+  {% if proposal.get("explanation") %}<p class="explanation">{{ proposal.explanation }}</p>{% endif %}
+  {% if report.get("words_preserved") is false %}
+  <div class="flash warning" role="status">
+    <p>The formatter changed the transcript's words. Check the transcript against the audio.</p>
+    {% if report.get("discrepancies") %}<ul>{% for d in report.discrepancies %}<li>{{ d }}</li>{% endfor %}</ul>{% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+<form method="post" action="/sermons/{{ sermon.id }}/revisions" class="stack" id="review-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="base_revision_id" value="{{ revision.id }}">
+  <fieldset>
+    <legend>Boundaries (H:MM:SS on the recording)</legend>
+    <div class="grid">
+    {% for name, label in boundary_fields %}
+      <div class="field">
+        <label for="f-{{ name }}">{{ label }}</label>
+        <div class="row">
+          <input id="f-{{ name }}" name="{{ name }}" value="{{ values[name] }}" inputmode="numeric"
+            pattern="\d+:[0-5]\d:[0-5]\d(\.\d{1,3})?" required>
+          <button type="button" class="play-from" data-field="f-{{ name }}" {% if not seek %}disabled{% endif %}
+            aria-label="Play {{ label | lower }} from here">▶ Play</button>
+        </div>
+      </div>
+    {% endfor %}
+    </div>
+    {% if not seek %}<p class="hint">Play buttons need the service_hq rendition.</p>{% endif %}
+  </fieldset>
+  <fieldset>
+    <legend>Metadata</legend>
+    <div class="grid">
+      <label>Title <input name="title" value="{{ values.title }}"></label>
+      <label>Preacher <input name="preacher" value="{{ values.preacher }}"></label>
+      <label>Service date <input name="service_date" type="date" value="{{ values.service_date }}"></label>
+      <label>Service time <input name="service_time" type="time" value="{{ values.service_time }}"></label>
+      <label>Series <input name="series" value="{{ values.series }}"></label>
+      <label>Occasion <input name="occasion" value="{{ values.occasion }}"></label>
+    </div>
+    <label>Scripture (one reference per line) <textarea name="scripture" rows="3">{{ values.scripture }}</textarea></label>
+    <label>Summary <textarea name="summary" rows="3">{{ values.summary }}</textarea></label>
+  </fieldset>
+  <label for="f-transcript">Transcript (Markdown)</label>
+  <textarea id="f-transcript" name="transcript" rows="20" class="transcript">{{ values.transcript }}</textarea>
+  <button type="submit">Save as new revision</button>
+</form>
+
+<section aria-labelledby="approve-h">
+  <h2 id="approve-h">Approval and publishing</h2>
+  {% if approval %}
+  <p>Revision {{ revision.number }} is approved{% if approval.note %} ({{ approval.note }}){% endif %}.</p>
+  <form method="post" action="/sermons/{{ sermon.id }}/publish">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" {% if publishing %}disabled{% endif %}>{{ "Publishing…" if publishing else "Publish again" }}</button>
+  </form>
+  {% else %}
+  <form method="post" action="/sermons/{{ sermon.id }}/approve" class="stack narrow">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="revision_id" value="{{ revision.id }}">
+    <label>Note (optional) <input name="note"></label>
+    <button type="submit">Approve revision {{ revision.number }} and publish</button>
+  </form>
+  {% endif %}
+  {% if publications or unpublished_outputs %}
+  <div class="scroll">
+  <table>
+    <thead><tr><th scope="col">Output</th><th scope="col">Status</th><th scope="col">Revision</th><th scope="col">Details</th></tr></thead>
+    <tbody>
+    {% for p in publications %}
+      <tr>
+        <td>{{ p.target_name }}</td>
+        <td><span class="badge {{ p.status }}">{{ p.status }}</span></td>
+        <td>{{ revision_numbers.get(p.revision_id, "?") }}</td>
+        <td>
+          {% if p.external_url %}<a href="{{ p.external_url }}">{{ p.external_url }}</a>{% endif %}
+          {% if p.last_error %}<span class="error">{{ p.last_error }}</span>{% endif %}
+          {% if p.attempts %}({{ p.attempts }} attempt{{ "s" if p.attempts != 1 }}){% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    {% for name in unpublished_outputs %}
+      <tr><td>{{ name }}</td><td><span class="badge">not published</span></td><td>—</td><td></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</section>
+
+<section aria-labelledby="history-h">
+  <h2 id="history-h">Revision history</h2>
+  <div class="scroll">
+  <table>
+    <thead><tr><th scope="col">#</th><th scope="col">Author</th><th scope="col">Saved</th><th scope="col">Boundaries</th><th scope="col">Edited fields</th><th scope="col"></th></tr></thead>
+    <tbody>
+    {% for r in revisions %}
+      <tr>
+        <td>{{ r.number }}{% if r.id == revision.id %} (current){% endif %}{% if r.id in approved_ids %} ✓ approved{% endif %}</td>
+        <td>{{ author_name(r.author) }}</td>
+        <td>{{ r.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</td>
+        <td class="nowrap">{{ r.service_start_ms|hms }} · {{ r.sermon_start_ms|hms }} · {{ r.sermon_end_ms|hms }} · {{ r.service_end_ms|hms }}</td>
+        <td>{{ r.field_origins | dictsort | selectattr(1, "equalto", "user") | map(attribute=0) | join(", ") }}</td>
+        <td>
+          {% if r.id != revision.id %}
+          <form method="post" action="/sermons/{{ sermon.id }}/revisions/{{ r.id }}/restore">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="small">Restore</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

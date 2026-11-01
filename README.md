@@ -45,6 +45,15 @@ configured inputs and queues them, and `uv run georg worker` processes the queue
 storing the renditions and a proposed sermon revision for review. A
 `local_folder` input (one subfolder per service) works without Google Drive.
 
+Reviewers work in the web UI: add an account with
+`uv run georg user add alice --role reviewer` (prompts for a password), then start
+it with `GEORG_SECRET_KEY=<random string> uv run georg web` and open
+<http://127.0.0.1:8000>. There a reviewer listens to the renditions, corrects the
+boundaries, metadata, and transcript (each save is a new revision; moved boundaries
+re-render the audio), and approves a revision for publishing. `georg web --dev`
+uses a throwaway key and allows session cookies over plain HTTP; otherwise serve
+it behind HTTPS.
+
 ## License
 
 Georg is licensed under the **GNU Affero General Public License, version 3 only** (`AGPL-3.0-only`); see [LICENSE](LICENSE). If you run a modified version of Georg as a network service, the AGPL requires you to offer its source code to that service's users.

@@ -1,0 +1,13 @@
+<div id="render-status">
+{% if rendering %}
+  <p class="flash info" role="status" hx-get="/sermons/{{ sermon.id }}/render-status" hx-trigger="every 5s" hx-target="#render-status" hx-swap="outerHTML">
+    The audio is being re-rendered for the new boundaries. This message updates when it is done.
+  </p>
+{% elif failed_render %}
+  <p class="flash error" role="alert">Re-rendering the audio failed: {{ failed_render.last_error }}</p>
+{% elif not rendered %}
+  <p class="flash warning" role="status">The audio below was cut at earlier boundaries. <a href="/sermons/{{ sermon.id }}">Reload</a> to check for new audio.</p>
+{% elif polled %}
+  <p class="flash info" role="status">New audio is ready. <a href="/sermons/{{ sermon.id }}">Reload the page</a> to hear it.</p>
+{% endif %}
+</div>
