@@ -2,6 +2,7 @@
 """Georg command-line interface."""
 
 import argparse
+import logging
 import os
 import re
 import sys
@@ -9,11 +10,17 @@ import tempfile
 from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from georg import __version__
 from georg.core.config import RenditionSpec
 from georg.core.errors import GeorgError
 from georg.core.types import ServiceBoundaries, TimeRange
+
+if TYPE_CHECKING:
+    from sqlalchemy import Engine
+
+    from georg.core.config import GeorgConfig
 
 DEFAULT_CONFIG = Path("georg.toml")
 SAMPLE_MS = 120_000
@@ -127,6 +134,42 @@ def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _open(args: argparse.Namespace) -> tuple["GeorgConfig", "Engine"]:
+    from georg.core.config import load_config
+    from georg.db import create_engine, upgrade
+    from georg.db.engine import database_path
+
+    config = load_config(args.config)
+    path = database_path(config.data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    upgrade(path)
+    return config, create_engine(path)
+
+
+def _discover(args: argparse.Namespace) -> int:
+    from georg.db.engine import session_factory
+    from georg.jobs.queue import JobQueue
+    from georg.pipeline import discover
+
+    config, engine = _open(args)
+    new = discover(config, session_factory(engine), JobQueue(engine))
+    print(f"{len(new)} new service(s) queued" + (f": {new}" if new else ""))
+    return 0
+
+
+def _worker(args: argparse.Namespace) -> int:
+    from georg.pipeline import Worker
+
+    config, engine = _open(args)
+    worker = Worker(config, engine)
+    if args.once:
+        while worker.run_once():
+            pass
+    else:
+        worker.run(poll_seconds=args.poll)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="georg", description=__doc__)
     parser.add_argument("--version", action="version", version=f"georg {__version__}")
@@ -167,6 +210,16 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-format", action="store_true", help="skip the LLM formatter")
     run.set_defaults(handler=_run)
 
+    disc = commands.add_parser("discover", help="find new recordings and queue them")
+    disc.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    disc.set_defaults(handler=_discover)
+
+    work = commands.add_parser("worker", help="run queued jobs")
+    work.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    work.add_argument("--once", action="store_true", help="exit when the queue is empty")
+    work.add_argument("--poll", type=float, default=30.0, help="seconds between idle polls")
+    work.set_defaults(handler=_worker)
+
     db = commands.add_parser("db", help="manage the database")
     db_commands = db.add_subparsers(dest="db_command", metavar="COMMAND", required=True)
     upgrade = db_commands.add_parser("upgrade", help="apply database migrations")
@@ -185,6 +238,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     handler: Callable[[argparse.Namespace], int] | None = getattr(args, "handler", None)
     if handler is None:
         return 0
