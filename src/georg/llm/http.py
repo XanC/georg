@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""POST requests to JSON APIs with bounded retries and `ModuleError` classification.
+"""Requests to JSON APIs with bounded retries and `ModuleError` classification.
 
 Transport errors, timeouts, 408/409/425/429 and 5xx responses are transient and raise
 `ModuleError(retryable=True)` once the attempts are used up; other 4xx responses fail
@@ -33,6 +33,10 @@ def _detail(response: httpx.Response) -> str:
         message = data["error"].get("message")
         if isinstance(message, str):
             return message[:_DETAIL_CHARS]
+    if isinstance(data, dict) and isinstance(data.get("message"), str):
+        code = data.get("code")
+        prefix = f"{code}: " if isinstance(code, str) else ""
+        return f"{prefix}{data['message']}"[:_DETAIL_CHARS]
     return response.text[:_DETAIL_CHARS]
 
 
@@ -44,26 +48,33 @@ def _retry_after(response: httpx.Response) -> float | None:
         return None
 
 
-def post_json(
+def request_json(
     client: httpx.Client,
+    method: str,
     url: str,
     *,
     provider: str,
     attempts: int = 3,
     backoff_s: float = 2.0,
     sleep: Callable[[float], None] = time.sleep,
+    none_on: frozenset[int] = frozenset(),
     **kwargs: Any,
 ) -> Any:
-    """POST and return the decoded JSON body, retrying transient failures."""
+    """Send the request and return the decoded JSON body, retrying transient failures.
+
+    Responses whose status is in `none_on` (e.g. 404 for a lookup) return None.
+    """
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
     for attempt in range(1, attempts + 1):
         delay = backoff_s * 2 ** (attempt - 1)
         try:
-            response = client.post(url, **kwargs)
+            response = client.request(method, url, **kwargs)
         except httpx.TransportError as exc:
             error = ModuleError(f"{provider}: request failed: {type(exc).__name__}", retryable=True)
         else:
+            if response.status_code in none_on:
+                return None
             if response.is_success:
                 try:
                     return response.json()
@@ -81,3 +92,26 @@ def post_json(
             raise error
         sleep(min(delay, MAX_DELAY_S))
     raise AssertionError("unreachable")
+
+
+def post_json(
+    client: httpx.Client,
+    url: str,
+    *,
+    provider: str,
+    attempts: int = 3,
+    backoff_s: float = 2.0,
+    sleep: Callable[[float], None] = time.sleep,
+    **kwargs: Any,
+) -> Any:
+    """POST and return the decoded JSON body, retrying transient failures."""
+    return request_json(
+        client,
+        "POST",
+        url,
+        provider=provider,
+        attempts=attempts,
+        backoff_s=backoff_s,
+        sleep=sleep,
+        **kwargs,
+    )

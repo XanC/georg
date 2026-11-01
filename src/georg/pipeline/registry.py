@@ -2,6 +2,7 @@
 """Maps configured module `type` names to implementations, importing them lazily."""
 
 import importlib
+import inspect
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -39,17 +40,23 @@ INPUT_TYPES: dict[str, str] = {
 OUTPUT_TYPES: dict[str, str] = {
     "google_drive_upload": "georg.modules.outputs.google_drive_upload:GoogleDriveUploadOutput",
     "sftp": "georg.modules.outputs.sftp:SftpOutput",
+    "wordpress": "georg.modules.outputs.wordpress:WordPressOutput",
 }
 """Output classes are constructed with their whole `OutputConfig`."""
 
 
-def build_output(config: OutputConfig) -> OutputTarget:
+def build_output(config: OutputConfig, *, timezone: str = "UTC") -> OutputTarget:
+    """Construct the output; pass `timezone` to classes that take `default_timezone`."""
     target = OUTPUT_TYPES.get(config.type)
     if target is None:
         known = ", ".join(sorted(OUTPUT_TYPES))
         raise ConfigError(f"unknown output type {config.type!r} (known: {known})")
     module_name, _, attr = target.partition(":")
-    output: OutputTarget = getattr(importlib.import_module(module_name), attr)(config)
+    cls = getattr(importlib.import_module(module_name), attr)
+    kwargs = {}
+    if "default_timezone" in inspect.signature(cls).parameters:
+        kwargs["default_timezone"] = timezone
+    output: OutputTarget = cls(config, **kwargs)
     return output
 
 

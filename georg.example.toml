@@ -21,12 +21,13 @@ metadata = { type = "rules" }
 
 # Renditions default to sermon, service_hq and service_phone.
 
+# Needs the georg-bridge plugin (wordpress/georg-bridge). Posts are drafts unless status = "publish".
 [[outputs]]
 name = "website"
 type = "wordpress"
 renditions = ["sermon"]
 transcript = true
-options = { base_url = "https://www.example.org", username = "georg", app_password = "env:WP_APP_PASSWORD" }
+options = { base_url = "https://www.example.org", username = "georg", app_password = "env:WP_APP_PASSWORD", timezone = "America/Chicago", filename = "stpaul_sermon_{date}_{slug}.mp3", service_time = "10:30", content_prefix = "[Machine transcription]" }
 
 [[outputs]]
 name = "phone"

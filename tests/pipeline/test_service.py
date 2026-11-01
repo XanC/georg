@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import Engine
 from test_local_run import PROPOSED, processors, tone
 
-from georg.core.config import GeorgConfig
+from georg.core.config import GeorgConfig, OutputConfig
 from georg.core.errors import ModuleError
 from georg.core.types import ExternalRef, PublicationRequest
 from georg.db.engine import session_factory
@@ -177,3 +177,25 @@ def test_publish_waits_for_missing_renditions(config: GeorgConfig, engine: Engin
         publish_sermon(config, session_factory(engine), sermon_id,
                        outputs=[FakeOutput("x", {"nope"})])  # fmt: skip
     assert err.value.retryable
+
+
+def test_publish_builds_outputs_in_instance_timezone(
+    config: GeorgConfig, engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = config.model_copy(
+        update={
+            "timezone": "America/Chicago",
+            "outputs": (OutputConfig(name="website", type="wordpress"),),
+        }
+    )
+    sermon_id, _ = processed(config, engine)
+    built: list[tuple[str, str]] = []
+
+    def fake_build(c: OutputConfig, *, timezone: str = "UTC") -> FakeOutput:
+        built.append((c.name, timezone))
+        return FakeOutput(c.name, {"sermon"})
+
+    monkeypatch.setattr("georg.pipeline.service.build_output", fake_build)
+    with pytest.raises(ModuleError, match="not approved"):
+        publish_sermon(config, session_factory(engine), sermon_id)
+    assert built == [("website", "America/Chicago")]

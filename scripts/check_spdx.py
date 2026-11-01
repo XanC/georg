@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Fail if a Python source file lacks the project's SPDX identifier line."""
+"""Fail if a Python or PHP source file lacks the project's SPDX identifier line."""
 
 import sys
 from pathlib import Path
 
 HEADER = "# SPDX-License-Identifier: AGPL-3.0-only"
+PHP_HEADER = "// SPDX-License-Identifier: AGPL-3.0-only"
 ROOTS = ("src", "tests", "scripts")
+PHP_ROOTS = ("wordpress",)
 
 
 def missing_header(root: Path) -> list[Path]:
@@ -14,6 +16,11 @@ def missing_header(root: Path) -> list[Path]:
         for path in sorted((root / top).rglob("*.py")):
             head = path.read_text(encoding="utf-8").splitlines()[:3]
             if HEADER not in head:
+                missing.append(path)
+    for top in PHP_ROOTS:
+        for path in sorted((root / top).rglob("*.php")):
+            head = path.read_text(encoding="utf-8").splitlines()[:3]
+            if PHP_HEADER not in head:
                 missing.append(path)
     return missing
 

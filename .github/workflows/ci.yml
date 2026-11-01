@@ -27,6 +27,8 @@ jobs:
         run: uv run pytest
       - name: SPDX headers
         run: uv run python scripts/check_spdx.py
+      - name: PHP lint
+        run: find wordpress -name '*.php' -print0 | xargs -0 -n1 php -l
       - name: Dependency licenses
         run: uv run --no-dev --with pip-licenses python scripts/check_licenses.py
 
