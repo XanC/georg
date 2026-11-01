@@ -5,15 +5,18 @@ are checked against a throwaway WordPress in Docker before a plugin change goes 
 Everything lives in `scripts/wordpress-e2e/`:
 
 - `compose.yaml`: WordPress (PHP 8.3, Apache) + MariaDB, `WP_DEBUG`/`WP_DEBUG_LOG` on,
-  `WP_ENVIRONMENT_TYPE=local` (Application Passwords then work over plain HTTP), the
+  `WP_ENVIRONMENT_TYPE=local`, the
   repository's `wordpress/georg-bridge` bind-mounted read-only, and small PHP upload limits
   (`php/uploads.ini`: 8M / 12M) so the oversize errors can be tested.
 - `mu-plugins/georg-e2e-theme-support.php`: declares Church Content sermon support the way
   a ChurchThemes theme does (ChurchThemes themes are paid; the default theme is used).
 - `setup.sh`: starts the stack, installs WordPress, installs and activates Church Content
-  (`church-theme-content` from wordpress.org) and Georg Bridge, and creates an Editor
-  (`georg`), an Author and a Subscriber with Application Passwords, written to the
-  git-ignored `scripts/wordpress-e2e/.env.e2e`.
+  (`church-theme-content` from wordpress.org) and Georg Bridge, creates an Editor
+  (`georg`), an Author and a Subscriber, and writes fresh signing keys into `wp-config.php`
+  with `wp config set` (`GEORG_BRIDGE_KEYS`, `GEORG_BRIDGE_USER = georg`, and
+  `GEORG_BRIDGE_ALLOW_HTTP` because the local site is plain HTTP). The keys, and the users'
+  Application Passwords (only used to check they are refused), go to the git-ignored
+  `scripts/wordpress-e2e/.env.e2e`.
 - `e2e.py`: publishes through `georg.modules.outputs.wordpress.WordPressOutput` with
   ffmpeg-generated MP3s and inspects the result with wp-cli.
 
@@ -43,12 +46,21 @@ http://localhost:8080 (admin / admin) for poking around; remove it with
 - `find_existing`; republishing with the same key (same audio, then new audio) updates the
   same post and attachment without duplicates; a sermon published by hand stays published
   when Georg updates it as a draft; `status = "private"` and `"publish"`.
-- 401/403 for anonymous, wrong-password, cookie-only, Author and Subscriber requests.
+- Signing (docs/wordpress.md): replayed nonces, expired and future timestamps, tampered
+  body, query, method and path, bad signatures, wrong and unknown keys, and each missing
+  header get 401; Application Password and cookie auth are refused on `georg/v1`; signed
+  headers do not authenticate `/wp/v2/users/me`; stale nonces are purged; rotation (two
+  keys, then the old one removed); a short key or unknown `GEORG_BRIDGE_USER` gives 503,
+  plain HTTP without `GEORG_BRIDGE_ALLOW_HTTP` 403, and an Author or Subscriber as
+  `GEORG_BRIDGE_USER` 403. The script changes these constants temporarily and restores them.
+- Lost responses: each request's first response is dropped, Georg retries with a fresh
+  nonce, and there is still one sermon and one attachment.
 - Non-MP3 uploads (PHP, WAV, Ogg named `.mp3`) are rejected; path-traversal file names stay
-  inside `uploads/sermons/`; oversized uploads get 413 naming the PHP limit.
+  inside `uploads/sermons/`; a wrong content type is 415; oversized uploads get 413 naming
+  the PHP limit.
 - Admin and front-end pages (sermon list and edit screens, media library, previews, feeds)
   load, and `wp-content/debug.log` stays empty throughout.
 
 Before installing a new plugin version on the live site, also confirm there that PHP's
-`upload_max_filesize` and `post_max_size` exceed the largest sermon MP3 and that security
-plugins (Wordfence) allow Application Passwords.
+`upload_max_filesize` and `post_max_size` exceed the largest sermon MP3 and that the
+server's clock is synchronized.

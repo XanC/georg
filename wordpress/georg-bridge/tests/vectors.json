@@ -1,0 +1,53 @@
+{
+  "comment": "Shared by tests/modules/outputs/test_wordpress_signing.py and tests/signing-test.php.",
+  "vectors": [
+    {
+      "name": "get-sermon",
+      "key_id": "2026-11",
+      "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "timestamp": 1793570000,
+      "nonce": "0123456789abcdef0123456789abcdef",
+      "method": "GET",
+      "route": "/georg/v1/sermons/georg:stpaul:sermon-1:website",
+      "query": {},
+      "body_base64": "",
+      "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "GEORG-HMAC-SHA256\n2026-11\n1793570000\n0123456789abcdef0123456789abcdef\nGET\n/georg/v1/sermons/georg:stpaul:sermon-1:website\n\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "signature": "fb571bba254f8afebb30ea765928497ff3392103f1e50eca5291e8501549f680"
+    },
+    {
+      "name": "put-sermon",
+      "key_id": "2026-11",
+      "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "timestamp": 1793570001,
+      "nonce": "fedcba9876543210fedcba9876543210",
+      "method": "PUT",
+      "route": "/georg/v1/sermons/georg:stpaul:sermon-1:website",
+      "query": {},
+      "body_base64": "eyJ0aXRsZSI6IkFsbCBTYWludHMnIERheSIsInN0YXR1cyI6ImRyYWZ0IiwidGVybXMiOnsiY3RjX3Nlcm1vbl9zcGVha2VyIjpbIlJldi4gSmFuZSBPJ05laWwgJiBHdWVzdCJdfX0=",
+      "content_sha256": "fcef53afa80f9c9734948606ca5e88221b67e8656107c313437d27ea01fab031",
+      "canonical": "GEORG-HMAC-SHA256\n2026-11\n1793570001\nfedcba9876543210fedcba9876543210\nPUT\n/georg/v1/sermons/georg:stpaul:sermon-1:website\n\nfcef53afa80f9c9734948606ca5e88221b67e8656107c313437d27ea01fab031",
+      "signature": "7d0435b4f0793abb3caed49fdc2090ed6d73fe541b7516d6ff80861d8475f975"
+    },
+    {
+      "name": "post-audio",
+      "key_id": "2027-05_b",
+      "secret": "lzYCLzjFhlEmFC8kEkv3XHazriTBCIK7wIIFjYozAfEhIQ",
+      "timestamp": 1793570002,
+      "nonce": "Zz_-0123456789abcdefghijklmn",
+      "method": "post",
+      "route": "/georg/v1/audio",
+      "query": {
+        "publication_key": "georg:stpaul:sermon-1:website",
+        "filename": "stpaul_sermon_2026-11-01_all-saints.mp3",
+        "title": "Blessed Are “the” Meek & Mild ~ 100%+/?",
+        "a_first": "",
+        "rest_route": "/georg/v1/audio"
+      },
+      "body_base64": "SUQzBAAAAAAAAP/7kABiaW5hcnkAYm9keQ==",
+      "content_sha256": "bf876398edb121ec760948533f97414562ccffa1a43268a03d8ca1253261219c",
+      "canonical": "GEORG-HMAC-SHA256\n2027-05_b\n1793570002\nZz_-0123456789abcdefghijklmn\nPOST\n/georg/v1/audio\na_first=&filename=stpaul_sermon_2026-11-01_all-saints.mp3&publication_key=georg%3Astpaul%3Asermon-1%3Awebsite&title=Blessed%20Are%20%E2%80%9Cthe%E2%80%9D%20Meek%20%26%20Mild%20~%20100%25%2B%2F%3F\nbf876398edb121ec760948533f97414562ccffa1a43268a03d8ca1253261219c",
+      "signature": "3eca2333f1b1dbb08a60fcc01692ee2b3472e65add38329a7751064beef1885a"
+    }
+  ]
+}

@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 import base64
 import hashlib
+import hmac
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -20,11 +22,14 @@ from georg.modules.outputs.wordpress import (
     slugify,
     transcript_html,
 )
+from georg.modules.outputs.wordpress_signing import canonical_string
 from georg.pipeline.registry import build_output
 
 API = "https://church.example/wp-json/georg/v1"
 KEY = "georg:stpaul:service:7:website"
-PASSWORD = "abcd efgh ijkl mnop"
+SECRET = bytes(range(100, 132))
+SECRET_TEXT = base64.urlsafe_b64encode(SECRET).rstrip(b"=").decode()
+KEY_ID = "2026-11"
 
 
 @dataclass
@@ -35,13 +40,13 @@ class FakeBridge:
     sermons: dict[str, dict[str, Any]] = field(default_factory=dict)
     terms: dict[str, set[str]] = field(default_factory=dict)
     requests: list[httpx.Request] = field(default_factory=list)
+    nonces: set[str] = field(default_factory=set)
     next_id: int = 100
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        expected = "Basic " + base64.b64encode(f"georg:{PASSWORD}".encode()).decode()
-        if request.headers.get("authorization") != expected:
-            return httpx.Response(401, json={"code": "georg_forbidden", "message": "no"})
+        if not self._verified(request):
+            return httpx.Response(401, json={"code": "georg_invalid_signature", "message": "no"})
         path = request.url.path.removeprefix("/wp-json/georg/v1")
         if path == "/audio" and request.method == "POST":
             return self._audio(request)
@@ -55,15 +60,37 @@ class FakeBridge:
                 return self._put(key, json.loads(request.content))
         return httpx.Response(404, json={"code": "rest_no_route", "message": "No route"})
 
+    def _verified(self, request: httpx.Request) -> bool:
+        h = request.headers
+        if h.get("x-georg-key-id") != KEY_ID or h.get("x-georg-nonce") in self.nonces:
+            return False
+        body_sha256 = hashlib.sha256(request.read()).hexdigest()
+        if h.get("x-georg-content-sha256") != body_sha256:
+            return False
+        message = canonical_string(
+            key_id=KEY_ID,
+            timestamp=int(h["x-georg-timestamp"]),
+            nonce=h["x-georg-nonce"],
+            method=request.method,
+            route=request.url.path.removeprefix("/wp-json"),
+            query=dict(request.url.params),
+            body_sha256=body_sha256,
+        )
+        expected = hmac.new(SECRET, message.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, h.get("x-georg-signature", "")):
+            return False
+        self.nonces.add(h["x-georg-nonce"])
+        return True
+
     def _audio(self, request: httpx.Request) -> httpx.Response:
-        body = request.read()
-        key = _form_field(body, "publication_key")
-        digest = hashlib.sha256(_form_file(body)).hexdigest()
+        assert request.headers["content-type"] == "audio/mpeg"
+        key = request.url.params["publication_key"]
+        digest = hashlib.sha256(request.read()).hexdigest()
         existing = self.attachments.get(key)
         if existing and existing["sha256"] == digest:
             return httpx.Response(200, json={**existing, "created": False})
         att_id = existing["id"] if existing else self._id()
-        filename = _form_field(body, "filename")
+        filename = request.url.params["filename"]
         self.attachments[key] = {
             "id": att_id,
             "url": f"https://church.example/wp-content/uploads/sermons/{filename}",
@@ -89,25 +116,10 @@ class FakeBridge:
         return self.next_id
 
 
-def _form_part(body: bytes, name: str) -> bytes:
-    marker = f'name="{name}"'.encode()
-    part = body[body.index(marker) :]
-    start = part.index(b"\r\n\r\n") + 4
-    return part[start : part.index(b"\r\n--", start)]
-
-
-def _form_field(body: bytes, name: str) -> str:
-    return _form_part(body, name).decode()
-
-
-def _form_file(body: bytes) -> bytes:
-    return _form_part(body, "file")
-
-
 def make_output(
     handler: Any, monkeypatch: pytest.MonkeyPatch, **options: Any
 ) -> tuple[WordPressOutput, list[float]]:
-    monkeypatch.setenv("WP_APP_PASSWORD", PASSWORD)
+    monkeypatch.setenv("GEORG_WP_KEY", SECRET_TEXT)
     config = OutputConfig(
         name="website",
         type="wordpress",
@@ -115,8 +127,8 @@ def make_output(
         transcript=True,
         options={
             "base_url": "https://church.example/",
-            "username": "georg",
-            "app_password": "env:WP_APP_PASSWORD",
+            "key_id": KEY_ID,
+            "key": "env:GEORG_WP_KEY",
             **options,
         },
     )
@@ -197,10 +209,13 @@ def test_upload_sends_key_and_templated_filename(
     bridge = FakeBridge()
     out, _ = make_output(bridge, monkeypatch, filename="stpaul_sermon_{date}_{slug}.mp3")
     out.publish(make_request(tmp_path, audio=b"ID3 audio bytes"))
-    upload = bridge.requests[0].read()
-    assert _form_field(upload, "publication_key") == KEY
-    assert _form_field(upload, "filename") == "stpaul_sermon_2026-11-01_great-expectations.mp3"
-    assert _form_file(upload) == b"ID3 audio bytes"
+    upload = bridge.requests[0]
+    assert upload.url.params["publication_key"] == KEY
+    assert upload.url.params["filename"] == "stpaul_sermon_2026-11-01_great-expectations.mp3"
+    assert upload.url.params["title"] == "Great Expectations"
+    assert upload.read() == b"ID3 audio bytes"
+    assert upload.headers["content-length"] == str(len(b"ID3 audio bytes"))
+    assert "transfer-encoding" not in upload.headers
 
 
 def test_defaults_to_draft_and_maps_terms_and_date(
@@ -336,7 +351,7 @@ def test_client_errors_are_not_retryable_and_hide_password(
     assert not info.value.retryable
     assert "HTTP 403" in str(info.value)
     assert "This user cannot publish." in str(info.value)
-    assert PASSWORD not in str(info.value)
+    assert SECRET_TEXT not in str(info.value)
     assert len(calls) == 1
     assert delays == []
 
@@ -358,10 +373,10 @@ def test_upload_limit_is_not_retried(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert len(calls) == 1
 
 
-def test_wrong_password_is_not_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wrong_key_is_not_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
     bridge = FakeBridge()
-    monkeypatch.setenv("OTHER_PASSWORD", "wrong")
-    out, _ = make_output(bridge, monkeypatch, app_password="env:OTHER_PASSWORD")
+    monkeypatch.setenv("OTHER_KEY", base64.urlsafe_b64encode(b"k" * 32).decode())
+    out, _ = make_output(bridge, monkeypatch, key="env:OTHER_KEY")
     with pytest.raises(ModuleError) as info:
         out.find_existing(KEY)
     assert not info.value.retryable
@@ -392,6 +407,11 @@ def test_rejects_unsafe_publication_key(monkeypatch: pytest.MonkeyPatch) -> None
         {"service_time": "25:00"},
         {"timezone": "Mars/Olympus"},
         {"unknown": 1},
+        {"username": "georg"},
+        {"app_password": "x"},
+        {"key_id": "bad id"},
+        {"base_url": "http://church.example"},
+        {"base_url": "ftp://church.example", "allow_insecure_http": True},
     ],
 )
 def test_invalid_options(options: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -399,24 +419,92 @@ def test_invalid_options(options: dict[str, Any], monkeypatch: pytest.MonkeyPatc
         make_output(FakeBridge(), monkeypatch, **options)
 
 
-def test_missing_password_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("WP_APP_PASSWORD", raising=False)
+def test_missing_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GEORG_WP_KEY", raising=False)
     config = OutputConfig(
         name="website",
         type="wordpress",
-        options={"base_url": "https://x", "username": "u", "app_password": "env:WP_APP_PASSWORD"},
+        options={"base_url": "https://x", "key_id": "k", "key": "env:GEORG_WP_KEY"},
     )
-    with pytest.raises(ConfigError, match="WP_APP_PASSWORD"):
+    with pytest.raises(ConfigError, match="GEORG_WP_KEY"):
         WordPressOutput(config)
 
 
+@pytest.mark.parametrize(
+    "secret", [base64.urlsafe_b64encode(b"s" * 31).decode(), "not base64!", "c2hvcnQ"]
+)
+def test_weak_or_malformed_key_is_rejected_without_echo(
+    secret: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BAD_KEY", secret)
+    with pytest.raises(ConfigError) as info:
+        make_output(FakeBridge(), monkeypatch, key="env:BAD_KEY")
+    assert secret not in str(info.value)
+
+
+def test_http_base_url_needs_explicit_opt_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.scheme == "http"
+        return httpx.Response(404, json={"code": "georg_not_found", "message": "x"})
+
+    out, _ = make_output(
+        handler, monkeypatch, base_url="http://localhost:8080", allow_insecure_http=True
+    )
+    assert out.find_existing(KEY) is None
+
+
+def test_retries_are_signed_again_with_fresh_nonces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bridge = FakeBridge()
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) in (1, 3):
+            bridge(request)
+            raise httpx.ReadTimeout("response lost", request=request)
+        return bridge(request)
+
+    out, delays = make_output(handler, monkeypatch, attempts=2)
+    ref = out.publish(make_request(tmp_path))
+    nonces = [r.headers["x-georg-nonce"] for r in seen]
+    assert len(seen) == 4
+    assert len(set(nonces)) == 4
+    assert all(len(n) == 32 and int(n, 16) >= 0 for n in nonces)
+    assert seen[0].read() == seen[1].read() == b"ID3 fake mp3"
+    assert len(bridge.attachments) == 1
+    assert len(bridge.sermons) == 1
+    assert ref.external_id == str(bridge.sermons[KEY]["id"])
+    assert len(delays) == 2
+
+
+def test_key_never_logged_or_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"code": "georg_invalid_signature", "message": "no"})
+
+    caplog.set_level(logging.DEBUG)
+    out, _ = make_output(handler, monkeypatch)
+    with pytest.raises(ModuleError) as info:
+        out.publish(make_request(tmp_path))
+    texts = [str(info.value), repr(info.value), repr(out.__dict__), caplog.text]
+    for text in texts:
+        assert SECRET_TEXT not in text
+        assert SECRET.hex() not in text
+        assert repr(SECRET) not in text
+
+
 def test_rendition_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("WP_APP_PASSWORD", PASSWORD)
+    monkeypatch.setenv("GEORG_WP_KEY", SECRET_TEXT)
     config = OutputConfig(
         name="website",
         type="wordpress",
         renditions=("service_hq",),
-        options={"base_url": "https://x", "username": "u", "app_password": "env:WP_APP_PASSWORD"},
+        options={"base_url": "https://x", "key_id": "k", "key": "env:GEORG_WP_KEY"},
     )
     with pytest.raises(ConfigError, match="rendition"):
         WordPressOutput(config)
@@ -430,14 +518,14 @@ def test_helpers() -> None:
 
 
 def test_registered_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("WP_APP_PASSWORD", PASSWORD)
+    monkeypatch.setenv("GEORG_WP_KEY", SECRET_TEXT)
     config = OutputConfig(
         name="website",
         type="wordpress",
         options={
             "base_url": "https://church.example",
-            "username": "georg",
-            "app_password": "env:WP_APP_PASSWORD",
+            "key_id": KEY_ID,
+            "key": "env:GEORG_WP_KEY",
         },
     )
     out = build_output(config, timezone="America/Chicago")
