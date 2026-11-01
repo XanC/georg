@@ -207,3 +207,16 @@ def test_folder_id_from_env(drive: FakeDrive, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("GEORG_TEST_ARCHIVE_FOLDER", ARCHIVE)
     output = make_output(drive, folder_id="env:GEORG_TEST_ARCHIVE_FOLDER")
     assert output.folder_id == ARCHIVE
+
+
+def test_registry_builds_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    from georg.pipeline.registry import build_output
+
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/key.json")
+    config = OutputConfig(
+        name="archive",
+        type="google_drive_upload",
+        renditions=("service_hq",),
+        options={"folder_id": ARCHIVE},
+    )
+    assert isinstance(build_output(config), GoogleDriveUploadOutput)
