@@ -3,6 +3,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from fake_drive import FakeDrive
 from sqlalchemy import Engine
 
 from georg.db import create_engine, upgrade
@@ -20,3 +21,8 @@ def engine(db_path: Path) -> Iterator[Engine]:
     engine = create_engine(db_path)
     yield engine
     engine.dispose()
+
+
+@pytest.fixture
+def drive() -> FakeDrive:
+    return FakeDrive()

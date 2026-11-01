@@ -24,6 +24,9 @@ classify = [
 whisper = [
     "faster-whisper>=1.1",
 ]
+gdrive = [
+    "google-auth>=2.30",
+]
 
 [dependency-groups]
 dev = [
@@ -63,7 +66,7 @@ packages = ["georg"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["inaSpeechSegmenter", "inaSpeechSegmenter.*", "faster_whisper", "faster_whisper.*", "numpy", "numpy.*"]
+module = ["inaSpeechSegmenter", "inaSpeechSegmenter.*", "faster_whisper", "faster_whisper.*", "numpy", "numpy.*", "google", "google.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
