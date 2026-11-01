@@ -25,3 +25,15 @@ inaSpeechSegmenter declares `tensorflow[and-cuda]` and `onnxruntime-gpu`, which 
 Check the extra's licenses with `uv run --no-dev --extra classify --with pip-licenses python scripts/check_licenses.py`.
 
 Measured cost (CPU only, 8 vCPU, synthetic 2-hour 16 kHz mono FLAC, default 600 s chunks): about 80 s and 2.4 GB peak RSS. Whole-file processing (`chunk_s = None`) took about 62 s but 9 GB.
+
+## Optional extra `whisper`
+
+Installed with `uv sync --extra whisper` (or `pip install georg[whisper]`). Needed only by the `faster_whisper` transcriber, which imports it lazily.
+
+| Dependency | Use | License | Notes |
+|---|---|---|---|
+| faster-whisper | Runs OpenAI Whisper models locally | MIT | Model weights (OpenAI Whisper, MIT; CTranslate2 conversions on Hugging Face) are downloaded on first use into `download_root` or the Hugging Face cache. Pre-populate it and set `local_files_only` for offline hosts. |
+| ctranslate2 | Inference engine | MIT | The PyPI wheels run on CPU without any NVIDIA packages; GPU use would need CUDA/cuDNN installed separately and is not part of this extra. |
+| onnxruntime, tokenizers, huggingface-hub, av, numpy, and transitive packages | faster-whisper dependencies | MIT, Apache-2.0, BSD, MPL-2.0 | Georg decodes audio with FFmpeg and passes samples to faster-whisper, so PyAV is installed but unused. |
+
+Check the extra's licenses with `uv run --no-dev --extra whisper --with pip-licenses python scripts/check_licenses.py`.
