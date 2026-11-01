@@ -6,7 +6,9 @@ readme = "README.md"
 license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pydantic>=2.8",
+]
 
 [project.scripts]
 georg = "georg.cli:main"
@@ -32,6 +34,7 @@ extend-exclude = ["docs"]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
 
 [tool.mypy]
+plugins = ["pydantic.mypy"]
 python_version = "3.12"
 strict = true
 packages = ["georg"]

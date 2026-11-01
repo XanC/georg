@@ -1,0 +1,198 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+"""Value types exchanged between the core and modules.
+
+All times are integer milliseconds from the start of the service's source timeline
+(the concatenation of the source parts, in order). Ranges are half-open: [start, end).
+"""
+
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any, Literal, Self
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class Model(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class TimeRange(Model):
+    start_ms: int = Field(ge=0)
+    end_ms: int
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if self.end_ms <= self.start_ms:
+            raise ValueError("end_ms must be greater than start_ms")
+        return self
+
+    @property
+    def duration_ms(self) -> int:
+        return self.end_ms - self.start_ms
+
+    def contains(self, other: "TimeRange") -> bool:
+        return self.start_ms <= other.start_ms and other.end_ms <= self.end_ms
+
+
+SegmentLabel = Literal["speech", "music", "noise", "silence"]
+
+
+class AudioSegment(Model):
+    """A stretch of audio with one dominant class, as produced by an `AudioClassifier`."""
+
+    range: TimeRange
+    label: SegmentLabel
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class ServiceBoundaries(Model):
+    """The four timestamps that define a service and its sermon."""
+
+    service_start_ms: int = Field(ge=0)
+    sermon_start_ms: int
+    sermon_end_ms: int
+    service_end_ms: int
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        s = self
+        if not (s.service_start_ms <= s.sermon_start_ms < s.sermon_end_ms <= s.service_end_ms):
+            raise ValueError("require service_start <= sermon_start < sermon_end <= service_end")
+        return self
+
+    @property
+    def service(self) -> TimeRange:
+        return TimeRange(start_ms=self.service_start_ms, end_ms=self.service_end_ms)
+
+    @property
+    def sermon(self) -> TimeRange:
+        return TimeRange(start_ms=self.sermon_start_ms, end_ms=self.sermon_end_ms)
+
+
+class BoundaryProposal(Model):
+    boundaries: ServiceBoundaries
+    confidence: float = Field(ge=0.0, le=1.0)
+    explanation: str
+    """Human-readable reasoning shown to the reviewer."""
+
+
+class TranscriptWord(Model):
+    text: str
+    range: TimeRange
+    probability: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class TranscriptSegment(Model):
+    text: str
+    range: TimeRange
+    avg_logprob: float | None = None
+    words: tuple[TranscriptWord, ...] = ()
+
+
+class Transcript(Model):
+    """Provider-neutral transcript. Times are on the source timeline."""
+
+    language: str
+    segments: tuple[TranscriptSegment, ...]
+    provider: str
+    model: str | None = None
+
+    @property
+    def text(self) -> str:
+        return " ".join(seg.text.strip() for seg in self.segments if seg.text.strip())
+
+    def within(self, span: TimeRange) -> "Transcript":
+        kept = tuple(s for s in self.segments if span.contains(s.range))
+        return self.model_copy(update={"segments": kept})
+
+
+class FormattedTranscript(Model):
+    markdown: str
+    words_preserved: bool
+    """True if the formatted text has exactly the source transcript's word sequence."""
+    discrepancies: tuple[str, ...] = ()
+
+
+class SermonMetadata(Model):
+    title: str | None = None
+    preacher: str | None = None
+    service_date: date | None = None
+    service_time: str | None = None
+    """Local start time, "HH:MM"."""
+    scripture: tuple[str, ...] = ()
+    """Free-form references, e.g. "John 3:1-17"."""
+    series: str | None = None
+    occasion: str | None = None
+    """E.g. the liturgical day. Optional and not tied to any tradition."""
+    summary: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+    """Output-specific fields passed through unchanged."""
+
+
+class SourcePart(Model):
+    """One media file of a recording. Interrupted recordings have several parts."""
+
+    ref: str
+    """Stable identifier within the input, e.g. a Drive file ID."""
+    name: str
+    size: int | None = Field(default=None, ge=0)
+    checksum: str | None = None
+    modified_at: datetime | None = None
+    mime: str | None = None
+
+
+class SourceItem(Model):
+    """A completed recording discovered by an `InputSource`."""
+
+    source_type: str
+    source_ref: str
+    """Stable unique identifier within `source_type`; the deduplication key."""
+    parts: tuple[SourcePart, ...] = Field(min_length=1)
+    """Ordered parts; the core concatenates them into one source timeline."""
+    title: str | None = None
+    service_date: date | None = None
+    recorded_at: datetime | None = None
+    url: str | None = None
+    hints: dict[str, Any] = Field(default_factory=dict)
+    """Free-form clues for metadata generation, e.g. companion document names."""
+
+
+class ArtifactRef(Model):
+    """A file the core has stored and verified."""
+
+    path: Path
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size: int = Field(ge=0)
+    mime: str
+    duration_ms: int | None = Field(default=None, ge=0)
+
+
+class ExternalRef(Model):
+    """Where an output put something, so it can be updated rather than duplicated."""
+
+    target: str
+    external_id: str
+    url: str | None = None
+
+
+class PublicationRequest(Model):
+    publication_key: str
+    """Stable idempotency key, e.g. "georg:<instance>:service:<id>:<target>"."""
+    service_date: date
+    metadata: SermonMetadata
+    transcript_markdown: str | None = None
+    files: dict[str, ArtifactRef] = Field(default_factory=dict)
+    """Renditions keyed by rendition name, limited to those the output requested."""
+    existing: ExternalRef | None = None
+
+
+class FormatContext(Model):
+    language: str
+    metadata: SermonMetadata
+
+
+class MetadataContext(Model):
+    source: SourceItem
+    transcript: Transcript | None
+    defaults: SermonMetadata
+    """Configured defaults, e.g. the usual preacher and service time."""

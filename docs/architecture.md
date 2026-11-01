@@ -55,7 +55,7 @@ Why a monolith with two process roles: one image, one deploy, one DB; the worker
 
 ## 3. Module interfaces (contracts)
 
-All in `georg.core.contracts`. Shown abridged; the real file will carry docstrings and pydantic models.
+The authoritative definitions are `georg.core.types` and `georg.core.contracts`. The sketch below is the original abridged design; the code adds four-point `ServiceBoundaries`, multi-part `SourceItem`s, transcript-aware boundary detection, and outputs that declare which renditions they need.
 
 ```python
 # ---- shared value types ----
