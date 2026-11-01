@@ -14,7 +14,13 @@ from georg.core.config import OutputConfig
 from georg.core.contracts import OutputTarget
 from georg.core.errors import ConfigError, ModuleError
 from georg.core.types import ArtifactRef, PublicationRequest, SermonMetadata
-from georg.modules.outputs.wordpress import WordPressOutput, slugify, transcript_html
+from georg.modules.outputs.wordpress import (
+    PUBLICATION_KEY_PATTERN,
+    WordPressOutput,
+    slugify,
+    transcript_html,
+)
+from georg.pipeline.registry import build_output
 
 API = "https://church.example/wp-json/georg/v1"
 KEY = "georg:stpaul:service:7:website"
@@ -404,3 +410,32 @@ def test_helpers() -> None:
     assert slugify("!!!") == "sermon"
     assert transcript_html("  \n\n") == ""
     assert transcript_html('a "quoted" <b>') == '<p>a "quoted" &lt;b&gt;</p>'
+
+
+def test_registered_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WP_APP_PASSWORD", PASSWORD)
+    config = OutputConfig(
+        name="website",
+        type="wordpress",
+        options={
+            "base_url": "https://church.example",
+            "username": "georg",
+            "app_password": "env:WP_APP_PASSWORD",
+        },
+    )
+    out = build_output(config, timezone="America/Chicago")
+    assert isinstance(out, WordPressOutput)
+    assert out.sermon_body(make_request(tmp_path), audio_id=None)["date_gmt"].startswith(
+        "2026-11-01T16:30"
+    )
+    sftp = OutputConfig(
+        name="phone",
+        type="sftp",
+        options={"host": "h", "username": "u", "password": "p", "remote_path": "/sermon.mp3"},
+    )
+    assert build_output(sftp, timezone="America/Chicago").name == "phone"
+
+
+def test_pipeline_publication_keys_are_accepted() -> None:
+    assert PUBLICATION_KEY_PATTERN.match("georg:stpaul:sermon-123:website")
+    assert PUBLICATION_KEY_PATTERN.match("georg:test-2:sermon-1:my_site.v2")

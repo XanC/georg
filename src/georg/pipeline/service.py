@@ -276,7 +276,11 @@ def publish_sermon(
     if another fails; any failure is raised afterwards so the job is retried.
     """
     store = store or LocalStore.for_data_dir(config.data_dir)
-    targets = list(outputs) if outputs is not None else [build_output(c) for c in config.outputs]
+    targets = (
+        list(outputs)
+        if outputs is not None
+        else [build_output(c, timezone=config.timezone) for c in config.outputs]
+    )
     with sessions() as session:
         sermons = SermonRepository(session)
         sermon = sermons.get(sermon_id)

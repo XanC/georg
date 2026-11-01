@@ -186,16 +186,17 @@ class WordPressOutput:
         filename = self.options.filename.format(
             date=request.service_date.isoformat(), slug=slugify(self._title(request))
         )
-        data = self._call(
-            "POST",
-            f"{self._api}/audio",
-            data={
-                "publication_key": request.publication_key,
-                "filename": filename,
-                "title": self._title(request),
-            },
-            files={"file": (filename, artifact.path.read_bytes(), "audio/mpeg")},
-        )
+        with artifact.path.open("rb") as audio:
+            data = self._call(
+                "POST",
+                f"{self._api}/audio",
+                data={
+                    "publication_key": request.publication_key,
+                    "filename": filename,
+                    "title": self._title(request),
+                },
+                files={"file": (filename, audio, "audio/mpeg")},
+            )
         audio_id = data.get("id")
         if isinstance(audio_id, bool) or not isinstance(audio_id, int):
             raise ModuleError(f"{self.name}: audio upload response has no attachment id")
