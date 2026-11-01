@@ -348,9 +348,9 @@ Georg typically handles one service per week, so the instance is **stopped most 
 | D12 | Podcast feed: keep `podcast.pl` vs Georg output module | Keep `podcast.pl` + R2 sync; Georg writes data compatible with them | No |
 | D13 | Google Drive auth: service account vs user OAuth | Service account shared on the folder | **Yes (Q3)** |
 | D14 | Hosting: stop-when-idle EC2 vs always-on | Stop-when-idle (owner agreed in principle) | No |
-| D15 | Mastering chain | ffmpeg-native by default, A/B-checked against the legacy Mono compressor + wavegain | **Yes** |
-| D16 | Renditions in the MVP | Sermon (WordPress) + telephone service audio (file drop); HQ Drive archive optional | **Yes** |
-| D17 | Choosing among several videos in one Drive folder | Configurable preference; reviewer can switch | **Yes** |
+| D15 | Mastering chain | **Decided:** ffmpeg-native (`acompressor` + loudness normalisation), A/B-checked by ear against the legacy Mono compressor + wavegain | No |
+| D16 | Renditions in the MVP | **Decided:** sermon → WordPress; telephone service audio → SFTP output; HQ service audio → Google Drive output | No |
+| D17 | Several videos in one Drive folder | **Decided:** usually one recording that was interrupted and restarted, so treat the videos as ordered parts of one source and concatenate them; reviewer can exclude a part | No |
 | D18 | AWS account | New account intended for transfer to the church vs the existing us-east-2 project used by `stpaul-audio` | **Yes** |
 
 ## 10. Phased plan to a minimal end-to-end system
@@ -395,12 +395,8 @@ T2–T7 and T10 can run in parallel once T1 is merged. Phase 1 integration (`pip
 
 ## 12. Questions for you
 
-Answered: ChurchThemes (Church Content); audio on the church site plus a bespoke feed (kept as is); Drive is the source of recordings, accessed with a service account; recordings arrive Sunday afternoons; no on-site machine; one sermon per service; `georg-bridge` plugin approved; initial reviewer is the owner (recipients configurable, multiple); repo `XanC/georg`; POCs may be published once redacted; plan approved.
+Answered: Georg replaces `stpaul-audio` (to be deleted) and the church machine's processing (D15–D17 decided); ChurchThemes (Church Content); audio on the church site plus a bespoke feed (kept as is); Drive is the source of recordings, accessed with a service account; recordings arrive Sunday afternoons; no on-site machine; one sermon per service; `georg-bridge` plugin approved; initial reviewer is the owner (recipients configurable, multiple); repo `XanC/georg`; POCs may be published once redacted; plan approved.
 
 Open:
-1. Georg replaces both `stpaul-audio` and the church-machine pipeline — agreed?
-2. D16: should the MVP also deliver the telephone service audio? Is the HQ Drive archive wanted?
-3. D15: OK to move to an ffmpeg-native mastering chain, judged by listening against today's output?
-4. D17: when a folder has two service videos, which is normally preferred?
-5. D18: new AWS account, or the existing us-east-2 project? Subdomain for the admin UI?
-6. Is there a staging copy of the website for testing publication?
+1. D18: new AWS account, or the existing us-east-2 project? Subdomain for the admin UI?
+2. Is there a staging copy of the website for testing publication?
