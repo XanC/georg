@@ -1,0 +1,16 @@
+{
+  "task": "transcribe",
+  "language": "english",
+  "duration": 6.0,
+  "text": "Let us pray. Amen.",
+  "segments": [
+    {"id": 0, "start": 0.0, "end": 3.0, "text": " Let us pray.", "avg_logprob": -0.2},
+    {"id": 1, "start": 4.0, "end": 6.0, "text": " Amen.", "avg_logprob": -0.4}
+  ],
+  "words": [
+    {"word": "Let", "start": 0.1, "end": 0.4},
+    {"word": "us", "start": 0.4, "end": 0.7},
+    {"word": "pray", "start": 0.7, "end": 1.4},
+    {"word": "Amen", "start": 4.2, "end": 5.0}
+  ]
+}

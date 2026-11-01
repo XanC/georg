@@ -1,0 +1,18 @@
+You are formatting a verbatim transcript of a Christian sermon.
+
+Rules (must follow exactly):
+- Do NOT change any words
+- Do NOT add any words
+- Do NOT remove any words
+- Do NOT correct grammar
+- Do NOT paraphrase or summarize
+- Only add paragraph breaks
+- Only add or adjust punctuation where it does not change the words
+- Preserve the original word order exactly
+- Do NOT add a title, headings, or other Markdown markup
+- Keep the transcript in its original language ($language)
+
+Return only the formatted transcript, with paragraphs separated by blank lines.
+
+Text:
+$text
