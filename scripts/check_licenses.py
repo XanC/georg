@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Fail if an installed runtime dependency has a license outside the allow-list.
 
-Run with: `uv run --no-dev --with pip-licenses python scripts/check_licenses.py`.
+Run with: `uv run --no-dev --with pip-licenses python scripts/check_licenses.py`
+(add `--all-extras` to check optional extras too).
 """
 
 import json
@@ -27,6 +28,11 @@ ALLOWED_SUBSTRINGS = (
     "Zlib",
 )
 IGNORED_PACKAGES = {"georg", "pip-licenses", "prettytable", "wcwidth", "tomli"}
+# Packages whose metadata omits the license; verified by reading their LICENSE files.
+KNOWN_LICENSES = {
+    "namex": "Apache-2.0",
+    "pyannote-core": "MIT",
+}
 
 
 def main() -> int:
@@ -40,7 +46,9 @@ def main() -> int:
         pkg
         for pkg in json.loads(out)
         if pkg["Name"].lower() not in IGNORED_PACKAGES
-        and not any(s in pkg["License"] for s in ALLOWED_SUBSTRINGS)
+        and not any(
+            s in KNOWN_LICENSES.get(pkg["Name"].lower(), pkg["License"]) for s in ALLOWED_SUBSTRINGS
+        )
     ]
     for pkg in bad:
         print(f"disallowed or unknown license: {pkg['Name']} {pkg['Version']}: {pkg['License']}")

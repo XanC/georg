@@ -17,6 +17,11 @@ dependencies = [
 [project.scripts]
 georg = "georg.cli:main"
 
+[project.optional-dependencies]
+classify = [
+    "inaspeechsegmenter>=0.8",
+]
+
 [dependency-groups]
 dev = [
     "mypy>=1.11",
@@ -24,6 +29,15 @@ dev = [
     "pytest>=8.3",
     "ruff>=0.6",
     "types-paramiko>=3.4",
+]
+
+[tool.uv]
+# inaSpeechSegmenter requires tensorflow[and-cuda] and onnxruntime-gpu, which pull in
+# proprietary NVIDIA CUDA wheels. Georg runs the classifier on CPU and never imports
+# the ONNX-based VBx segmenter, so use plain TensorFlow and drop onnxruntime-gpu.
+override-dependencies = [
+    "tensorflow>=2.16",
+    "onnxruntime-gpu; sys_platform == 'never'",
 ]
 
 [build-system]
@@ -45,6 +59,11 @@ strict = true
 packages = ["georg"]
 mypy_path = "src"
 
+[[tool.mypy.overrides]]
+module = ["inaSpeechSegmenter", "inaSpeechSegmenter.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not slow'"
+markers = ["slow: needs optional heavy extras or model downloads; run with `-m slow`"]
