@@ -230,8 +230,8 @@ Verified against the Church Content 2.7 plugin source and the live site (WordPre
 
   These mappings are per-site configuration of the WordPress output, not hard-coded, because other ChurchThemes sites use series and book differently.
 - **Integration mechanism.** The current scripts log in to wp-admin and scrape forms, plus write directly to MySQL. Georg will run off-server, so it uses the REST API (application password for the existing `scripts` user) plus a tiny companion plugin `georg-bridge` (AGPL, kept in this repo) that:
-  1. registers `_ctc_sermon_audio`, `_ctc_sermon_podcast_exclude`, and `_georg_publication_key` for REST, with an `edit_posts` check;
-  2. adds one endpoint to upload sermon audio into `uploads/sermons/` as a proper attachment, filling `_wp_attachment_metadata` (mime type, size, duration). This keeps `podcast.pl` and the hourly R2 sync working unchanged.
+  1. `POST /georg/v1/audio` uploads sermon audio into `uploads/sermons/` as a proper attachment, filling `_wp_attachment_metadata` (mime type, size, duration). This keeps `podcast.pl` and the hourly R2 sync working unchanged.
+  2. `GET`/`PUT /georg/v1/sermons/<publication_key>` find, create, or update the `ctc_sermon` post carrying `_georg_publication_key`, set its terms, and write `_ctc_sermon_audio` server-side (instead of exposing the protected meta to the generic REST API). Access requires an application password for a user with `edit_others_posts` and `upload_files` (filterable).
   If installing a plugin is unwelcome, the same PHP can go in the already-installed Code Snippets plugin. Wordfence's settings must allow application passwords; to be checked.
 
 ### 5.5 Podcast feed and audio hosting
