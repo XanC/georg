@@ -395,7 +395,7 @@ T2–T7 and T10 can run in parallel once T1 is merged. Phase 1 integration (`pip
 
 ## 12. Questions for you
 
-Answered: ChurchThemes (Church Content); audio on the church site plus a bespoke feed (kept as is); Drive is the source of recordings, accessed with a service account; recordings arrive Sunday afternoons; no on-site machine; one sermon per service; `georg-bridge` plugin approved; reviewer `xan@charbonnet.com` (configurable, multiple); repo `XanC/georg`; POCs may be published once redacted; plan approved.
+Answered: ChurchThemes (Church Content); audio on the church site plus a bespoke feed (kept as is); Drive is the source of recordings, accessed with a service account; recordings arrive Sunday afternoons; no on-site machine; one sermon per service; `georg-bridge` plugin approved; initial reviewer is the owner (recipients configurable, multiple); repo `XanC/georg`; POCs may be published once redacted; plan approved.
 
 Open:
 1. Georg replaces both `stpaul-audio` and the church-machine pipeline — agreed?
