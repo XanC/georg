@@ -32,10 +32,12 @@ PROCESSOR_TYPES: dict[Role, dict[str, str]] = {
 }
 
 INPUT_TYPES: dict[str, str] = {
+    "google_drive": "georg.modules.inputs.google_drive:GoogleDriveInput",
     "local_folder": "georg.modules.inputs.local_folder:LocalFolderInput",
 }
 
 OUTPUT_TYPES: dict[str, str] = {
+    "google_drive_upload": "georg.modules.outputs.google_drive_upload:GoogleDriveUploadOutput",
     "sftp": "georg.modules.outputs.sftp:SftpOutput",
 }
 """Output classes are constructed with their whole `OutputConfig`."""
