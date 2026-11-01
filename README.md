@@ -28,6 +28,18 @@ uv run pytest
 
 Requires Python 3.12+ and FFmpeg.
 
+To try the processing stages on a recording without the database, copy
+`georg.example.toml` to `georg.toml` and run:
+
+```sh
+uv sync --extra classify --extra whisper
+uv run georg run part1.mp4 part2.mp4 --out out/ --date 2026-11-01 --no-format
+```
+
+This writes the three MP3 renditions, the sermon transcript, and `report.json`
+with the detected boundaries. Classification and transcription are cached, so
+re-running with `--boundaries 0:02:10,0:31:20,0:52:05,1:14:30` only re-cuts the audio.
+
 ## License
 
 Georg is licensed under the **GNU Affero General Public License, version 3 only** (`AGPL-3.0-only`); see [LICENSE](LICENSE). If you run a modified version of Georg as a network service, the AGPL requires you to offer its source code to that service's users.

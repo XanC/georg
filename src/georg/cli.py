@@ -7,12 +7,13 @@ import re
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
+from datetime import date
 from pathlib import Path
 
 from georg import __version__
 from georg.core.config import RenditionSpec
 from georg.core.errors import GeorgError
-from georg.core.types import TimeRange
+from georg.core.types import ServiceBoundaries, TimeRange
 
 DEFAULT_CONFIG = Path("georg.toml")
 SAMPLE_MS = 120_000
@@ -74,6 +75,58 @@ def _db_upgrade(args: argparse.Namespace) -> int:
     return 0
 
 
+def parse_boundaries(value: str) -> ServiceBoundaries:
+    """Parse "service_start,sermon_start,sermon_end,service_end" timestamps."""
+    times = [parse_timestamp(v) for v in value.split(",")]
+    if len(times) != 4:
+        raise argparse.ArgumentTypeError("expected four comma-separated timestamps")
+    try:
+        return ServiceBoundaries(
+            service_start_ms=times[0],
+            sermon_start_ms=times[1],
+            sermon_end_ms=times[2],
+            service_end_ms=times[3],
+        )
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
+def _fmt_ms(ms: int) -> str:
+    seconds = ms // 1000
+    return f"{seconds // 3600}:{seconds // 60 % 60:02d}:{seconds % 60:02d}"
+
+
+def _run(args: argparse.Namespace) -> int:
+    from georg.core.config import load_config
+    from georg.pipeline import StageCache, build_processors, run_local
+
+    config = load_config(args.config)
+    processors = build_processors(config.processors, formatter=not args.no_format)
+    result = run_local(
+        args.parts,
+        args.out_dir,
+        processors,
+        cache=StageCache(args.cache or config.data_dir / "cache"),
+        renditions=config.renditions,
+        language=config.language,
+        service_date=args.date,
+        documents=args.document,
+        boundaries=args.boundaries,
+    )
+    b = result.boundaries
+    print(
+        "boundaries: "
+        + ", ".join(
+            _fmt_ms(ms)
+            for ms in (b.service_start_ms, b.sermon_start_ms, b.sermon_end_ms, b.service_end_ms)
+        )
+        + f" (confidence {result.proposal.confidence:.2f})"
+    )
+    for name, path in result.files.items():
+        print(f"{name}: {path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="georg", description=__doc__)
     parser.add_argument("--version", action="version", version=f"georg {__version__}")
@@ -91,6 +144,28 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument("--start", type=parse_timestamp, required=True, help="e.g. 0:31:20")
     sample.add_argument("--end", type=parse_timestamp, help="default: start + 2 minutes")
     sample.set_defaults(handler=_master_sample)
+
+    run = commands.add_parser(
+        "run",
+        help="process local recording files without the database",
+        description="Process a recording (its parts in order) into OUT_DIR: renditions, "
+        "sermon transcript, and report.json with the detected boundaries.",
+    )
+    run.add_argument("parts", type=Path, nargs="+", help="recording parts, in order")
+    run.add_argument("--out", dest="out_dir", type=Path, required=True)
+    run.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    run.add_argument("--cache", type=Path, help="stage cache (default: <data_dir>/cache)")
+    run.add_argument("--date", type=date.fromisoformat, help="service date, YYYY-MM-DD")
+    run.add_argument(
+        "--document", action="append", default=[], help="companion document name (repeatable)"
+    )
+    run.add_argument(
+        "--boundaries",
+        type=parse_boundaries,
+        help="override detection: service_start,sermon_start,sermon_end,service_end",
+    )
+    run.add_argument("--no-format", action="store_true", help="skip the LLM formatter")
+    run.set_defaults(handler=_run)
 
     db = commands.add_parser("db", help="manage the database")
     db_commands = db.add_subparsers(dest="db_command", metavar="COMMAND", required=True)
