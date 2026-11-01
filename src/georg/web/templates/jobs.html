@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Jobs{% endblock %}
+{% block content %}
+<h1>Jobs</h1>
+<form method="post" action="/jobs/discover">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <button type="submit" {% if discovering %}disabled{% endif %}>{{ "Checking for new recordings…" if discovering else "Check for new recordings" }}</button>
+</form>
+{% include "_jobs_table.html" %}
+{% endblock %}

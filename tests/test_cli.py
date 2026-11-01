@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 import argparse
+import io
 import shutil
 import subprocess
 from pathlib import Path
@@ -53,3 +54,76 @@ def test_master_sample_writes_ab_pair(tmp_path: Path, capsys: pytest.CaptureFixt
         info = probe(Path(name))
         assert abs(info.duration_ms - 5000) <= 250 and info.channels == 2
     assert sorted(p.name for p in out.iterdir()) == ["A_unprocessed.mp3", "B_mastered.mp3"]
+
+
+def _config_file(tmp_path: Path) -> Path:
+    path = tmp_path / "georg.toml"
+    root = tmp_path / "drive"
+    root.mkdir()
+    processors = "\n".join(
+        f'[processors.{k}]\ntype = "unused"'
+        for k in ("classifier", "detector", "transcriber", "formatter", "metadata")
+    )
+    path.write_text(
+        f'instance = "test"\ndata_dir = "{tmp_path / "data"}"\n\n'
+        f'[[inputs]]\nname = "drive"\ntype = "local_folder"\n'
+        f'[inputs.options]\nroot = "{root}"\n\n{processors}\n'
+    )
+    return path
+
+
+def test_user_add_stores_an_argon2_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from georg.db import create_engine
+    from georg.db.engine import database_path, session_factory
+    from georg.db.repositories import UserRepository
+    from georg.web.auth import verify_password
+
+    config = _config_file(tmp_path)
+    argv = ["user", "add", "alice", "--role", "reviewer", "--config", str(config)]
+    monkeypatch.setattr("sys.stdin", io.StringIO("long enough password\n"))
+    assert main([*argv, "--password-stdin"]) == 0
+    assert "added reviewer 'alice'" in capsys.readouterr().out
+
+    engine = create_engine(database_path(tmp_path / "data"))
+    with session_factory(engine)() as s:
+        user = UserRepository(s).by_username("alice")
+        assert user is not None
+        assert user.role == "reviewer"
+        assert user.password_hash.startswith("$argon2id$")
+        assert verify_password(user.password_hash, "long enough password")
+    engine.dispose()
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("long enough password\n"))
+    assert main([*argv, "--password-stdin"]) == 1
+    assert "already exists" in capsys.readouterr().err
+
+
+def test_user_add_rejects_short_password(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = _config_file(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO("short\n"))
+    argv = ["user", "add", "bob", "--role", "admin", "--config", str(config), "--password-stdin"]
+    assert main(argv) == 1
+    assert "at least 8 characters" in capsys.readouterr().err
+
+
+def test_web_refuses_to_start_without_secret(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("GEORG_SECRET_KEY", raising=False)
+    assert main(["web", "--config", str(_config_file(tmp_path))]) == 1
+    assert "GEORG_SECRET_KEY" in capsys.readouterr().err
+
+
+def test_web_dev_runs_without_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import uvicorn
+
+    monkeypatch.delenv("GEORG_SECRET_KEY", raising=False)
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: calls.append(kw))
+    config = str(_config_file(tmp_path))
+    assert main(["web", "--config", config, "--dev", "--port", "8123"]) == 0
+    assert calls == [{"host": "127.0.0.1", "port": 8123, "proxy_headers": True}]

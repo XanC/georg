@@ -6,6 +6,13 @@
 | Alembic | Database schema migrations | MIT | Pulls in Mako (MIT) and MarkupSafe (BSD-3-Clause). |
 | FFmpeg | Audio/video processing, invoked as a subprocess | LGPL/GPL (distribution build) | The container image ships Debian's FFmpeg package; its source is available from Debian. Georg does not link to FFmpeg. |
 | paramiko | SFTP client for the `sftp` file-drop output | LGPL-2.1 | Used unmodified as a library, which LGPL permits from AGPL code; pulls in `cryptography` (Apache-2.0/BSD), `bcrypt` (Apache-2.0), `PyNaCl` (Apache-2.0), `invoke` (BSD). `LGPL` is on the allow-list in `scripts/check_licenses.py`. |
+| FastAPI, Starlette | Web framework for the review UI (`georg.web`) | MIT | Starlette's `FileResponse` serves artifacts with HTTP Range support. Pulls in pydantic (MIT), annotated-doc (MIT), typing-inspection (MIT), and opentelemetry-api (Apache-2.0). |
+| Jinja2 | Server-rendered HTML templates | BSD-3-Clause | Pulls in MarkupSafe (BSD-3-Clause). |
+| uvicorn | ASGI server for `georg web` | BSD-3-Clause | Pulls in click (BSD-3-Clause). |
+| python-multipart | Form parsing for FastAPI | Apache-2.0 | |
+| itsdangerous | Signs the session cookie (Starlette `SessionMiddleware`) | BSD-3-Clause | |
+| argon2-cffi | Argon2id password hashing for review UI users | MIT | Pulls in argon2-cffi-bindings (MIT, bundles the CC0/Apache-2.0 Argon2 reference implementation) and cffi (MIT). |
+| htmx 2.0.4 | Small client-side polling (render status, jobs table) | 0BSD (Zero-Clause BSD) | Vendored unmodified as `src/georg/web/static/htmx.min.js` from <https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js>, so nothing is loaded from a CDN at runtime. 0BSD needs no notice; source: <https://github.com/bigskysoftware/htmx>. |
 | httpx | HTTP client for the transcription and chat APIs (`georg.llm`) | BSD-3-Clause | Pulls in httpcore (BSD), h11 (MIT), anyio (MIT), idna (BSD), certifi (MPL-2.0, unmodified). |
 
 Runtime Python dependencies are checked against an allow-list in CI (`scripts/check_licenses.py`).

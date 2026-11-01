@@ -174,6 +174,7 @@ def test_new_revision_invalidates_approval(
         assert not repo.is_approved(sermon_id)
         repo.approve(restored.id, approved_by=user_id)
         assert repo.is_approved(sermon_id)
+        assert [a.revision_id for a in repo.approvals(sermon_id)] == [r1.id, restored.id]
         r1_id = r1.id
 
     with pytest.raises(IntegrityError, match="current revision"), sessions.begin() as s:
@@ -237,3 +238,16 @@ def test_publication_is_unique_per_target(sessions: sessionmaker[Session], sermo
                 sermon_id=sermon_id, target_name="website", revision_id=r2_id, publication_key="k2"
             )
         )
+
+
+def test_services_newest_first(sessions: sessionmaker[Session]) -> None:
+    with sessions.begin() as s:
+        repo = ServiceRepository(s)
+        for ref, day in [
+            ("old", date(2026, 10, 25)),
+            ("undated", None),
+            ("new", date(2026, 11, 1)),
+        ]:
+            repo.add_discovered(ITEM.model_copy(update={"source_ref": ref, "service_date": day}))
+        assert [svc.source_ref for svc in repo.newest_first()] == ["new", "old", "undated"]
+        assert [svc.source_ref for svc in repo.newest_first(limit=1)] == ["new"]

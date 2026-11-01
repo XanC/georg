@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Services{% endblock %}
+{% block content %}
+<h1>Services</h1>
+{% if rows %}
+<div class="scroll">
+<table>
+  <thead><tr><th scope="col">Date</th><th scope="col">Title</th><th scope="col">Status</th><th scope="col">Sermon</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td>{{ row.service.service_date or "—" }}</td>
+      <td><a href="/services/{{ row.service.id }}">{{ row.service.title or row.service.source_ref }}</a></td>
+      <td>{{ row.service.status_summary or "processing" }}</td>
+      <td><span class="badge">{{ row.review }}</span></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p>No services yet. <a href="/jobs">Check for new recordings</a>.</p>
+{% endif %}
+{% endblock %}

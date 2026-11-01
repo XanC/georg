@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}{{ service.title or "Service" }}{% endblock %}
+{% block content %}
+<h1>{{ service.title or service.source_ref }}</h1>
+<p>Date: {{ service.service_date or "unknown" }}. Status: {{ service.status_summary or "processing" }}.</p>
+<p>No sermon has been proposed for this service yet. See <a href="/jobs">jobs</a> for progress or errors.</p>
+{% endblock %}

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
+  <title>{% block title %}Georg{% endblock %} · Georg</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+  <script src="{{ url_for('static', path='htmx.min.js') }}" defer></script>
+  <script src="{{ url_for('static', path='review.js') }}" defer></script>
+</head>
+<body>
+  <header class="site">
+    <a class="brand" href="/">Georg</a>
+    {% if user %}
+    <nav aria-label="Main">
+      <a href="/">Services</a>
+      <a href="/jobs">Jobs</a>
+      <form method="post" action="/logout" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="link">Log out {{ user.username }}</button>
+      </form>
+    </nav>
+    {% endif %}
+  </header>
+  <main>
+    {% for level, message in flashes %}
+    <p class="flash {{ level }}" role="{{ 'alert' if level == 'error' else 'status' }}">{{ message }}</p>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    Georg {{ version }} · free software under the AGPL-3.0 · <a href="{{ source_url }}">Source code</a>
+  </footer>
+</body>
+</html>
