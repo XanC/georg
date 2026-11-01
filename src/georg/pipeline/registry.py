@@ -32,6 +32,7 @@ PROCESSOR_TYPES: dict[Role, dict[str, str]] = {
 }
 
 INPUT_TYPES: dict[str, str] = {
+    "google_drive": "georg.modules.inputs.google_drive:GoogleDriveInput",
     "local_folder": "georg.modules.inputs.local_folder:LocalFolderInput",
 }
 

@@ -201,3 +201,9 @@ def test_invalid_config(
     )
     with pytest.raises(ConfigError):
         GoogleDriveUploadOutput(config, credentials=FakeTokens(), http_client=drive.client())
+
+
+def test_folder_id_from_env(drive: FakeDrive, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEORG_TEST_ARCHIVE_FOLDER", ARCHIVE)
+    output = make_output(drive, folder_id="env:GEORG_TEST_ARCHIVE_FOLDER")
+    assert output.folder_id == ARCHIVE

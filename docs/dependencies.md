@@ -37,3 +37,14 @@ Installed with `uv sync --extra whisper` (or `pip install georg[whisper]`). Need
 | onnxruntime, tokenizers, huggingface-hub, av, numpy, and transitive packages | faster-whisper dependencies | MIT, Apache-2.0, BSD, MPL-2.0 | Georg decodes audio with FFmpeg and passes samples to faster-whisper, so PyAV is installed but unused. |
 
 Check the extra's licenses with `uv run --no-dev --extra whisper --with pip-licenses python scripts/check_licenses.py`.
+
+## Optional extra `gdrive`
+
+Installed with `uv sync --extra gdrive` (or `pip install georg[gdrive]`). Needed only by the `google_drive` input and the `google_drive_upload` output, which import it lazily; Drive API calls themselves use `httpx` against the Drive v3 REST API. See [google-drive.md](google-drive.md) for the service account setup.
+
+| Dependency | Use | License | Notes |
+|---|---|---|---|
+| google-auth | Signs service-account JWTs and exchanges them for OAuth access tokens | Apache-2.0 | `google-api-python-client` is deliberately not used; the few Drive v3 endpoints Georg needs are called directly. |
+| pyasn1, pyasn1-modules | Key parsing for google-auth | BSD-2-Clause | `cryptography` (Apache-2.0/BSD) is already installed via paramiko. |
+
+Check the extra's licenses with `uv run --no-dev --extra gdrive --with pip-licenses python scripts/check_licenses.py`.

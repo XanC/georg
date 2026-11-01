@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from georg.core.config import OutputConfig
+from georg.core.config import OutputConfig, resolve_secret
 from georg.core.errors import ConfigError, ModuleError
 from georg.core.types import ArtifactRef, ExternalRef, PublicationRequest
 from georg.gdrive import (
@@ -59,8 +59,8 @@ class GoogleDriveUploadOptions(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     folder_id: str = Field(min_length=1)
-    """Archive folder; it should be on a shared drive (see docs/google-drive.md)."""
-    credentials_file: str
+    """Archive folder, may be "env:NAME"; it should be on a shared drive (docs/google-drive.md)."""
+    credentials_file: str = "env:GOOGLE_APPLICATION_CREDENTIALS"
     """Path to the service account JSON key, usually "env:NAME"."""
     subject: str | None = None
     """Workspace user to impersonate (domain-wide delegation); normally unset."""
@@ -139,6 +139,7 @@ class GoogleDriveUploadOutput:
         if config.transcript:
             raise ConfigError(f"output {config.name!r}: Drive upload cannot publish transcripts")
         self.name = config.name
+        self.folder_id = resolve_secret(opts.folder_id)
         self.renditions = frozenset({opts.rendition})
         client = http_client or httpx.Client(timeout=opts.timeout_s, follow_redirects=True)
         tokens = credentials or ServiceAccountTokens(
@@ -225,7 +226,7 @@ class GoogleDriveUploadOutput:
         return self._find(request.publication_key)
 
     def _parent(self, service_date: date) -> str:
-        root = self.options.folder_id
+        root = self.folder_id
         name = self.subfolder(service_date)
         if name is None:
             return root

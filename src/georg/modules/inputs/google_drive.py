@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from georg.core.config import NamedModuleConfig
+from georg.core.config import NamedModuleConfig, resolve_secret
 from georg.core.errors import ConfigError, ModuleError, SourceNotReadyError
 from georg.core.types import SourceItem, SourcePart
 from georg.gdrive import (
@@ -48,8 +48,8 @@ class GoogleDriveInputOptions(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     folder_id: str = Field(min_length=1)
-    """The shared folder that contains one subfolder per service."""
-    credentials_file: str
+    """The shared folder that contains one subfolder per service; may be "env:NAME"."""
+    credentials_file: str = "env:GOOGLE_APPLICATION_CREDENTIALS"
     """Path to the service account JSON key, usually "env:NAME"."""
     subject: str | None = None
     """Workspace user to impersonate (domain-wide delegation); normally unset."""
@@ -160,12 +160,18 @@ class GoogleDriveInput:
             raise ConfigError(f"input {config.name!r}: {exc}") from exc
         opts = self.options
         self.name = config.name
+        self.folder_id = resolve_secret(opts.folder_id)
         client = http_client or httpx.Client(timeout=opts.timeout_s, follow_redirects=True)
         tokens = credentials or ServiceAccountTokens(
             opts.credentials_file, [SCOPE_READONLY], subject=opts.subject, http_client=client
         )
         self._drive = DriveClient(tokens, client, attempts=opts.attempts, sleep=sleep)
         self._clock = clock
+
+    @classmethod
+    def from_options(cls, options: Mapping[str, Any]) -> "GoogleDriveInput":
+        """Build from bare options, as `georg.pipeline.registry.build_input` does."""
+        return cls(NamedModuleConfig(name=TYPE_NAME, type=TYPE_NAME, options=dict(options)))
 
     def _children(self, folder_id: str, extra: str = "") -> Iterator[dict[str, Any]]:
         query = f"'{quote_query(folder_id)}' in parents and trashed = false{extra}"
@@ -186,7 +192,7 @@ class GoogleDriveInput:
     def discover(self, since: datetime | None) -> Iterator[SourceItem]:
         opts = self.options
         folders = []
-        for raw in self._children(opts.folder_id, f" and mimeType = '{FOLDER_MIME}'"):
+        for raw in self._children(self.folder_id, f" and mimeType = '{FOLDER_MIME}'"):
             name = str(raw.get("name", ""))
             if not fnmatch.fnmatchcase(name, opts.folder_pattern):
                 continue

@@ -212,3 +212,23 @@ def test_folder_listing_query(drive: FakeDrive) -> None:
         f"'{ROOT}' in parents and trashed = false and mimeType = '{FOLDER_MIME}'"
     )
     assert "supportsAllDrives" not in call.url.params
+
+
+def test_registry_builds_from_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    from georg.pipeline.registry import build_input
+
+    monkeypatch.setenv("GEORG_TEST_DRIVE_FOLDER", "folder-from-env")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/key.json")
+    config = NamedModuleConfig(
+        name="drive", type="google_drive", options={"folder_id": "env:GEORG_TEST_DRIVE_FOLDER"}
+    )
+    source = build_input(config)
+    assert isinstance(source, GoogleDriveInput)
+    assert source.folder_id == "folder-from-env"
+    assert source.options.credentials_file == "env:GOOGLE_APPLICATION_CREDENTIALS"
+
+
+def test_unset_folder_env_is_config_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GEORG_TEST_DRIVE_FOLDER", raising=False)
+    with pytest.raises(ConfigError, match="GEORG_TEST_DRIVE_FOLDER"):
+        GoogleDriveInput.from_options({"folder_id": "env:GEORG_TEST_DRIVE_FOLDER"})
