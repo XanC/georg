@@ -74,10 +74,24 @@ class ProcessorsConfig(_Section):
     metadata: ModuleConfig
 
 
+class SmtpConfig(_Section):
+    host: str
+    port: int = 587
+    starttls: bool = True
+    username: str | None = None
+    password: str | None = None
+    """Normally an "env:NAME" reference."""
+    sender: str
+    """From address, e.g. "Georg <georg@example.org>"."""
+
+
 class ReviewConfig(_Section):
     require_approval: bool = True
     notify: tuple[str, ...] = ()
     """Email addresses told when a service is ready for review."""
+    base_url: str | None = None
+    """Public address of the review web app, used for links in notices."""
+    smtp: SmtpConfig | None = None
 
 
 class GeorgConfig(_Section):

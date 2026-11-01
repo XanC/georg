@@ -199,3 +199,17 @@ def test_publish_builds_outputs_in_instance_timezone(
     with pytest.raises(ModuleError, match="not approved"):
         publish_sermon(config, session_factory(engine), sermon_id)
     assert built == [("website", "America/Chicago")]
+
+
+def test_worker_queues_notice_when_reviewers_configured(
+    config: GeorgConfig, engine: Engine
+) -> None:
+    review = config.review.model_copy(update={"notify": ("a@x.org",)})
+    config = config.model_copy(update={"review": review})
+    queue = JobQueue(engine)
+    discover(config, session_factory(engine), queue)
+    worker = Worker(config, engine, queue=queue, processors=processors())
+    sent: list[dict[str, object]] = []
+    worker.handlers["notify"] = sent.append
+    assert worker.run_once() and worker.run_once()
+    assert sent == [{"service_id": 1}]
