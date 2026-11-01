@@ -13,6 +13,7 @@ from sqlalchemy import Engine
 from georg.core.config import GeorgConfig
 from georg.db.engine import session_factory
 from georg.jobs.queue import JobQueue, LeasedJob, LeaseLostError
+from georg.notify import notify_review
 from georg.pipeline.registry import Processors, build_processors
 from georg.pipeline.service import (
     DISCOVER,
@@ -26,6 +27,8 @@ from georg.pipeline.service import (
 )
 
 log = logging.getLogger(__name__)
+
+NOTIFY = "notify"
 
 
 class _Heartbeat:
@@ -54,6 +57,8 @@ class _Heartbeat:
 
 
 class Worker:
+    """Runs queued jobs: discover, process, notify, render and publish."""
+
     def __init__(
         self,
         config: GeorgConfig,
@@ -70,8 +75,9 @@ class Worker:
         self._processors = processors
         self.handlers: dict[str, Callable[[dict[str, Any]], object]] = {
             DISCOVER: lambda _: discover(self.config, self.sessions, self.queue),
-            PROCESS: lambda payload: process_service(
-                self.config, self.sessions, int(payload["service_id"]), self.processors
+            PROCESS: self._process,
+            NOTIFY: lambda payload: notify_review(
+                self.config, self.sessions, int(payload["service_id"])
             ),
             RENDER: lambda payload: render_revision(
                 self.config, self.sessions, int(payload["revision_id"]), self.processors
@@ -80,6 +86,13 @@ class Worker:
                 self.config, self.sessions, int(payload["sermon_id"])
             ),
         }
+
+    def _process(self, payload: dict[str, Any]) -> int | None:
+        service_id = int(payload["service_id"])
+        revision_id = process_service(self.config, self.sessions, service_id, self.processors)
+        if revision_id is not None and self.config.review.notify:
+            self.queue.enqueue(NOTIFY, {"service_id": service_id})
+        return revision_id
 
     @property
     def processors(self) -> Processors:
