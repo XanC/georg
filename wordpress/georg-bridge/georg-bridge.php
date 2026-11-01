@@ -4,7 +4,7 @@
  * Plugin Name:       Georg Bridge
  * Plugin URI:        https://github.com/XanC/georg
  * Description:       REST endpoints that let Georg upload sermon audio and create or update Church Content sermons.
- * Version:           0.1.1
+ * Version:           0.2.0
  * Requires at least: 5.6
  * Requires PHP:      7.4
  * License:           AGPL-3.0-only
@@ -18,6 +18,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once __DIR__ . '/includes/signing.php';
+
 define( 'GEORG_BRIDGE_NAMESPACE', 'georg/v1' );
 define( 'GEORG_BRIDGE_KEY_META', '_georg_publication_key' );
 define( 'GEORG_BRIDGE_SHA256_META', '_georg_sha256' );
@@ -26,6 +28,12 @@ define( 'GEORG_BRIDGE_AUDIO_META', '_ctc_sermon_audio' );
 define( 'GEORG_BRIDGE_UPLOAD_SUBDIR', 'sermons' );
 define( 'GEORG_BRIDGE_KEY_PATTERN', '[A-Za-z0-9:._-]{1,190}' );
 define( 'GEORG_BRIDGE_LOCK_SECONDS', 300 );
+define( 'GEORG_BRIDGE_NONCE_PREFIX', '_georg_nonce_' );
+define( 'GEORG_BRIDGE_NONCE_PURGE_LIMIT', 100 );
+define(
+	'GEORG_BRIDGE_SIGNED_HEADERS',
+	array( 'x-georg-key-id', 'x-georg-timestamp', 'x-georg-nonce', 'x-georg-content-sha256', 'x-georg-signature' )
+);
 
 add_action( 'rest_api_init', 'georg_bridge_register_routes' );
 
@@ -47,11 +55,11 @@ function georg_bridge_register_routes() {
 		array(
 			'methods'             => 'POST',
 			'callback'            => 'georg_bridge_upload_audio',
-			'permission_callback' => 'georg_bridge_permission',
+			'permission_callback' => 'georg_bridge_permission_audio',
 			'args'                => array(
 				'publication_key' => array(
 					'type'              => 'string',
-					'required'          => false,
+					'required'          => true,
 					'validate_callback' => 'georg_bridge_valid_key',
 				),
 				'filename'        => array(
@@ -73,13 +81,13 @@ function georg_bridge_register_routes() {
 			array(
 				'methods'             => 'GET',
 				'callback'            => 'georg_bridge_get_sermon',
-				'permission_callback' => 'georg_bridge_permission',
+				'permission_callback' => 'georg_bridge_permission_sermons',
 				'args'                => $key_arg,
 			),
 			array(
 				'methods'             => 'PUT',
 				'callback'            => 'georg_bridge_put_sermon',
-				'permission_callback' => 'georg_bridge_permission',
+				'permission_callback' => 'georg_bridge_permission_sermons',
 				'args'                => array_merge(
 					$key_arg,
 					array(
@@ -133,22 +141,119 @@ function georg_bridge_valid_key( $value ) {
 }
 
 /**
- * Permission check shared by every route.
+ * Error returned for every configuration problem, without detail.
  *
- * Requires an Application Password login (not a browser cookie) by a user who can edit
- * other users' posts and upload files. Sites can adjust this with the
- * `georg_bridge_permission` filter.
+ * @return WP_Error
+ */
+function georg_bridge_not_configured() {
+	return new WP_Error( 'georg_not_configured', __( 'georg-bridge is not configured.', 'georg-bridge' ), array( 'status' => 503 ) );
+}
+
+/**
+ * Signing keys from the GEORG_BRIDGE_KEYS constant (wp-config.php).
+ *
+ * @return array|null Key id => secret bytes, or null if missing or invalid.
+ */
+function georg_bridge_keys() {
+	return defined( 'GEORG_BRIDGE_KEYS' ) ? georg_bridge_sig_parse_keys( GEORG_BRIDGE_KEYS ) : null;
+}
+
+/**
+ * Records a nonce atomically; false if it was already used.
+ *
+ * @param string $key_id Key id.
+ * @param string $nonce  Nonce.
+ * @param int    $now    Unix time.
+ * @return bool
+ */
+function georg_bridge_record_nonce( $key_id, $nonce, $now ) {
+	global $wpdb;
+	$name = GEORG_BRIDGE_NONCE_PREFIX . hash( 'sha256', $key_id . ':' . $nonce );
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+	$rows = $wpdb->query( $wpdb->prepare( "INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'off')", $name, (string) $now ) );
+	return 1 === $rows;
+}
+
+/**
+ * Deletes nonces old enough that their timestamps would be rejected anyway.
+ *
+ * @param int $now Unix time.
+ */
+function georg_bridge_purge_nonces( $now ) {
+	global $wpdb;
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+	$wpdb->query(
+		$wpdb->prepare(
+			"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s AND CAST(option_value AS UNSIGNED) < %d LIMIT %d",
+			$wpdb->esc_like( GEORG_BRIDGE_NONCE_PREFIX ) . '%',
+			$now - 2 * GEORG_BRIDGE_SIG_WINDOW,
+			GEORG_BRIDGE_NONCE_PURGE_LIMIT
+		)
+	);
+}
+
+/**
+ * Authenticates a georg/v1 request by its HMAC signature and switches to the configured user.
+ *
+ * Only these routes call it, so the key never authenticates other WordPress endpoints.
  *
  * @param WP_REST_Request $request Request.
- * @return bool|WP_Error
+ * @return true|WP_Error
  */
-function georg_bridge_permission( $request ) {
-	$allowed = did_action( 'application_password_did_authenticate' ) > 0
-		&& current_user_can( 'edit_others_posts' )
-		&& current_user_can( 'upload_files' );
+function georg_bridge_authenticate( $request ) {
+	if ( ! is_ssl() && ! ( defined( 'GEORG_BRIDGE_ALLOW_HTTP' ) && GEORG_BRIDGE_ALLOW_HTTP ) ) {
+		return new WP_Error( 'georg_https_required', __( 'georg-bridge requires HTTPS.', 'georg-bridge' ), array( 'status' => 403 ) );
+	}
+	$keys = georg_bridge_keys();
+	if ( null === $keys ) {
+		return georg_bridge_not_configured();
+	}
+	$body   = (string) $request->get_body();
+	$length = isset( $_SERVER['CONTENT_LENGTH'] ) ? (int) $_SERVER['CONTENT_LENGTH'] : 0;
+	if ( '' === $body && $length > 0 ) {
+		// PHP discards bodies larger than post_max_size.
+		/* translators: %s: PHP post_max_size setting */
+		return new WP_Error( 'georg_too_large', sprintf( __( 'The request is larger than PHP post_max_size (%s).', 'georg-bridge' ), ini_get( 'post_max_size' ) ), array( 'status' => 413 ) );
+	}
+	$headers = array();
+	foreach ( GEORG_BRIDGE_SIGNED_HEADERS as $name ) {
+		$headers[ $name ] = $request->get_header( $name );
+	}
+	$now    = time();
+	$result = georg_bridge_sig_verify( $headers, $request->get_method(), $request->get_route(), $request->get_query_params(), $body, $keys, $now, 'georg_bridge_record_nonce' );
+	if ( ! $result['ok'] ) {
+		return new WP_Error( $result['code'], $result['message'], array( 'status' => $result['status'] ) );
+	}
+	georg_bridge_purge_nonces( $now );
+	$user = defined( 'GEORG_BRIDGE_USER' ) && is_string( GEORG_BRIDGE_USER ) ? get_user_by( 'login', GEORG_BRIDGE_USER ) : false;
+	if ( ! $user ) {
+		return georg_bridge_not_configured();
+	}
+	wp_set_current_user( $user->ID );
+	return true;
+}
+
+/**
+ * Authenticates the request, then checks the configured user's capabilities.
+ *
+ * @param WP_REST_Request $request      Request.
+ * @param string[]        $capabilities Capabilities the operation needs.
+ * @return true|WP_Error
+ */
+function georg_bridge_permission( $request, $capabilities ) {
+	$auth = georg_bridge_authenticate( $request );
+	if ( is_wp_error( $auth ) ) {
+		return $auth;
+	}
+	$allowed = true;
+	foreach ( $capabilities as $capability ) {
+		$allowed = $allowed && current_user_can( $capability );
+	}
 
 	/**
-	 * Filters whether the current user may use the Georg bridge.
+	 * Filters whether the configured user may perform this georg-bridge operation.
+	 *
+	 * Runs only after the request signature has been verified.
 	 *
 	 * @param bool            $allowed Default decision.
 	 * @param WP_REST_Request $request Request.
@@ -159,9 +264,29 @@ function georg_bridge_permission( $request ) {
 	}
 	return new WP_Error(
 		'georg_forbidden',
-		__( 'Georg bridge requires an application password for a user who can edit others\' posts and upload files.', 'georg-bridge' ),
-		array( 'status' => is_user_logged_in() ? 403 : 401 )
+		__( 'The georg-bridge user lacks the capabilities for this operation.', 'georg-bridge' ),
+		array( 'status' => 403 )
 	);
+}
+
+/**
+ * Permission for the sermon routes.
+ *
+ * @param WP_REST_Request $request Request.
+ * @return true|WP_Error
+ */
+function georg_bridge_permission_sermons( $request ) {
+	return georg_bridge_permission( $request, array( 'edit_others_posts' ) );
+}
+
+/**
+ * Permission for the audio upload route.
+ *
+ * @param WP_REST_Request $request Request.
+ * @return true|WP_Error
+ */
+function georg_bridge_permission_audio( $request ) {
+	return georg_bridge_permission( $request, array( 'edit_others_posts', 'upload_files' ) );
 }
 
 /**
@@ -276,33 +401,6 @@ function georg_bridge_filename( $name ) {
 }
 
 /**
- * Error for a missing or oversized upload, or null if the file arrived.
- *
- * PHP drops the whole body when it exceeds post_max_size, and drops the file when it exceeds
- * upload_max_filesize; both are reported as 413 so the limit can be raised.
- *
- * @param array $files Request file params.
- * @return WP_Error|null
- */
-function georg_bridge_upload_error( $files ) {
-	$length = isset( $_SERVER['CONTENT_LENGTH'] ) ? (int) $_SERVER['CONTENT_LENGTH'] : 0;
-	$limit  = wp_convert_hr_to_bytes( (string) ini_get( 'post_max_size' ) );
-	if ( empty( $files ) && $limit > 0 && $length > $limit ) {
-		/* translators: %s: PHP post_max_size setting */
-		return new WP_Error( 'georg_too_large', sprintf( __( 'The request is larger than PHP post_max_size (%s).', 'georg-bridge' ), ini_get( 'post_max_size' ) ), array( 'status' => 413 ) );
-	}
-	$error = empty( $files['file']['error'] ) ? UPLOAD_ERR_OK : (int) $files['file']['error'];
-	if ( UPLOAD_ERR_INI_SIZE === $error || UPLOAD_ERR_FORM_SIZE === $error ) {
-		/* translators: %s: PHP upload_max_filesize setting */
-		return new WP_Error( 'georg_too_large', sprintf( __( 'The file is larger than PHP upload_max_filesize (%s).', 'georg-bridge' ), ini_get( 'upload_max_filesize' ) ), array( 'status' => 413 ) );
-	}
-	if ( empty( $files['file'] ) || UPLOAD_ERR_OK !== $error || empty( $files['file']['tmp_name'] ) ) {
-		return new WP_Error( 'georg_no_file', __( 'Send the MP3 as the multipart field "file".', 'georg-bridge' ), array( 'status' => 400 ) );
-	}
-	return null;
-}
-
-/**
  * Whether a file is an MP3: WordPress' type check accepts any audio/* file whose name ends
  * in .mp3, so the format is also read with getID3.
  *
@@ -344,6 +442,9 @@ function georg_bridge_audio_response( $id, $created ) {
 /**
  * POST /georg/v1/audio: stores an MP3 under uploads/sermons/ as a media-library attachment.
  *
+ * The body is the raw MP3 (Content-Type: audio/mpeg), so its hash can be signed;
+ * publication_key, filename and title are query parameters.
+ *
  * Idempotent by publication key: the same key and content return the existing attachment;
  * the same key with new content stores a new file and points the attachment at it.
  *
@@ -351,17 +452,49 @@ function georg_bridge_audio_response( $id, $created ) {
  * @return WP_REST_Response|WP_Error
  */
 function georg_bridge_upload_audio( $request ) {
-	$files = $request->get_file_params();
-	$error = georg_bridge_upload_error( $files );
-	if ( $error ) {
-		return $error;
+	$type = $request->get_content_type();
+	if ( ! $type || 'audio/mpeg' !== $type['value'] ) {
+		return new WP_Error( 'georg_bad_content_type', __( 'Send the MP3 as the request body with Content-Type: audio/mpeg.', 'georg-bridge' ), array( 'status' => 415 ) );
 	}
-	$key = $request['publication_key'];
-	if ( ! georg_bridge_valid_key( $key ) ) {
-		return new WP_Error( 'rest_missing_callback_param', __( 'Missing parameter(s): publication_key', 'georg-bridge' ), array( 'status' => 400 ) );
+	$body = (string) $request->get_body();
+	if ( '' === $body ) {
+		return new WP_Error( 'georg_no_file', __( 'Send the MP3 as the request body.', 'georg-bridge' ), array( 'status' => 400 ) );
 	}
-	$tmp      = $files['file']['tmp_name'];
-	$filename = georg_bridge_filename( $request['filename'] ? $request['filename'] : $files['file']['name'] );
+	// PHP does not apply its upload limits to raw bodies, so apply WordPress's own.
+	if ( strlen( $body ) > wp_max_upload_size() ) {
+		return new WP_Error(
+			'georg_too_large',
+			/* translators: 1: maximum upload size, 2: upload_max_filesize, 3: post_max_size */
+			sprintf( __( 'The MP3 is larger than the maximum upload size (%1$s; PHP upload_max_filesize %2$s, post_max_size %3$s).', 'georg-bridge' ), size_format( wp_max_upload_size() ), ini_get( 'upload_max_filesize' ), ini_get( 'post_max_size' ) ),
+			array( 'status' => 413 )
+		);
+	}
+	require_once ABSPATH . 'wp-admin/includes/file.php';
+	$tmp = wp_tempnam( 'georg-audio.mp3' );
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+	if ( ! $tmp || strlen( $body ) !== file_put_contents( $tmp, $body ) ) {
+		return new WP_Error( 'georg_temp_failed', __( 'Could not store the uploaded file.', 'georg-bridge' ), array( 'status' => 500 ) );
+	}
+	unset( $body );
+	try {
+		return georg_bridge_store_audio( $request, $tmp );
+	} finally {
+		if ( file_exists( $tmp ) ) {
+			wp_delete_file( $tmp );
+		}
+	}
+}
+
+/**
+ * Stores an MP3 written to a temporary file for georg_bridge_upload_audio().
+ *
+ * @param WP_REST_Request $request Request.
+ * @param string          $tmp     Temporary file holding the body.
+ * @return WP_REST_Response|WP_Error
+ */
+function georg_bridge_store_audio( $request, $tmp ) {
+	$key      = $request['publication_key'];
+	$filename = georg_bridge_filename( $request['filename'] ? $request['filename'] : 'sermon.mp3' );
 	if ( ! georg_bridge_is_mp3( $tmp, $filename ) ) {
 		return new WP_Error( 'georg_not_mp3', __( 'The upload is not an MP3 file.', 'georg-bridge' ), array( 'status' => 400 ) );
 	}
@@ -401,8 +534,8 @@ function georg_bridge_upload_audio( $request ) {
 			$path = trailingslashit( $dir['dir'] ) . wp_unique_filename( $dir['dir'], $filename );
 		}
 		if ( ! file_exists( $path ) ) {
-			// Moving the PHP upload directly keeps the file under uploads/sermons/ rather than a dated folder.
-			if ( ! @move_uploaded_file( $tmp, $path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			// Moving the file directly keeps it under uploads/sermons/ rather than a dated folder.
+			if ( ! @rename( $tmp, $path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.rename_rename
 				return new WP_Error( 'georg_move_failed', __( 'Could not store the uploaded file.', 'georg-bridge' ), array( 'status' => 500 ) );
 			}
 			$stat = stat( dirname( $path ) );

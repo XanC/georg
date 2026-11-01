@@ -229,10 +229,10 @@ Verified against the Church Content 2.7 plugin source and the live site (WordPre
   | audio | file `wp-content/uploads/sermons/stpaul_sermon_<date>_<slug>.mp3`, a media-library attachment whose `_wp_attached_file` = `sermons/<file>`, and `_ctc_sermon_audio` = its public URL | — |
 
   These mappings are per-site configuration of the WordPress output, not hard-coded, because other ChurchThemes sites use series and book differently.
-- **Integration mechanism.** The current scripts log in to wp-admin and scrape forms, plus write directly to MySQL. Georg will run off-server, so it uses the REST API (application password for the existing `scripts` user) plus a tiny companion plugin `georg-bridge` (AGPL, kept in this repo) that:
+- **Integration mechanism.** The current scripts log in to wp-admin and scrape forms, plus write directly to MySQL. Georg will run off-server, so it uses a tiny companion plugin `georg-bridge` (AGPL, kept in this repo) whose REST routes accept only HMAC-SHA256-signed requests (a per-site key in `wp-config.php`; Wordfence disables application passwords on the live site), acting as a WordPress user configured on the site (the existing `scripts` user). Protocol, setup and rotation: `docs/wordpress.md`. The plugin:
   1. `POST /georg/v1/audio` uploads sermon audio into `uploads/sermons/` as a proper attachment, filling `_wp_attachment_metadata` (mime type, size, duration). This keeps `podcast.pl` and the hourly R2 sync working unchanged.
-  2. `GET`/`PUT /georg/v1/sermons/<publication_key>` find, create, or update the `ctc_sermon` post carrying `_georg_publication_key`, set its terms, and write `_ctc_sermon_audio` server-side (instead of exposing the protected meta to the generic REST API). Access requires an application password for a user with `edit_others_posts` and `upload_files` (filterable).
-  If installing a plugin is unwelcome, the same PHP can go in the already-installed Code Snippets plugin. Wordfence's settings must allow application passwords; to be checked.
+  2. `GET`/`PUT /georg/v1/sermons/<publication_key>` find, create, or update the `ctc_sermon` post carrying `_georg_publication_key`, set its terms, and write `_ctc_sermon_audio` server-side (instead of exposing the protected meta to the generic REST API). The configured user needs `edit_others_posts` and `upload_files` (filterable).
+  If installing a plugin is unwelcome, the same PHP can go in the already-installed Code Snippets plugin.
 
 ### 5.5 Podcast feed and audio hosting
 
@@ -340,7 +340,7 @@ Georg typically handles one service per week, so the instance is **stopped most 
 | D4 | Transcription provider | Local Whisper via faster-whisper (CPU, int8) by default, to drop the lemonfox subscription; OpenAI-compatible `Transcriber` (lemonfox.ai, OpenAI, self-hosted servers) kept as an option | No |
 | D5 | Audio classifier dependency | inaSpeechSegmenter (confirmed from POC), whole service once, as an optional extra; drop the unused SVM | No |
 | D6 | Media hosting for published audio | Unchanged: `uploads/sermons/` on the web server, synced to R2 by the existing cron | No |
-| D7 | WordPress integration mechanism | REST + application password + `georg-bridge` plugin (meta + attachment endpoint), §5.4 | Confirm plugin OK |
+| D7 | WordPress integration mechanism | `georg-bridge` plugin REST routes (meta + attachment endpoint) with HMAC-signed requests, §5.4 | Confirm plugin OK |
 | D8 | Source-media retention | Keep audio forever; keep source video N days (configurable) — video features later can re-fetch | Light |
 | D9 | Auth | Local users, argon2, session cookies; 2 roles | Light (Q5) |
 | D10 | Artifact store on AWS | Local EBS + S3 backup now; S3Store in a later phase | No |

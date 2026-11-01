@@ -4,26 +4,37 @@
 `publish` uploads the sermon audio to `POST /georg/v1/audio` (stored as a media-library
 attachment under `uploads/sermons/`), then creates or updates the sermon post with
 `PUT /georg/v1/sermons/<publication_key>`. Both calls are idempotent by publication key,
-so a retried or repeated publication updates the same attachment and post. The plugin
+so a retried or repeated publication updates the same attachment and post. Every request
+is signed with HMAC-SHA256 (see `wordpress_signing` and docs/wordpress.md). The plugin
 lives in `wordpress/georg-bridge/` in this repository.
 """
 
 import html
+import json
 import re
 import string
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Literal
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from georg.core.config import OutputConfig, resolve_secret
 from georg.core.errors import ConfigError, ModuleError
 from georg.core.types import ArtifactRef, ExternalRef, PublicationRequest, SermonMetadata
 from georg.llm.http import request_json
+from georg.modules.outputs.wordpress_signing import (
+    HEADER_CONTENT_SHA256,
+    KEY_ID_PATTERN,
+    FileBody,
+    GeorgSigner,
+    decode_secret,
+    file_sha256,
+)
 
 PUBLICATION_KEY_PATTERN = re.compile(r"^[A-Za-z0-9:._-]{1,190}$")
 FILENAME_FIELDS = frozenset({"date", "slug"})
@@ -42,9 +53,12 @@ class WordPressOptions(BaseModel):
     base_url: str
     """Site root, e.g. "https://www.example.org"."""
     rest_prefix: str = "/wp-json"
-    username: str
-    app_password: str
-    """WordPress Application Password, normally an "env:NAME" reference."""
+    key_id: str = Field(pattern=KEY_ID_PATTERN.pattern)
+    """Id of the georg-bridge signing key, as listed in the site's GEORG_BRIDGE_KEYS."""
+    key: str
+    """The base64url signing key, normally an "env:NAME" reference."""
+    allow_insecure_http: bool = False
+    """Allow an http:// base_url (local testing only)."""
     status: Literal["draft", "private", "publish"] = "draft"
     rendition: str = "sermon"
     filename: str = "sermon_{date}_{slug}.mp3"
@@ -71,6 +85,13 @@ class WordPressOptions(BaseModel):
         if "/" in value or not value.lower().endswith(".mp3"):
             raise ValueError("filename must be a bare name ending in .mp3")
         return value
+
+    @model_validator(mode="after")
+    def _https(self) -> "WordPressOptions":
+        scheme = urlsplit(self.base_url).scheme
+        if scheme != "https" and not (scheme == "http" and self.allow_insecure_http):
+            raise ValueError("base_url must be https:// (allow_insecure_http is for local tests)")
+        return self
 
     @field_validator("service_time")
     @classmethod
@@ -130,19 +151,30 @@ class WordPressOutput:
         self.name = config.name
         self.renditions = frozenset({opts.rendition})
         self.wants_transcript = config.transcript
-        self._api = opts.base_url.rstrip("/") + "/" + opts.rest_prefix.strip("/") + "/georg/v1"
-        self._auth = httpx.BasicAuth(opts.username, resolve_secret(opts.app_password))
+        rest_path = urlsplit(opts.base_url).path.rstrip("/") + "/" + opts.rest_prefix.strip("/")
+        self._rest = opts.base_url.rstrip("/") + "/" + opts.rest_prefix.strip("/")
+        try:
+            secret = decode_secret(resolve_secret(opts.key))
+        except ValueError as exc:
+            raise ConfigError(f"output {config.name!r}: {exc}") from None
+        self._auth = GeorgSigner(opts.key_id, secret, rest_path=rest_path)
         self._client = http_client or httpx.Client(timeout=opts.timeout_s)
         self._sleep = sleep
 
     def find_existing(self, publication_key: str) -> ExternalRef | None:
-        data = self._call("GET", self._sermon_url(publication_key), none_on=frozenset({404}))
+        data = self._call("GET", self._sermon_route(publication_key), none_on=frozenset({404}))
         return None if data is None else self._ref(data)
 
     def publish(self, request: PublicationRequest) -> ExternalRef:
-        url = self._sermon_url(request.publication_key)
+        route = self._sermon_route(request.publication_key)
         audio = self._upload(request, self._artifact(request))
-        data = self._call("PUT", url, json=self.sermon_body(request, audio_id=audio))
+        body = self.sermon_body(request, audio_id=audio)
+        data = self._call(
+            "PUT",
+            route,
+            content=json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode(),
+            headers={"Content-Type": "application/json"},
+        )
         return self._ref(data)
 
     def sermon_body(self, request: PublicationRequest, *, audio_id: int | None) -> dict[str, Any]:
@@ -186,17 +218,21 @@ class WordPressOutput:
         filename = self.options.filename.format(
             date=request.service_date.isoformat(), slug=slugify(self._title(request))
         )
-        with artifact.path.open("rb") as audio:
-            data = self._call(
-                "POST",
-                f"{self._api}/audio",
-                data={
-                    "publication_key": request.publication_key,
-                    "filename": filename,
-                    "title": self._title(request),
-                },
-                files={"file": (filename, audio, "audio/mpeg")},
-            )
+        data = self._call(
+            "POST",
+            "/georg/v1/audio",
+            params={
+                "publication_key": request.publication_key,
+                "filename": filename,
+                "title": self._title(request),
+            },
+            content=FileBody(artifact.path),
+            headers={
+                "Content-Type": "audio/mpeg",
+                "Content-Length": str(artifact.path.stat().st_size),
+                HEADER_CONTENT_SHA256: file_sha256(artifact.path),
+            },
+        )
         audio_id = data.get("id")
         if isinstance(audio_id, bool) or not isinstance(audio_id, int):
             raise ModuleError(f"{self.name}: audio upload response has no attachment id")
@@ -210,21 +246,23 @@ class WordPressOutput:
                 f"output {self.name!r}: request has no {self.options.rendition!r} rendition"
             ) from None
 
-    def _sermon_url(self, publication_key: str) -> str:
+    def _sermon_route(self, publication_key: str) -> str:
         if not PUBLICATION_KEY_PATTERN.match(publication_key):
             raise ModuleError(f"output {self.name!r}: unsupported publication key")
-        return f"{self._api}/sermons/{publication_key}"
+        return f"/georg/v1/sermons/{publication_key}"
 
-    def _call(self, method: str, url: str, **kwargs: Any) -> Any:
+    def _call(
+        self, method: str, route: str, *, headers: dict[str, str] | None = None, **kwargs: Any
+    ) -> Any:
         data = request_json(
             self._client,
             method,
-            url,
+            self._rest + route,
             provider=f"wordpress {self.name}",
             attempts=self.options.attempts,
             sleep=self._sleep,
             auth=self._auth,
-            headers={"Accept": "application/json"},
+            headers={"Accept": "application/json", **(headers or {})},
             **kwargs,
         )
         if data is not None and not isinstance(data, dict):

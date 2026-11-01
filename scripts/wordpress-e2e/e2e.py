@@ -10,6 +10,7 @@ import html
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,7 @@ from georg.core.config import OutputConfig
 from georg.core.errors import ModuleError
 from georg.core.types import ArtifactRef, PublicationRequest, SermonMetadata
 from georg.modules.outputs.wordpress import WordPressOutput
+from georg.modules.outputs.wordpress_signing import decode_secret, sign
 
 HERE = Path(__file__).resolve().parent
 RUN = str(int(time.time()))
@@ -48,6 +50,10 @@ def env() -> dict[str, str]:
 ENV = env()
 BASE = ENV["GEORG_WP_URL"]
 API = f"{BASE}/wp-json/georg/v1"
+KEY_ID = ENV["GEORG_WP_KEY_ID"]
+KEY_TEXT = ENV["GEORG_WP_KEY"]
+SECRET = decode_secret(KEY_TEXT)
+KEY2_TEXT = ENV["GEORG_WP_KEY2"]
 
 
 def compose(*args: str, stdin: str | None = None) -> str:
@@ -64,6 +70,106 @@ def compose(*args: str, stdin: str | None = None) -> str:
 def php(code: str) -> Any:
     """Evaluate PHP in WordPress (via wp-cli) and decode what it echoes as JSON."""
     return json.loads(compose("run", "--rm", "-T", "cli", "wp", "eval", code))
+
+
+def wp_config(name: str, raw_php: str) -> None:
+    compose("run", "--rm", "-T", "cli", "wp", "config", "set", name, raw_php, "--raw",
+            "--type=constant")  # fmt: skip
+
+
+def wp_keys(**keys: str) -> None:
+    entries = ", ".join(f"'{key_id.replace('_', '-')}' => '{v}'" for key_id, v in keys.items())
+    wp_config("GEORG_BRIDGE_KEYS", f"array( {entries} )")
+
+
+def restore_config() -> None:
+    wp_keys(e2e_1=KEY_TEXT)
+    wp_config("GEORG_BRIDGE_USER", "'georg'")
+    wp_config("GEORG_BRIDGE_ALLOW_HTTP", "true")
+
+
+def signed_headers(
+    method: str,
+    route: str,
+    query: dict[str, str],
+    body: bytes,
+    *,
+    key_id: str = KEY_ID,
+    secret: bytes = SECRET,
+    now: int | None = None,
+) -> dict[str, str]:
+    return sign(
+        method,
+        route,
+        query,
+        hashlib.sha256(body).hexdigest(),
+        key_id,
+        secret,
+        now=int(time.time()) if now is None else now,
+        nonce=secrets.token_hex(16),
+    )
+
+
+def send(
+    method: str,
+    route: str,
+    headers: dict[str, str],
+    *,
+    query: dict[str, str] | None = None,
+    body: bytes = b"",
+    **kwargs: Any,
+) -> httpx.Response:
+    return httpx.request(
+        method,
+        f"{BASE}/wp-json{route}",
+        params=query or {},
+        content=body,
+        headers=headers,
+        timeout=120,
+        **kwargs,
+    )
+
+
+def bridge(
+    method: str,
+    route: str,
+    *,
+    query: dict[str, str] | None = None,
+    body: bytes = b"",
+    content_type: str | None = None,
+    **sign_kwargs: Any,
+) -> httpx.Response:
+    headers = signed_headers(method, route, query or {}, body, **sign_kwargs)
+    if content_type:
+        headers["Content-Type"] = content_type
+    return send(method, route, headers, query=query, body=body)
+
+
+def code(r: httpx.Response) -> tuple[int, str]:
+    try:
+        return r.status_code, str(r.json().get("code", ""))
+    except ValueError:
+        return r.status_code, r.text[:200]
+
+
+class LoseFirstResponse(httpx.BaseTransport):
+    """Delivers each request, but drops the response the first time each route is called."""
+
+    def __init__(self) -> None:
+        self.inner = httpx.HTTPTransport()
+        self.seen: set[tuple[str, str]] = set()
+        self.nonces: list[str] = []
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        self.nonces.append(request.headers["x-georg-nonce"])
+        response = self.inner.handle_request(request)
+        route = (request.method, request.url.path)
+        if route in self.seen:
+            return response
+        self.seen.add(route)
+        response.read()
+        response.close()
+        raise httpx.ReadTimeout("simulated lost response", request=request)
 
 
 def debug_log() -> str:
@@ -108,9 +214,9 @@ def artifact(path: Path, seconds: float) -> ArtifactRef:
 
 
 def output(
-    status: str = "draft", user: str = "georg", password_var: str = "EDITOR"
+    status: str = "draft", *, attempts: int = 1, http_client: httpx.Client | None = None
 ) -> WordPressOutput:
-    os.environ[f"GEORG_WP_{password_var}_PASSWORD"] = ENV[f"GEORG_WP_{password_var}_PASSWORD"]
+    os.environ["GEORG_WP_KEY"] = KEY_TEXT
     return WordPressOutput(
         OutputConfig(
             name="website",
@@ -119,15 +225,18 @@ def output(
             transcript=True,
             options={
                 "base_url": BASE,
-                "username": user,
-                "app_password": f"env:GEORG_WP_{password_var}_PASSWORD",
+                "key_id": KEY_ID,
+                "key": "env:GEORG_WP_KEY",
+                "allow_insecure_http": True,
                 "status": status,
                 "timezone": "America/Chicago",
                 "service_time": "10:30",
                 "content_prefix": "[Machine transcription]",
-                "attempts": 1,
+                "attempts": attempts,
             },
-        )
+        ),
+        http_client=http_client,
+        sleep=lambda _: None,
     )
 
 
@@ -260,22 +369,188 @@ def check_sermon(
 
 
 def bridge_post_audio(
-    user: str,
-    password: str,
-    *,
-    key: str,
-    path: Path,
-    filename: str,
-    content_type: str = "audio/mpeg",
+    *, key: str, path: Path, filename: str, content_type: str = "audio/mpeg"
 ) -> httpx.Response:
-    with path.open("rb") as fh:
-        return httpx.post(
-            f"{API}/audio",
-            auth=(user, password),
-            data={"publication_key": key, "filename": filename},
-            files={"file": (filename, fh, content_type)},
-            timeout=120,
+    return bridge(
+        "POST",
+        "/georg/v1/audio",
+        query={"publication_key": key, "filename": filename},
+        body=path.read_bytes(),
+        content_type=content_type,
+    )
+
+
+def nonce_rows() -> int:
+    return int(
+        php(
+            'global $wpdb; echo wp_json_encode((int) $wpdb->get_var("SELECT COUNT(*) FROM '
+            "{$wpdb->options} WHERE option_name LIKE '\\\\_georg\\\\_nonce\\\\_%'\"));"
         )
+    )
+
+
+def check_auth(key: str, tmp: Path) -> None:
+    route = f"/georg/v1/sermons/{key}"
+    ok = bridge("GET", route)
+    check(ok.status_code == 200, "signed GET is 200", code(ok))
+
+    headers = signed_headers("GET", route, {}, b"")
+    first, again = send("GET", route, headers), send("GET", route, headers)
+    check(first.status_code == 200, "first use of a nonce is accepted", code(first))
+    check(code(again) == (401, "georg_replayed"), "replayed request is 401", code(again))
+
+    for name, skew in (("expired", -301), ("future", 301)):
+        r = bridge("GET", route, now=int(time.time()) + skew)
+        check(code(r) == (401, "georg_expired"), f"{name} timestamp is 401", code(r))
+    r = bridge("GET", route, now=int(time.time()) - 240)
+    check(r.status_code == 200, "timestamp inside the window is accepted", code(r))
+
+    before = sermon_state(int(ok.json()["id"]))
+    body = json.dumps({"title": "Tampered"}).encode()
+    headers = signed_headers("PUT", route, {}, json.dumps({"title": "Signed"}).encode())
+    headers["Content-Type"] = "application/json"
+    r = send("PUT", route, headers, body=body)
+    check(code(r) == (401, "georg_invalid_signature"), "tampered body is 401", code(r))
+    headers = signed_headers("PUT", route, {}, body)
+    headers["Content-Type"] = "application/json"
+    headers["X-Georg-Content-SHA256"] = hashlib.sha256(b"x").hexdigest()
+    r = send("PUT", route, headers, body=body)
+    check(code(r) == (401, "georg_invalid_signature"), "re-hashed tampered body is 401", code(r))
+    check(
+        sermon_state(int(ok.json()["id"]))["title"] == before["title"],
+        "tampered PUT changed nothing",
+    )
+
+    query = {"publication_key": f"georg:e2e{RUN}:tamper:website", "filename": "a.mp3"}
+    headers = signed_headers("POST", "/georg/v1/audio", query, b"ID3")
+    r = send("POST", "/georg/v1/audio", headers, query={**query, "filename": "b.mp3"}, body=b"ID3")
+    check(code(r) == (401, "georg_invalid_signature"), "tampered query is 401", code(r))
+    headers = signed_headers("GET", route, {}, b"")
+    r = send("DELETE", route, headers)
+    check(r.status_code in (401, 404), "tampered method is rejected", code(r))
+    r = send("GET", f"/georg/v1/sermons/georg:e2e{RUN}:other:website", headers)
+    check(code(r) == (401, "georg_invalid_signature"), "tampered path is 401", code(r))
+
+    headers = signed_headers("GET", route, {}, b"")
+    sig = headers["X-Georg-Signature"]
+    headers["X-Georg-Signature"] = sig[:-1] + ("0" if sig[-1] != "0" else "1")
+    r = send("GET", route, headers)
+    check(code(r) == (401, "georg_invalid_signature"), "bad signature is 401", code(r))
+    r = bridge("GET", route, secret=decode_secret(KEY2_TEXT))
+    check(code(r) == (401, "georg_invalid_signature"), "wrong key is 401", code(r))
+    r = bridge("GET", route, key_id="nope")
+    check(code(r) == (401, "georg_invalid_signature"), "unknown key id is 401", code(r))
+
+    r = httpx.get(f"{API}/sermons/{key}")
+    check(code(r)[0] == 401, "unsigned GET is 401", code(r))
+    for name in signed_headers("GET", route, {}, b""):
+        headers = signed_headers("GET", route, {}, b"")
+        del headers[name]
+        r = send("GET", route, headers)
+        check(code(r)[0] == 401, f"missing {name} is 401", code(r))
+    check(sig not in r.text and KEY_TEXT not in r.text, "errors echo no signature or key")
+
+    r = httpx.get(f"{API}/sermons/{key}", auth=("georg", ENV["GEORG_WP_EDITOR_PASSWORD"]))
+    check(code(r)[0] == 401, "application password is refused on georg routes", code(r))
+    with httpx.Client() as c:
+        c.post(
+            f"{BASE}/wp-login.php",
+            data={"log": "admin", "pwd": "admin"},
+            cookies={"wordpress_test_cookie": "WP Cookie check"},
+        )
+        wp_nonce = c.get(f"{BASE}/wp-admin/admin-ajax.php?action=rest-nonce").text
+        r = c.get(f"{API}/sermons/{key}", headers={"X-WP-Nonce": wp_nonce})
+        check(code(r)[0] == 401, "cookie-authenticated admin is refused on georg routes", code(r))
+    r = bridge("GET", "/wp/v2/users/me")
+    check(r.status_code == 401, "signed headers do not authenticate /wp/v2/users/me", code(r))
+    r = bridge("GET", "/wp/v2/posts", query={"status": "draft"})
+    check(r.status_code in (400, 401), "signed headers do not unlock draft posts", code(r))
+
+    php(
+        "global $wpdb; $wpdb->insert($wpdb->options, array('option_name' => "
+        "'_georg_nonce_e2e_stale', 'option_value' => '1', 'autoload' => 'off'));"
+        " echo wp_json_encode(true);"
+    )
+    bridge("GET", route)
+    stale = php("echo wp_json_encode(get_option('_georg_nonce_e2e_stale', null));")
+    check(stale is None, "stale nonces are purged", stale)
+    check(nonce_rows() > 0, "nonces are recorded")
+
+    try:
+        wp_keys(e2e_1=KEY_TEXT, e2e_2=KEY2_TEXT)
+        r1, r2 = (
+            bridge("GET", route),
+            bridge("GET", route, key_id="e2e-2", secret=decode_secret(KEY2_TEXT)),
+        )
+        check(
+            r1.status_code == r2.status_code == 200,
+            "rotation: both keys accepted",
+            (code(r1), code(r2)),
+        )
+        wp_keys(e2e_2=KEY2_TEXT)
+        r1, r2 = (
+            bridge("GET", route),
+            bridge("GET", route, key_id="e2e-2", secret=decode_secret(KEY2_TEXT)),
+        )
+        check(
+            code(r1) == (401, "georg_invalid_signature"), "rotation: removed key refused", code(r1)
+        )
+        check(r2.status_code == 200, "rotation: new key accepted", code(r2))
+
+        wp_config("GEORG_BRIDGE_KEYS", "array( 'e2e-1' => 'c2hvcnQ' )")
+        r = bridge("GET", route)
+        check(
+            code(r) == (503, "georg_not_configured") and "c2hvcnQ" not in r.text,
+            "short secret makes the bridge unconfigured (503)",
+            code(r),
+        )
+        restore_config()
+        wp_config("GEORG_BRIDGE_ALLOW_HTTP", "false")
+        r = bridge("GET", route)
+        check(code(r) == (403, "georg_https_required"), "plain http is refused", code(r))
+        restore_config()
+
+        for user in ("author1", "subscriber1"):
+            wp_config("GEORG_BRIDGE_USER", f"'{user}'")
+            try:
+                output().publish(
+                    request(
+                        f"georg:e2e{RUN}:{user}:website",
+                        artifact(mp3(tmp / "u.mp3", 2), 2),
+                        "X",
+                        "x",
+                    )
+                )
+                check(False, f"configured {user} rejected")
+            except ModuleError as exc:
+                check(
+                    "HTTP 403" in str(exc) and not exc.retryable, f"configured {user} is 403", exc
+                )
+            r = bridge("GET", route)
+            check(code(r) == (403, "georg_forbidden"), f"configured {user} GET is 403", code(r))
+        wp_config("GEORG_BRIDGE_USER", "'no-such-user'")
+        r = bridge("GET", route)
+        check(code(r) == (503, "georg_not_configured"), "unknown configured user is 503", code(r))
+    finally:
+        restore_config()
+    r = bridge("GET", route)
+    check(r.status_code == 200, "config restored", code(r))
+
+
+def check_lost_responses(tmp: Path) -> None:
+    key = f"georg:e2e{RUN}:retry:website"
+    transport = LoseFirstResponse()
+    with httpx.Client(transport=transport, timeout=120) as client:
+        audio = artifact(mp3(tmp / "retry.mp3", 5), 5)
+        ref = output(attempts=2, http_client=client).publish(request(key, audio, "Retry", "Once."))
+    check(len(transport.nonces) == 4, "each lost response was retried", transport.nonces)
+    check(len(set(transport.nonces)) == 4, "every retry is re-signed with a fresh nonce")
+    check(
+        count_with_key(key) == {"sermons": 1, "attachments": 1},
+        "retries after lost responses create no duplicates",
+        count_with_key(key),
+    )
+    check(sermon_state(int(ref.external_id))["att"] is not None, "retried sermon has its audio")
 
 
 def post_ids(post_type: str) -> list[int]:
@@ -327,7 +602,6 @@ def main() -> int:
         compose("run", "--rm", "-T", "cli", "wp", "plugin", action, "georg-bridge")
     log = debug_log()
     check(log.strip() == "", "plugin activation logs nothing", log[-2000:])
-    editor_pw = ENV["GEORG_WP_EDITOR_PASSWORD"]
     key = f"georg:e2e{RUN}:sermon-1:website"
 
     # First publication: draft sermon with audio.
@@ -423,34 +697,9 @@ def main() -> int:
         sermon_state(post_id)["status"] == "private", "explicit private status is applied on update"
     )
 
-    # Users without edit_others_posts (author) or anything (subscriber) are rejected.
-    for user, var in (("author1", "AUTHOR"), ("subscriber1", "SUBSCRIBER")):
-        try:
-            output(user=user, password_var=var).publish(
-                request(f"georg:e2e{RUN}:{user}:website", audio, "X", "x")
-            )
-            check(False, f"{user} rejected")
-        except ModuleError as exc:
-            check("HTTP 403" in str(exc) and not exc.retryable, f"{user} rejected with 403", exc)
-        r = httpx.get(f"{API}/sermons/{key}", auth=(user, ENV[f"GEORG_WP_{var}_PASSWORD"]))
-        check(r.status_code == 403, f"{user} GET sermon is 403", r.status_code)
-    r = httpx.get(f"{API}/sermons/{key}")
-    check(r.status_code == 401, "anonymous GET sermon is 401", r.status_code)
-    r = httpx.get(f"{API}/sermons/{key}", auth=("georg", "wrong pass word abcd efgh ijkl"))
-    check(r.status_code == 401, "bad application password is 401", r.status_code)
-    with httpx.Client() as c:
-        c.post(
-            f"{BASE}/wp-login.php",
-            data={"log": "admin", "pwd": "admin"},
-            cookies={"wordpress_test_cookie": "WP Cookie check"},
-        )
-        nonce = c.get(f"{BASE}/wp-admin/admin-ajax.php?action=rest-nonce").text
-        r = c.get(f"{API}/sermons/{key}", headers={"X-WP-Nonce": nonce})
-        check(
-            r.status_code == 403,
-            "cookie-authenticated admin is 403 (application password required)",
-            r.status_code,
-        )
+    # Only valid, fresh, untampered signatures for the configured user are accepted.
+    check_auth(key, tmp)
+    check_lost_responses(tmp)
 
     # Non-MP3 uploads are rejected.
     (tmp / "evil.php").write_text("<?php echo 'pwned';")
@@ -490,10 +739,22 @@ def main() -> int:
         ("WAV as .mp3", tmp / "tone.wav", "tone.mp3"),
         ("Ogg as .mp3", tmp / "tone.ogg", "tone.mp3"),
     ):
-        r = bridge_post_audio(
-            "georg", editor_pw, key=f"georg:e2e{RUN}:bad:website", path=path, filename=upload_as
-        )
+        r = bridge_post_audio(key=f"georg:e2e{RUN}:bad:website", path=path, filename=upload_as)
         check(r.status_code == 400, f"{name} rejected", (r.status_code, r.text[:200]))
+    r = bridge_post_audio(
+        key=f"georg:e2e{RUN}:bad:website",
+        path=audio.path,
+        filename="a.mp3",
+        content_type="audio/wav",
+    )
+    check(r.status_code == 415, "non-audio/mpeg content type is 415", code(r))
+    r = bridge(
+        "POST",
+        "/georg/v1/audio",
+        query={"publication_key": f"georg:e2e{RUN}:bad:website"},
+        content_type="audio/mpeg",
+    )
+    check(r.status_code == 400, "empty audio body is 400", code(r))
     check(
         count_with_key(f"georg:e2e{RUN}:bad:website")["attachments"] == 0,
         "rejected uploads leave no attachment",
@@ -509,13 +770,7 @@ def main() -> int:
             ".htaccess",
         )
     ):
-        r = bridge_post_audio(
-            "georg",
-            editor_pw,
-            key=f"georg:e2e{RUN}:trav{i}:website",
-            path=audio.path,
-            filename=evil,
-        )
+        r = bridge_post_audio(key=f"georg:e2e{RUN}:trav{i}:website", path=audio.path, filename=evil)
         body = r.json()
         stored = str(body.get("file", ""))
         check(
@@ -533,18 +788,14 @@ def main() -> int:
 
     # Oversized uploads get a clear error rather than a confusing one.
     big = mp3(tmp / "big.mp3", 240, bitrate="320k")  # ~9.6 MB > upload_max_filesize 8M
-    r = bridge_post_audio(
-        "georg", editor_pw, key=f"georg:e2e{RUN}:big:website", path=big, filename="big.mp3"
-    )
+    r = bridge_post_audio(key=f"georg:e2e{RUN}:big:website", path=big, filename="big.mp3")
     check(
         r.status_code == 413 and "upload_max_filesize" in r.text,
         "upload_max_filesize exceeded is 413",
         (r.status_code, r.text[:300]),
     )
     huge = mp3(tmp / "huge.mp3", 340, bitrate="320k")  # ~13.6 MB > post_max_size 12M
-    r = bridge_post_audio(
-        "georg", editor_pw, key=f"georg:e2e{RUN}:huge:website", path=huge, filename="huge.mp3"
-    )
+    r = bridge_post_audio(key=f"georg:e2e{RUN}:huge:website", path=huge, filename="huge.mp3")
     check(
         r.status_code == 413 and "post_max_size" in r.text,
         "post_max_size exceeded is 413",
