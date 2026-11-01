@@ -10,3 +10,4 @@ build/
 .env
 /data/
 *.sqlite3
+/scripts/wordpress-e2e/.env.e2e

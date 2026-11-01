@@ -4,7 +4,7 @@
  * Plugin Name:       Georg Bridge
  * Plugin URI:        https://github.com/XanC/georg
  * Description:       REST endpoints that let Georg upload sermon audio and create or update Church Content sermons.
- * Version:           0.1.0
+ * Version:           0.1.1
  * Requires at least: 5.6
  * Requires PHP:      7.4
  * License:           AGPL-3.0-only
@@ -48,18 +48,20 @@ function georg_bridge_register_routes() {
 			'methods'             => 'POST',
 			'callback'            => 'georg_bridge_upload_audio',
 			'permission_callback' => 'georg_bridge_permission',
-			'args'                => array_merge(
-				$key_arg,
-				array(
-					'filename' => array(
-						'type'     => 'string',
-						'required' => false,
-					),
-					'title'    => array(
-						'type'     => 'string',
-						'required' => false,
-					),
-				)
+			'args'                => array(
+				'publication_key' => array(
+					'type'              => 'string',
+					'required'          => false,
+					'validate_callback' => 'georg_bridge_valid_key',
+				),
+				'filename'        => array(
+					'type'     => 'string',
+					'required' => false,
+				),
+				'title'           => array(
+					'type'     => 'string',
+					'required' => false,
+				),
 			),
 		)
 	);
@@ -232,6 +234,33 @@ function georg_bridge_upload_dir() {
 }
 
 /**
+ * Whether another attachment already uses uploads/sermons/<filename>.
+ *
+ * Sharing a file would make the audio URL ambiguous and let deleting one attachment remove
+ * the other's file.
+ *
+ * @param string $filename File name under the sermons directory.
+ * @param int    $except   Attachment allowed to use it.
+ * @return bool
+ */
+function georg_bridge_file_in_use( $filename, $except ) {
+	$ids = get_posts(
+		array(
+			'post_type'        => 'attachment',
+			'post_status'      => 'any',
+			'meta_key'         => '_wp_attached_file', // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key
+			'meta_value'       => GEORG_BRIDGE_UPLOAD_SUBDIR . '/' . $filename, // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_value
+			'post__not_in'     => array( (int) $except ),
+			'fields'           => 'ids',
+			'posts_per_page'   => 1,
+			'suppress_filters' => true,
+			'no_found_rows'    => true,
+		)
+	);
+	return ! empty( $ids );
+}
+
+/**
  * Sanitized .mp3 file name.
  *
  * @param string $name Requested name.
@@ -244,6 +273,51 @@ function georg_bridge_filename( $name ) {
 		$name = 'sermon';
 	}
 	return $name . '.mp3';
+}
+
+/**
+ * Error for a missing or oversized upload, or null if the file arrived.
+ *
+ * PHP drops the whole body when it exceeds post_max_size, and drops the file when it exceeds
+ * upload_max_filesize; both are reported as 413 so the limit can be raised.
+ *
+ * @param array $files Request file params.
+ * @return WP_Error|null
+ */
+function georg_bridge_upload_error( $files ) {
+	$length = isset( $_SERVER['CONTENT_LENGTH'] ) ? (int) $_SERVER['CONTENT_LENGTH'] : 0;
+	$limit  = wp_convert_hr_to_bytes( (string) ini_get( 'post_max_size' ) );
+	if ( empty( $files ) && $limit > 0 && $length > $limit ) {
+		/* translators: %s: PHP post_max_size setting */
+		return new WP_Error( 'georg_too_large', sprintf( __( 'The request is larger than PHP post_max_size (%s).', 'georg-bridge' ), ini_get( 'post_max_size' ) ), array( 'status' => 413 ) );
+	}
+	$error = empty( $files['file']['error'] ) ? UPLOAD_ERR_OK : (int) $files['file']['error'];
+	if ( UPLOAD_ERR_INI_SIZE === $error || UPLOAD_ERR_FORM_SIZE === $error ) {
+		/* translators: %s: PHP upload_max_filesize setting */
+		return new WP_Error( 'georg_too_large', sprintf( __( 'The file is larger than PHP upload_max_filesize (%s).', 'georg-bridge' ), ini_get( 'upload_max_filesize' ) ), array( 'status' => 413 ) );
+	}
+	if ( empty( $files['file'] ) || UPLOAD_ERR_OK !== $error || empty( $files['file']['tmp_name'] ) ) {
+		return new WP_Error( 'georg_no_file', __( 'Send the MP3 as the multipart field "file".', 'georg-bridge' ), array( 'status' => 400 ) );
+	}
+	return null;
+}
+
+/**
+ * Whether a file is an MP3: WordPress' type check accepts any audio/* file whose name ends
+ * in .mp3, so the format is also read with getID3.
+ *
+ * @param string $path     File.
+ * @param string $filename Name it will be stored under.
+ * @return bool
+ */
+function georg_bridge_is_mp3( $path, $filename ) {
+	$check = wp_check_filetype_and_ext( $path, $filename, array( 'mp3' => 'audio/mpeg' ) );
+	if ( 'audio/mpeg' !== $check['type'] || ! filesize( $path ) ) {
+		return false;
+	}
+	require_once ABSPATH . 'wp-admin/includes/media.php';
+	$meta = wp_read_audio_metadata( $path );
+	return is_array( $meta ) && isset( $meta['dataformat'] ) && 'mp3' === $meta['dataformat'];
 }
 
 /**
@@ -277,18 +351,22 @@ function georg_bridge_audio_response( $id, $created ) {
  * @return WP_REST_Response|WP_Error
  */
 function georg_bridge_upload_audio( $request ) {
-	$key   = $request['publication_key'];
 	$files = $request->get_file_params();
-	if ( empty( $files['file'] ) || ! empty( $files['file']['error'] ) || empty( $files['file']['tmp_name'] ) ) {
-		return new WP_Error( 'georg_no_file', __( 'Send the MP3 as the multipart field "file".', 'georg-bridge' ), array( 'status' => 400 ) );
+	$error = georg_bridge_upload_error( $files );
+	if ( $error ) {
+		return $error;
+	}
+	$key = $request['publication_key'];
+	if ( ! georg_bridge_valid_key( $key ) ) {
+		return new WP_Error( 'rest_missing_callback_param', __( 'Missing parameter(s): publication_key', 'georg-bridge' ), array( 'status' => 400 ) );
 	}
 	$tmp      = $files['file']['tmp_name'];
 	$filename = georg_bridge_filename( $request['filename'] ? $request['filename'] : $files['file']['name'] );
-	$check    = wp_check_filetype_and_ext( $tmp, $filename, array( 'mp3' => 'audio/mpeg' ) );
-	if ( 'audio/mpeg' !== $check['type'] || ! filesize( $tmp ) ) {
+	if ( ! georg_bridge_is_mp3( $tmp, $filename ) ) {
 		return new WP_Error( 'georg_not_mp3', __( 'The upload is not an MP3 file.', 'georg-bridge' ), array( 'status' => 400 ) );
 	}
 	$sha256 = hash_file( 'sha256', $tmp );
+	$title  = $request['title'] ? sanitize_text_field( $request['title'] ) : preg_replace( '/\.mp3$/', '', $filename );
 
 	$lock = georg_bridge_lock( 'audio', $key );
 	if ( is_wp_error( $lock ) ) {
@@ -299,6 +377,16 @@ function georg_bridge_upload_audio( $request ) {
 		if ( $existing ) {
 			$current = get_attached_file( $existing->ID );
 			if ( get_post_meta( $existing->ID, GEORG_BRIDGE_SHA256_META, true ) === $sha256 && $current && file_exists( $current ) ) {
+				if ( $existing->post_title !== $title ) {
+					wp_update_post(
+						wp_slash(
+							array(
+								'ID'         => $existing->ID,
+								'post_title' => $title,
+							)
+						)
+					);
+				}
 				return georg_bridge_audio_response( $existing->ID, false );
 			}
 		}
@@ -308,7 +396,8 @@ function georg_bridge_upload_audio( $request ) {
 			return $dir;
 		}
 		$path = trailingslashit( $dir['dir'] ) . $filename;
-		if ( file_exists( $path ) && hash_file( 'sha256', $path ) !== $sha256 ) {
+		$self = $existing ? $existing->ID : 0;
+		if ( file_exists( $path ) && ( hash_file( 'sha256', $path ) !== $sha256 || georg_bridge_file_in_use( $filename, $self ) ) ) {
 			$path = trailingslashit( $dir['dir'] ) . wp_unique_filename( $dir['dir'], $filename );
 		}
 		if ( ! file_exists( $path ) ) {
@@ -323,16 +412,17 @@ function georg_bridge_upload_audio( $request ) {
 		require_once ABSPATH . 'wp-admin/includes/image.php';
 		require_once ABSPATH . 'wp-admin/includes/media.php';
 
-		$title = $request['title'] ? sanitize_text_field( $request['title'] ) : preg_replace( '/\.mp3$/', '', $filename );
-		$url   = trailingslashit( wp_upload_dir( null, false )['baseurl'] ) . GEORG_BRIDGE_UPLOAD_SUBDIR . '/' . wp_basename( $path );
+		$url = trailingslashit( wp_upload_dir( null, false )['baseurl'] ) . GEORG_BRIDGE_UPLOAD_SUBDIR . '/' . wp_basename( $path );
 		if ( $existing ) {
 			$id = $existing->ID;
 			update_attached_file( $id, $path );
 			wp_update_post(
-				array(
-					'ID'             => $id,
-					'post_title'     => $title,
-					'post_mime_type' => 'audio/mpeg',
+				wp_slash(
+					array(
+						'ID'             => $id,
+						'post_title'     => $title,
+						'post_mime_type' => 'audio/mpeg',
+					)
 				)
 			);
 			// wp_update_post() never changes the GUID; podcast feeds may read it, so keep it equal to the file URL.
@@ -341,12 +431,14 @@ function georg_bridge_upload_audio( $request ) {
 			clean_post_cache( $id );
 		} else {
 			$id = wp_insert_attachment(
-				array(
-					'guid'           => $url,
-					'post_mime_type' => 'audio/mpeg',
-					'post_title'     => $title,
-					'post_content'   => '',
-					'post_status'    => 'inherit',
+				wp_slash(
+					array(
+						'guid'           => $url,
+						'post_mime_type' => 'audio/mpeg',
+						'post_title'     => $title,
+						'post_content'   => '',
+						'post_status'    => 'inherit',
+					)
 				),
 				$path,
 				0,
@@ -531,7 +623,11 @@ function georg_bridge_put_sermon( $request ) {
 	}
 	try {
 		$existing = georg_bridge_find( GEORG_BRIDGE_POST_TYPE, $key, georg_bridge_live_statuses() );
-		$postarr  = array(
+		if ( $existing && 'draft' === $status && ! in_array( $existing->post_status, array( 'draft', 'pending' ), true ) ) {
+			// Someone published (or scheduled, or made private) the sermon after review; an update keeps that.
+			$status = $existing->post_status;
+		}
+		$postarr = array(
 			'post_type'   => GEORG_BRIDGE_POST_TYPE,
 			'post_title'  => sanitize_text_field( $request['title'] ),
 			'post_status' => $status,

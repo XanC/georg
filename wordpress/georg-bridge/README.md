@@ -21,6 +21,11 @@ WordPress companion plugin for Georg's `wordpress` output
 
    New sermons are created as drafts unless `status` is set to `private` or `publish`.
 
+## Test
+
+`docs/wordpress-testing.md` runs the plugin and Georg's output against a local Docker
+WordPress with Church Content.
+
 ## Lint
 
 `php -l georg-bridge.php` (CI runs it on every `.php` file under `wordpress/`). For

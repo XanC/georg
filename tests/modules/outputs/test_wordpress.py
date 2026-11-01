@@ -341,6 +341,23 @@ def test_client_errors_are_not_retryable_and_hide_password(
     assert delays == []
 
 
+def test_upload_limit_is_not_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[httpx.Request] = []
+    message = "The file is larger than PHP upload_max_filesize (8M)."
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(413, json={"code": "georg_too_large", "message": message})
+
+    out, _ = make_output(handler, monkeypatch)
+    with pytest.raises(ModuleError) as info:
+        out.publish(make_request(tmp_path))
+    assert not info.value.retryable
+    assert "HTTP 413" in str(info.value)
+    assert message in str(info.value)
+    assert len(calls) == 1
+
+
 def test_wrong_password_is_not_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
     bridge = FakeBridge()
     monkeypatch.setenv("OTHER_PASSWORD", "wrong")
