@@ -54,7 +54,7 @@ Store, writes them to `/run/georg`, updates the Route 53 record (if configured),
 
    Optional parameters: `InstanceType` (default `t3.large`), `DataVolumeSize` (50),
    `Hostname` (`georg.stpaulaustin.org`), `HostedZoneId` (empty = no DNS updates),
-   `WakeSchedule` (`cron(0 13 ? * SUN *)`) and `WakeTimezone` (`America/Chicago`),
+   `WakeSchedule` (`cron(0 17-21 ? * SUN *)`: hourly 17:00–21:00, so a recording uploaded late is still found) and `WakeTimezone` (`America/Chicago`),
    `WakeScheduleState`, `SnapshotSchedule`, `SnapshotRetainCount`, `GitRef`, `SesIdentity`.
    Set `REGION`/`STACK` in the environment to change the region (default `us-east-2`) or
    stack name (default `georg`). Read the outputs with
@@ -146,7 +146,7 @@ After changing secrets, reboot (`sudo reboot`) or run
 `deploy/georg.aws.toml` sets
 
 ```toml
-idle_shutdown_minutes = 30
+idle_shutdown_minutes = 10
 idle_shutdown_command = ["touch", "/run/georg/shutdown/poweroff"]
 ```
 

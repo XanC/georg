@@ -75,8 +75,8 @@ Parameters:
     Description: SES identity (domain or address) the instance may send as.
   WakeSchedule:
     Type: String
-    Default: cron(0 13 ? * SUN *)
-    Description: EventBridge Scheduler expression that starts the instance.
+    Default: cron(0 17-21 ? * SUN *)
+    Description: EventBridge Scheduler expression that starts the instance (hourly, so a late upload is picked up; starting a running instance does nothing).
   WakeTimezone:
     Type: String
     Default: America/Chicago
