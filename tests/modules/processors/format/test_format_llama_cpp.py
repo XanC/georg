@@ -236,12 +236,13 @@ def test_registered_and_default_in_config(tmp_path: Path, monkeypatch: pytest.Mo
         'classifier = { type = "ina_speech_segmenter" }\ndetector = { type = "heuristic" }\n'
         'transcriber = { type = "faster_whisper" }\nmetadata = { type = "rules" }\n'
     )
-    fake = FakeLlama(lambda chunk, n: "2")
+    fake = FakeLlama(lambda chunk, n: "6")
     monkeypatch.setattr(llama_cpp, "_load_model", lambda _: fake)
     formatter = build_processors(load_config(path).processors).formatter
     assert isinstance(formatter, LlamaCppFormatter) and formatter.options.mode == "breaks"
-    result = formatter.format(transcript("Grace to you.", "And peace."), CTX)
-    assert result.markdown == "Grace to you.\n\nAnd peace." and result.discrepancies == ()
+    result = formatter.format(transcript(sentences(5), sentences(5, start=5)), CTX)
+    assert result.markdown == sentences(5) + "\n\n" + sentences(5, start=5)
+    assert result.discrepancies == ()
 
 
 def test_build_processor_by_type() -> None:
@@ -264,12 +265,13 @@ def paragraphs_of(text: str) -> list[list[str]]:
 def test_breaks_mode_rebuilds_paragraphs_from_sentence_numbers() -> None:
     fake = FakeLlama(lambda chunk, n: "<think>\n\n</think>\n\n3, 5.")
     source = transcript(sentences(3), sentences(3, start=3))
-    result = breaks(fake).format(source, CTX)
+    result = breaks(fake, paragraph_words=30).format(source, CTX)
     assert paragraphs_of(result.markdown) == [["0", "1"], ["2", "3"], ["4", "5"]]
     assert result.words_preserved and result.discrepancies == ()
     call = fake.calls[0]
     prompt = call["messages"][-1]["content"]
-    assert "start a new paragraph" in prompt and "(en)" not in prompt and "in en." in prompt
+    assert "start a new paragraph" in prompt and "in en." in prompt
+    assert "Choose about 1 numbers" in prompt
     assert chunk_of(call["messages"]).splitlines()[1] == "[2] " + sentences(1, start=1)
     assert call["temperature"] == 0.0 and call["max_tokens"] == 6 * 4 + 32
     assert "-breaks-" in breaks(fake).version
@@ -278,7 +280,7 @@ def test_breaks_mode_rebuilds_paragraphs_from_sentence_numbers() -> None:
 def test_breaks_unusable_reply_is_retried_then_left_unformatted() -> None:
     replies = iter(["Sure! Paragraphs start at 3", "99", "4"])
     fake = FakeLlama(lambda chunk, n: next(replies))
-    result = breaks(fake, min_chunk_words=50, max_chunk_words=60).format(
+    result = breaks(fake, min_chunk_words=50, max_chunk_words=60, paragraph_words=30).format(
         transcript(sentences(6), sentences(6, start=6)), CTX
     )
     assert [(c["temperature"], c["seed"]) for c in fake.calls] == [(0.0, 0), (0.3, 1), (0.0, 0)]
@@ -321,3 +323,9 @@ def test_breaks_single_sentence_needs_no_model() -> None:
 
     result = LlamaCppFormatter({}, model_factory=factory).format(transcript("Amen."), CTX)
     assert result.markdown == "Amen."
+
+
+def test_breaks_too_short_paragraphs_are_merged() -> None:
+    fake = FakeLlama(lambda chunk, n: ", ".join(str(i) for i in range(2, 11)))
+    result = breaks(fake).format(transcript(sentences(10)), CTX)
+    assert paragraphs_of(result.markdown) == [["0", "1", "2", "3"], [str(i) for i in range(4, 10)]]

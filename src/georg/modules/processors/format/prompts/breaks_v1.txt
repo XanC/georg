@@ -1,6 +1,6 @@
 You are splitting a verbatim transcript of a Christian sermon into paragraphs. Its sentences are numbered below.
 
-Reply with only the numbers of the sentences that should start a new paragraph, in ascending order, separated by commas. Do not list sentence 1. Paragraphs are usually 3 to 8 sentences long; start a new one where the thought, the example or the Scripture passage changes. The transcript is in $language.
+Reply with only the numbers of the sentences that should start a new paragraph, in ascending order, separated by commas. Do not list sentence 1. Choose about $breaks numbers: a paragraph is usually several sentences long and starts where the thought, the example or the Scripture passage changes. The transcript is in $language.
 
 Sentences:
 $text

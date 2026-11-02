@@ -67,6 +67,8 @@ class LlamaFormatterOptions(BaseModel):
     seed: int = Field(default=0, ge=0)
     mode: Literal["breaks", "rewrite"] = "breaks"
     """`breaks`: the model only picks paragraph starts. `rewrite`: it returns the text."""
+    paragraph_words: int = Field(default=120, ge=20)
+    """`breaks` mode: the target paragraph length; paragraphs under a third of it are merged."""
     min_chunk_words: int = Field(default=400, gt=0)
     max_chunk_words: int = Field(default=700, gt=0)
     disable_thinking: bool = True
@@ -197,6 +199,7 @@ class LlamaCppFormatter:
         self.version = (
             f"{TYPE_NAME}-r{_REVISION}-{o.mode}-{model}-prompt-{prompt_id}-t{o.temperature:g}"
             f"-rt{o.retry_temperature:g}-s{o.seed}-w{o.min_chunk_words}-{o.max_chunk_words}"
+            f"-p{o.paragraph_words}"
             f"-nt{int(o.disable_thinking)}"
         )
 
@@ -279,25 +282,27 @@ class LlamaCppFormatter:
         if len(sentences) < 2:
             return [sentences]
         numbered = "\n".join(f"[{i}] {s}" for i, s in enumerate(sentences, start=1))
-        messages = self._messages(numbered, language)
-        max_tokens = min(len(sentences) * 4 + 32, self.options.context_size // 2)
-        short = sum(len(s.split()) for s in sentences) < self.options.min_chunk_words
+        o = self.options
+        words = sum(len(s.split()) for s in sentences)
+        target = max(1, round(words / o.paragraph_words) - 1)
+        messages = self._messages(numbered, language, breaks=str(target))
+        max_tokens = min(len(sentences) * 4 + 32, o.context_size // 2)
         for temperature, seed in self._attempts():
             reply = clean_output(self._complete(messages, temperature, seed, max_tokens), "")
             starts = _parse_starts(reply, len(sentences))
-            if starts is not None and (starts or short):
-                return _group(sentences, starts)
+            if starts is not None and (starts or words < o.min_chunk_words):
+                return _group(sentences, starts, o.paragraph_words // 3)
         return None
 
     def _attempts(self) -> tuple[tuple[float, int], tuple[float, int]]:
         o = self.options
         return (o.temperature, o.seed), (o.retry_temperature, o.seed + 1)
 
-    def _messages(self, text: str, language: str) -> list[dict[str, str]]:
+    def _messages(self, text: str, language: str, **extra: str) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = []
         if self.options.disable_thinking:
             messages.append({"role": "system", "content": _NO_THINK})
-        prompt = self._template.safe_substitute(text=text, language=language)
+        prompt = self._template.safe_substitute(text=text, language=language, **extra)
         messages.append({"role": "user", "content": prompt})
         return messages
 
@@ -331,12 +336,18 @@ def _parse_starts(reply: str, count: int) -> set[int] | None:
     return numbers - {1}
 
 
-def _group(sentences: list[str], starts: set[int]) -> list[list[str]]:
-    paragraphs: list[list[str]] = []
+def _group(sentences: list[str], starts: set[int], min_words: int) -> list[list[str]]:
+    """Paragraphs starting at `starts`, ignoring starts that leave one under `min_words`."""
+    paragraphs: list[list[str]] = [[]]
+    size = 0
     for number, sentence in enumerate(sentences, start=1):
-        if number == 1 or number in starts:
+        if number in starts and size >= min_words:
             paragraphs.append([])
+            size = 0
         paragraphs[-1].append(sentence)
+        size += len(sentence.split())
+    if len(paragraphs) > 1 and size < min_words:
+        paragraphs[-2].extend(paragraphs.pop())
     return paragraphs
 
 
