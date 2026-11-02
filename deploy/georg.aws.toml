@@ -9,7 +9,7 @@ data_dir = "/var/lib/georg"
 # Stop-when-idle: the worker powers the instance off after 30 minutes with no queued or
 # running jobs and no web requests. The container cannot run systemctl, so it drops a
 # file that georg-poweroff.path on the host watches. Remove both lines for always-on.
-idle_shutdown_minutes = 30
+idle_shutdown_minutes = 10
 idle_shutdown_command = ["touch", "/run/georg/shutdown/poweroff"]
 timezone = "America/Chicago"
 language = "en"
