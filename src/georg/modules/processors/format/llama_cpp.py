@@ -13,6 +13,7 @@ changed is retried once at `retry_temperature`, and if it still differs the chun
 original text is used unformatted and a warning is added to `discrepancies`.
 """
 
+import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -102,6 +103,8 @@ def model_file_path(options: LlamaFormatterOptions) -> Path:
 
 
 def _load_model(options: LlamaFormatterOptions) -> LlamaLike:
+    # Spinning OpenMP workers make generation several times slower on shared vCPUs.
+    os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
     try:
         from llama_cpp import Llama
     except ImportError as exc:

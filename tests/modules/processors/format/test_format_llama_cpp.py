@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -235,3 +237,11 @@ def test_registered_and_default_in_config(tmp_path: Path, monkeypatch: pytest.Mo
 def test_build_processor_by_type() -> None:
     formatter = build_processor("formatter", ModuleConfig(type="llama_cpp", options={"seed": 7}))
     assert isinstance(formatter, LlamaCppFormatter) and formatter.options.seed == 7
+
+
+def test_load_model_prefers_passive_openmp_and_needs_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OMP_WAIT_POLICY", raising=False)
+    monkeypatch.setitem(sys.modules, "llama_cpp", None)
+    with pytest.raises(ModuleError, match="llm"):
+        llama_cpp._load_model(LlamaFormatterOptions())
+    assert os.environ["OMP_WAIT_POLICY"] == "PASSIVE"
