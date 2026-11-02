@@ -182,6 +182,41 @@ def test_no_speech_at_all() -> None:
     assert "middle third" in p.explanation
 
 
+def test_transcript_segment_running_into_music_ends_with_the_speech() -> None:
+    tr = transcript((1925, 2400, 0.97), (2400, 2995, 0.95), (2995, 3200, 0.95))
+    p = detect(build(TYPICAL), TYPICAL_MS, tr)
+    assert bounds(p) == (*TYPICAL_EXPECTED[:2], 3000 * S, TYPICAL_EXPECTED[3])
+
+
+def test_walk_passes_noisy_probe_inside_sermon() -> None:
+    i = TYPICAL.index(("speech", 18))
+    noisy: list[tuple[SegmentLabel, float]] = [
+        ("speech", 10.25),
+        ("noise", 4 / 60),  # 42:15-42:19, where a probe lands
+        ("speech", 18 - 10.25 - 4 / 60),
+    ]
+    p = detect(build(TYPICAL[:i] + noisy + TYPICAL[i + 1 :]), TYPICAL_MS)
+    assert bounds(p) == TYPICAL_EXPECTED
+
+
+def test_short_sermon_tries_later_probe() -> None:
+    spec: list[tuple[SegmentLabel, float]] = [
+        ("music", 6),
+        ("speech", 4),
+        ("music", 2),
+        ("speech", 15),  # sermon 12:00-27:00, at the 4/12 probe
+        ("music", 2),
+        ("speech", 4),  # announcements at the 5/12 probe
+        ("music", 40),
+        ("silence", 3),
+    ]
+    p = detect(build(spec), 76 * MIN)
+    assert bounds(p) == (0, 12 * MIN + 100, 27 * MIN, 73 * MIN + 10 * S)
+    assert p.confidence == pytest.approx(0.9 * 0.8)
+    assert "only at 0.333" in p.explanation
+    assert "implausibly short" not in p.explanation
+
+
 def test_very_short_sermon() -> None:
     spec: list[tuple[SegmentLabel, float]] = [("music", 25), ("speech", 4), ("music", 31)]
     p = detect(build(spec), 60 * MIN)
