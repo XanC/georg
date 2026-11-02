@@ -46,10 +46,10 @@ def test_litestream_replicates_the_database() -> None:
     assert db["replicas"][0]["bucket"] == "${GEORG_BACKUP_BUCKET}"
 
 
-def test_caddy_hostname_is_configurable() -> None:
+def test_caddy_serves_only_the_origin_hostname() -> None:
     caddyfile = (DEPLOY / "Caddyfile").read_text()
-    assert "{$GEORG_HOSTNAME:georg.stpaulaustin.org}" in caddyfile
-    assert "{$GEORG_ORIGIN_HOSTNAME:origin.georg.stpaulaustin.org}" in caddyfile
+    assert "{$GEORG_ORIGIN_HOSTNAME:georg.stpaulaustin.org}" in caddyfile
+    assert "GEORG_HOSTNAME" not in caddyfile
     env = _compose()["services"]["caddy"]["environment"]
     assert "GEORG_ORIGIN_HOSTNAME" in env
 

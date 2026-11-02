@@ -100,9 +100,12 @@ Two names are involved:
 - `Hostname` (`georg.stpaulaustin.org`): what browsers use. It points at the CloudFront
   distribution, never at the instance.
 - `OriginHostname` (`origin.georg.stpaulaustin.org`): how CloudFront reaches the
-  instance. Caddy gets a Let's Encrypt certificate for it (HTTP-01, so the security
-  group stays open to the world — restricting it to CloudFront's prefix list would
-  break certificate issuance). The boot script UPSERTs its A record at every boot.
+  instance, and the only name Caddy serves. It gets a Let's Encrypt certificate
+  for it (HTTP-01, so the security group stays open to the world — restricting it
+  to CloudFront's prefix list would break certificate issuance). The boot script
+  UPSERTs its A record at every boot. Caddy does not serve `Hostname`: CloudFront
+  rewrites `Host` to the origin name, so a certificate for the public name could
+  never be issued — asking for one would just produce failing ACME retries.
 
 DNS for `stpaulaustin.org` lives in Cloudflare. Setup, by hand:
 

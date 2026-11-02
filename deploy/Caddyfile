@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-# Automatic HTTPS (Let's Encrypt) for $GEORG_HOSTNAME and $GEORG_ORIGIN_HOSTNAME;
-# certificates persist in /data. The origin name is what CloudFront connects to
-# (it sends Host: <origin domain>, not the viewer's); the public name is kept so
-# the instance also answers when it is pointed at directly (no CloudFront).
-{$GEORG_HOSTNAME:georg.stpaulaustin.org}, {$GEORG_ORIGIN_HOSTNAME:origin.georg.stpaulaustin.org} {
+# Automatic HTTPS (Let's Encrypt) for $GEORG_ORIGIN_HOSTNAME; certificates persist
+# in /data. This is the only name the instance may serve: CloudFront connects to it
+# as the origin and sends Host: <origin domain> — never the viewer's Host, so a
+# certificate for the public name could never be issued here. Without CloudFront,
+# set GEORG_ORIGIN_HOSTNAME to the name pointed at the instance (e.g. Hostname).
+{$GEORG_ORIGIN_HOSTNAME:georg.stpaulaustin.org} {
 	encode zstd gzip
 	reverse_proxy georg-web:8000
 	header Strict-Transport-Security "max-age=31536000"
