@@ -72,8 +72,9 @@ def _error(response: httpx.Response, action: str) -> ModuleError:
         message += f": {detail}"
     if "storageQuotaExceeded" in reason:
         message += (
-            "; service accounts have no storage of their own: upload into a shared drive "
-            "or impersonate a user with `subject` (domain-wide delegation)"
+            "; service accounts have no storage of their own: upload into a shared drive, "
+            "impersonate a user with `subject`, or sign in as a Google account with "
+            "`georg drive-login`"
         )
     return ModuleError(message, retryable=retryable)
 

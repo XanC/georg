@@ -127,3 +127,14 @@ def test_web_dev_runs_without_secret(tmp_path: Path, monkeypatch: pytest.MonkeyP
     config = str(_config_file(tmp_path))
     assert main(["web", "--config", config, "--dev", "--port", "8123"]) == 0
     assert calls == [{"host": "127.0.0.1", "port": 8123, "proxy_headers": True}]
+
+
+def test_drive_login_rejects_a_non_desktop_client(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    client = tmp_path / "client.json"
+    client.write_text('{"web": {"client_id": "a", "client_secret": "b"}}')
+    out = tmp_path / "creds.json"
+    assert main(["drive-login", "--client", str(client), "--out", str(out)]) == 1
+    assert "Desktop app" in capsys.readouterr().err
+    assert not out.exists()
