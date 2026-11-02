@@ -16,10 +16,12 @@ Steps (all thresholds are fields of `HeuristicDetectorParams`):
 3. Service end: within a window around the approximate end, the last substantial
    segment, plus a tail if it is music (to keep applause and ambience).
 4. Sermon: probe short windows at fractions of the service until one is speech only
-   (no music, more speech than silence/noise), walk outward in steps until a probe
-   fails, then refine both edges inside a border window. The end is the last confident
-   transcript segment before music resumes, or the last speech segment without a
-   transcript.
+   (no music, more speech than silence/noise), walk outward in steps while probes have
+   speech and no music, then refine both edges inside a border window. The end is
+   the last confident transcript segment before music resumes (a segment running into
+   the music ends with the last speech before it), or the last speech segment without
+   a transcript.
+   If that sermon is implausibly short or long, later probes are tried.
 
 Gaps between segments count as silence.
 """
@@ -98,7 +100,7 @@ class HeuristicDetectorParams(BaseModel):
     """Window in which each sermon edge is refined."""
     sermon_start_offset_ms: int = Field(default=100, ge=0)
     """Added to the first speech onset; the classifier tends to start a hair early."""
-    transcript_min_probability: float = Field(default=0.9, ge=0.0, le=1.0)
+    transcript_min_probability: float = Field(default=0.75, ge=0.0, le=1.0)
     """A transcript segment is confident if exp(avg_logprob) exceeds this."""
 
     min_sermon_ms: int = Field(default=5 * _MIN, ge=0)
@@ -168,7 +170,7 @@ class HeuristicBoundaryDetector:
     """`BoundaryDetector` (type "heuristic") porting the legacy timing script."""
 
     type_name = "heuristic"
-    version = "heuristic-1"
+    version = "heuristic-2"
 
     def __init__(self, params: HeuristicDetectorParams | None = None) -> None:
         self.params = params or HeuristicDetectorParams()
@@ -382,38 +384,58 @@ class _Run:
         cov = _coverage(self.segs, pos, end)
         return cov["music"] == 0 and cov["speech"] > cov["noise"] + cov["silence"]
 
+    def walk(self, probe: int, step: int, service_start: int, service_end: int) -> int:
+        """Last probe position, stepping from `probe`, that has speech and no music."""
+        good = probe
+        while True:
+            pos = good + step
+            end = min(pos + self.p.probe_ms, service_end)
+            if pos < service_start or end <= pos:
+                return good
+            cov = _coverage(self.segs, pos, end)
+            if cov["music"] or not cov["speech"]:
+                return good
+            good = pos
+
     def sermon(self, service_start: int, service_end: int) -> tuple[int, int]:
         p = self.p
         span = service_end - service_start
-        probe: int | None = None
+        found: list[tuple[int, int, list[str], list[str], float]] = []
         for i, fraction in enumerate(p.probe_fractions):
             pos = service_start + int(span * fraction)
-            if self.speech_only(pos, service_end):
-                probe = pos
-                if i:
-                    self.problem(
-                        f"Speech-only probe found only at {fraction:.3f} of the service "
-                        f"({_fmt(pos)}), not at {p.probe_fractions[0]:.3f}.",
-                        _PENALTY_LATER_PROBE,
-                    )
-                else:
-                    self.note(f"Speech-only probe at {_fmt(pos)}.")
+            if not self.speech_only(pos, service_end) or any(a <= pos < b for a, b, *_ in found):
+                continue
+            notes, problems, confidence = self.notes, self.problems, self.confidence
+            self.notes, self.problems, self.confidence = [], [], 1.0
+            if i:
+                self.problem(
+                    f"Speech-only probe found only at {fraction:.3f} of the service "
+                    f"({_fmt(pos)}), not at {p.probe_fractions[0]:.3f}.",
+                    _PENALTY_LATER_PROBE,
+                )
+            else:
+                self.note(f"Speech-only probe at {_fmt(pos)}.")
+            start, end = self.sermon_from_probe(pos, service_start, service_end)
+            found.append((start, end, self.notes, self.problems, self.confidence))
+            self.notes, self.problems, self.confidence = notes, problems, confidence
+            if p.min_sermon_ms <= end - start <= p.max_sermon_ms:
                 break
-        if probe is None:
+        if not found:
             return self.sermon_without_probe(service_start, service_end)
+        plausible = [c for c in found if p.min_sermon_ms <= c[1] - c[0] <= p.max_sermon_ms]
+        start, end, notes, problems, confidence = (plausible or found[:1])[0]
+        self.notes += notes
+        self.problems += problems
+        self.confidence *= confidence
+        return start, end
 
-        last_good = probe
-        while last_good + p.step_ms < service_end and self.speech_only(
-            last_good + p.step_ms, service_end
-        ):
-            last_good += p.step_ms
+    def sermon_from_probe(
+        self, probe: int, service_start: int, service_end: int
+    ) -> tuple[int, int]:
+        p = self.p
+        last_good = self.walk(probe, p.step_ms, service_start, service_end)
         upper = min(last_good + 2 * p.step_ms, service_end)
-
-        first_good = probe
-        while first_good - p.step_ms >= service_start and self.speech_only(
-            first_good - p.step_ms, service_end
-        ):
-            first_good -= p.step_ms
+        first_good = self.walk(probe, -p.step_ms, service_start, service_end)
         lower = max(first_good - p.step_ms, service_start)
         self.note(
             f"Speech-only probes span {_fmt(first_good)} to {_fmt(last_good + p.probe_ms)} "
@@ -468,12 +490,17 @@ class _Run:
                 if p.transcript_min_probability
                 else -math.inf
             )
+            # Whisper often stretches the last segment ("Amen") over the following music;
+            # such a segment ends with the last speech before the music.
+            speech_ends = [s.end for s in _clip(self.segs, lo, limit) if s.label == "speech"]
+            cut = speech_ends[-1] if speech_ends else limit
             confident = [
-                seg.range.end_ms
+                min(seg.range.end_ms, cut) if seg.range.end_ms > limit else seg.range.end_ms
                 for seg in self.transcript.segments
                 if seg.avg_logprob is not None
                 and seg.avg_logprob > threshold
-                and lo < seg.range.end_ms <= limit
+                and lo < seg.range.end_ms
+                and (seg.range.end_ms <= limit or (music and seg.range.start_ms < limit))
             ]
             if confident:
                 end = max(confident)
