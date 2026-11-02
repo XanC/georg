@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  ACM certificate for Georg's CloudFront distribution. CloudFront requires
+  certificates in us-east-1, so this is a separate stack from georg.yaml.
+  Deploy: aws cloudformation deploy --region us-east-1 --stack-name georg-cert
+  --template-file deploy/aws/cloudfront-certificate.yaml --parameter-overrides
+  Hostname=georg.stpaulaustin.org — then create the DNS validation record it
+  reports (see docs/deploy-aws.md) and pass the ARN as CertificateArn.
+
+Parameters:
+  Hostname:
+    Type: String
+    Default: georg.stpaulaustin.org
+    Description: Name the certificate covers; also the CloudFront alias.
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref Hostname
+      ValidationMethod: DNS
+
+Outputs:
+  CertificateArn:
+    Value: !Ref Certificate

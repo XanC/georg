@@ -55,7 +55,9 @@ def test_parameter_defaults(template: dict[str, Any]) -> None:
     assert params["InstanceType"]["Default"] == "t3.large"
     assert params["DataVolumeSize"]["Default"] == 50
     assert params["Hostname"]["Default"] == "georg.stpaulaustin.org"
+    assert params["OriginHostname"]["Default"] == "origin.georg.stpaulaustin.org"
     assert params["HostedZoneId"]["Default"] == ""
+    assert params["CertificateArn"]["Default"] == ""
     assert params["WakeTimezone"]["Default"] == "America/Chicago"
     assert "SUN" in params["WakeSchedule"]["Default"]
 
@@ -128,6 +130,32 @@ def test_inline_wake_code_matches_source(template: dict[str, Any]) -> None:
     code = template["Resources"]["WakeFunction"]["Properties"]["Code"]["ZipFile"]
     assert code == WAKE.read_text()
     assert len(code) <= 4096, "CloudFormation limits inline Lambda code to 4096 characters"
+
+
+def test_cloudfront_distribution(template: dict[str, Any]) -> None:
+    distribution = template["Resources"]["Distribution"]
+    assert distribution["Condition"] == "HasCertificate"
+    config = distribution["Properties"]["DistributionConfig"]
+    assert config["Aliases"] == [{"Ref": "Hostname"}]
+    assert config["ViewerCertificate"]["AcmCertificateArn"] == {"Ref": "CertificateArn"}
+    origins = {o["Id"]: o for o in config["Origins"]}
+    assert origins["instance"]["DomainName"] == {"Ref": "OriginHostname"}
+    assert origins["instance"]["CustomOriginConfig"]["OriginProtocolPolicy"] == "https-only"
+    wake_domain = origins["wake"]["DomainName"]
+    assert wake_domain["Fn::Select"][0] == 2
+    assert wake_domain["Fn::Select"][1]["Fn::Split"][1] == {"Fn::GetAtt": "WakeUrl.FunctionUrl"}
+    (group,) = config["OriginGroups"]["Items"]
+    members = [m["OriginId"] for m in group["Members"]["Items"]]
+    assert members == ["instance", "wake"]
+    codes = group["FailoverCriteria"]["StatusCodes"]["Items"]
+    assert {503, 504} <= set(codes)
+    behavior = config["DefaultCacheBehavior"]
+    assert behavior["TargetOriginId"] == group["Id"]
+    assert "POST" in behavior["AllowedMethods"]
+    # CachingDisabled; AllViewerExceptHostHeader.
+    assert behavior["CachePolicyId"] == "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+    assert behavior["OriginRequestPolicyId"] == "b689b0a8-53d0-40ab-baf2-68738e2966ac"
+    assert template["Outputs"]["DistributionDomainName"]["Condition"] == "HasCertificate"
 
 
 def test_user_data_files_exist(template: dict[str, Any]) -> None:

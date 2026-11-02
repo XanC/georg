@@ -11,7 +11,15 @@ Metadata:
       - Label: { default: Instance }
         Parameters: [InstanceType, ImageId, VpcId, SubnetId, DataVolumeSize, RootVolumeSize]
       - Label: { default: Application }
-        Parameters: [Hostname, HostedZoneId, GitRepository, GitRef, SsmPrefix, SesIdentity]
+        Parameters:
+          - Hostname
+          - OriginHostname
+          - HostedZoneId
+          - CertificateArn
+          - GitRepository
+          - GitRef
+          - SsmPrefix
+          - SesIdentity
       - Label: { default: Schedules and backups }
         Parameters:
           - WakeSchedule
@@ -50,13 +58,31 @@ Parameters:
   Hostname:
     Type: String
     Default: georg.stpaulaustin.org
-    Description: Public name of the admin UI; Caddy obtains its certificate.
+    Description: >-
+      Public name browsers use. With CertificateArn it is the CloudFront alias
+      (point it at the distribution); otherwise it is the name you point at the
+      instance, and OriginHostname should match it.
+  OriginHostname:
+    Type: String
+    Default: origin.georg.stpaulaustin.org
+    Description: >-
+      Name the instance answers to: the CloudFront primary origin's domain and the
+      certificate Caddy obtains. The boot script keeps its A record in
+      HostedZoneId pointing at the instance's public IP. Without CloudFront, set
+      this to the name you point at the instance (typically Hostname).
   HostedZoneId:
     Type: String
     Default: ""
     Description: >-
-      Route 53 hosted zone holding Hostname. Empty: no DNS updates; point the name
-      at the instance yourself.
+      Route 53 hosted zone holding OriginHostname. Empty: no DNS updates; point
+      the origin name at the instance yourself.
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: >-
+      ACM certificate ARN for Hostname, in us-east-1 (CloudFront requirement);
+      deploy/aws/cloudfront-certificate.yaml creates one. Empty: no CloudFront
+      distribution, and browsers reach the instance directly through OriginHostname.
   GitRepository:
     Type: String
     Default: https://github.com/XanC/georg.git
@@ -100,6 +126,7 @@ Parameters:
 
 Conditions:
   HasDns: !Not [!Equals [!Ref HostedZoneId, ""]]
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, ""]]
 
 Resources:
   BackupBucket:
@@ -186,7 +213,7 @@ Resources:
                   Resource: !Sub arn:${AWS::Partition}:route53:::hostedzone/${HostedZoneId}
                   Condition:
                     ForAllValues:StringEquals:
-                      route53:ChangeResourceRecordSetsNormalizedRecordNames: [!Ref Hostname]
+                      route53:ChangeResourceRecordSetsNormalizedRecordNames: [!Ref OriginHostname]
                       route53:ChangeResourceRecordSetsRecordTypes: [A]
                 - !Ref AWS::NoValue
 
@@ -256,6 +283,7 @@ Resources:
           cat > /etc/georg/boot.env <<'ENV'
           GEORG_REGION=${AWS::Region}
           GEORG_HOSTNAME=${Hostname}
+          GEORG_ORIGIN_HOSTNAME=${OriginHostname}
           GEORG_HOSTED_ZONE_ID=${HostedZoneId}
           GEORG_SSM_PREFIX=${SsmPrefix}
           GEORG_BACKUP_BUCKET=${BackupBucket}
@@ -396,16 +424,18 @@ Resources:
       Environment:
         Variables:
           INSTANCE_ID: !Ref Instance
-          APP_URL: !Sub https://${Hostname}
+          ORIGIN_URL: !Sub https://${OriginHostname}
       Code:
         # Copy of deploy/aws/wake/index.py (tests/deploy checks they match).
         ZipFile: |
           # SPDX-License-Identifier: AGPL-3.0-only
-          """Wake page (Lambda function URL): start the Georg instance, then redirect to it.
+          """Wake origin (Lambda function URL): start the Georg instance, then keep reloading.
 
-          Any path is kept, so review links can point at this URL: /sermons/5 starts the
-          instance, shows "starting" until APP_URL/healthz answers, then redirects to
-          APP_URL/sermons/5. Inlined into deploy/aws/georg.yaml; keep under 4096 chars.
+          CloudFront fails over here when the instance origin does not answer. This page
+          never redirects: it starts the instance if needed and reloads the same URL, so a
+          later reload reaches the primary origin once Georg is healthy. The health check
+          uses ORIGIN_URL (the origin hostname, which resolves only while the instance is
+          running). Inlined into deploy/aws/georg.yaml; keep under 4096 chars.
           """
 
           import html
@@ -438,26 +468,21 @@ Resources:
 
           def handler(event, context, ec2=None, probe=healthy):
               instance_id = os.environ["INSTANCE_ID"]
-              app_url = os.environ["APP_URL"].rstrip("/")
+              origin_url = os.environ["ORIGIN_URL"].rstrip("/")
               if ec2 is None:
                   import boto3
 
                   ec2 = boto3.client("ec2")
-              path = event.get("rawPath") or "/"
-              if event.get("rawQueryString"):
-                  path += "?" + event["rawQueryString"]
               reservations = ec2.describe_instances(InstanceIds=[instance_id])["Reservations"]
               state = reservations[0]["Instances"][0]["State"]["Name"]
-              if state == "running" and probe(app_url):
-                  return {
-                      "statusCode": 302,
-                      "headers": {"Location": app_url + "/" + path.lstrip("/"), "Cache-Control": "no-store"},
-                      "body": "",
-                  }
               if state == "stopped":
                   ec2.start_instances(InstanceIds=[instance_id])
                   return page(STARTING)
-              if state in ("pending", "running"):
+              if state == "pending":
+                  return page(STARTING)
+              if state == "running":
+                  if probe(origin_url):
+                      return page("Georg is up; reloading to hand you over to it.")
                   return page(STARTING)
               if state == "stopping":
                   return page("Georg is shutting down after being idle; it will start again shortly.")
@@ -491,12 +516,74 @@ Resources:
       Principal: "*"
       InvokedViaFunctionUrl: true
 
+  # CloudFront answers Hostname always: the running instance is the primary origin
+  # and the wake page the failover origin, so the browser never sees another name.
+  # Failover only applies to GET/HEAD/OPTIONS; POSTs reach the instance only.
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasCertificate
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Aliases: [!Ref Hostname]
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Origins:
+          - Id: instance
+            DomainName: !Ref OriginHostname
+            # Fail over to the wake page fast when the instance is stopped: its
+            # stale record either does not connect or presents a certificate for
+            # a different name, both counted as connection failures.
+            ConnectionAttempts: 2
+            ConnectionTimeout: 5
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginKeepaliveTimeout: 5
+              OriginReadTimeout: 60
+          - Id: wake
+            DomainName: !Select [2, !Split ["/", !GetAtt WakeUrl.FunctionUrl]]
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginReadTimeout: 10
+        OriginGroups:
+          Quantity: 1
+          Items:
+            - Id: failover
+              FailoverCriteria:
+                StatusCodes:
+                  Quantity: 4
+                  Items: [500, 502, 503, 504]
+              Members:
+                Quantity: 2
+                Items:
+                  - OriginId: instance
+                  - OriginId: wake
+        DefaultCacheBehavior:
+          TargetOriginId: failover
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          # CachingDisabled; AllViewerExceptHostHeader forwards cookies, query
+          # strings and headers but replaces Host with the origin's domain name
+          # (the Lambda function URL breaks on the viewer's Host).
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+
 Outputs:
   InstanceId:
     Value: !Ref Instance
   WakeUrl:
-    Description: Use as review.base_url in georg.toml so review links wake the instance.
+    Description: Failover origin behind the distribution; on its own it still starts the instance.
     Value: !GetAtt WakeUrl.FunctionUrl
+  DistributionDomainName:
+    Condition: HasCertificate
+    Description: Point Hostname at this name (DNS-only CNAME or Route 53 alias).
+    Value: !GetAtt Distribution.DomainName
   AppUrl:
     Value: !Sub https://${Hostname}/
   BackupBucket:

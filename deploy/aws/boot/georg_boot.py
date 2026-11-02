@@ -6,8 +6,10 @@
    /georg/NAME          -> NAME='value' in /run/georg/georg.env (mode 0600)
    /georg/files/NAME    -> /run/georg/secrets/NAME (mode 0600, owned by Georg's uid)
 2. Write /run/georg/host.env, the non-secret variables for docker compose.
-3. If $GEORG_HOSTED_ZONE_ID is set, point the A record for $GEORG_HOSTNAME at this
-   instance's public IPv4 address (no Elastic IP is billed while it is stopped).
+3. If $GEORG_HOSTED_ZONE_ID is set, point the A record for $GEORG_ORIGIN_HOSTNAME
+   at this instance's public IPv4 address (no Elastic IP is billed while it is
+   stopped; the stale record while stopped just fails CloudFront's origin TLS
+   check and fails over to the wake page).
 4. Create /run/georg/shutdown, where the idle watchdog asks the host to power off.
 
 /run is a tmpfs, so secrets never reach the data volume or its snapshots. Only
@@ -138,6 +140,9 @@ def boot(
     log: Callable[[str], None] = print,
 ) -> None:
     region = environ.get("GEORG_REGION", "us-east-2")
+    origin_hostname = environ.get("GEORG_ORIGIN_HOSTNAME") or environ.get(
+        "GEORG_HOSTNAME", "georg.stpaulaustin.org"
+    )
     hostname = environ.get("GEORG_HOSTNAME", "georg.stpaulaustin.org")
     prefix = environ.get("GEORG_SSM_PREFIX", "/georg/")
     if not prefix.endswith("/"):
@@ -160,6 +165,7 @@ def boot(
     make_dir(run_dir / "shutdown", mode=0o700, uid=GEORG_UID, gid=GEORG_UID)
     host = {
         "GEORG_HOSTNAME": hostname,
+        "GEORG_ORIGIN_HOSTNAME": origin_hostname,
         "GEORG_BACKUP_BUCKET": bucket,
         "AWS_REGION": region,
         "GEORG_ROOT": environ.get("GEORG_ROOT", "/srv/georg"),
@@ -173,8 +179,8 @@ def boot(
         ip = imds("meta-data/public-ipv4").strip()
         if not ip:
             raise BootError("instance has no public IPv4 address")
-        update_dns(client("route53"), zone_id, hostname, ip)
-        log(f"dns: {hostname} A {ip}")
+        update_dns(client("route53"), zone_id, origin_hostname, ip)
+        log(f"dns: {origin_hostname} A {ip}")
     else:
         log("dns: GEORG_HOSTED_ZONE_ID not set; skipping")
 

@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Wake page (Lambda function URL): start the Georg instance, then redirect to it.
+"""Wake origin (Lambda function URL): start the Georg instance, then keep reloading.
 
-Any path is kept, so review links can point at this URL: /sermons/5 starts the
-instance, shows "starting" until APP_URL/healthz answers, then redirects to
-APP_URL/sermons/5. Inlined into deploy/aws/georg.yaml; keep under 4096 chars.
+CloudFront fails over here when the instance origin does not answer. This page
+never redirects: it starts the instance if needed and reloads the same URL, so a
+later reload reaches the primary origin once Georg is healthy. The health check
+uses ORIGIN_URL (the origin hostname, which resolves only while the instance is
+running). Inlined into deploy/aws/georg.yaml; keep under 4096 chars.
 """
 
 import html
@@ -36,26 +38,21 @@ def page(message, status=200):
 
 def handler(event, context, ec2=None, probe=healthy):
     instance_id = os.environ["INSTANCE_ID"]
-    app_url = os.environ["APP_URL"].rstrip("/")
+    origin_url = os.environ["ORIGIN_URL"].rstrip("/")
     if ec2 is None:
         import boto3
 
         ec2 = boto3.client("ec2")
-    path = event.get("rawPath") or "/"
-    if event.get("rawQueryString"):
-        path += "?" + event["rawQueryString"]
     reservations = ec2.describe_instances(InstanceIds=[instance_id])["Reservations"]
     state = reservations[0]["Instances"][0]["State"]["Name"]
-    if state == "running" and probe(app_url):
-        return {
-            "statusCode": 302,
-            "headers": {"Location": app_url + "/" + path.lstrip("/"), "Cache-Control": "no-store"},
-            "body": "",
-        }
     if state == "stopped":
         ec2.start_instances(InstanceIds=[instance_id])
         return page(STARTING)
-    if state in ("pending", "running"):
+    if state == "pending":
+        return page(STARTING)
+    if state == "running":
+        if probe(origin_url):
+            return page("Georg is up; reloading to hand you over to it.")
         return page(STARTING)
     if state == "stopping":
         return page("Georg is shutting down after being idle; it will start again shortly.")
