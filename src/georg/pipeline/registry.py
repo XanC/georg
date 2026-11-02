@@ -28,7 +28,10 @@ PROCESSOR_TYPES: dict[Role, dict[str, str]] = {
         "faster_whisper": f"{_P}.transcribe:FasterWhisperTranscriber",
         "openai_compatible": f"{_P}.transcribe:OpenAICompatibleTranscriber",
     },
-    "formatter": {"openai_chat": f"{_P}.format:OpenAIChatFormatter"},
+    "formatter": {
+        "llama_cpp": f"{_P}.format:LlamaCppFormatter",
+        "openai_chat": f"{_P}.format:OpenAIChatFormatter",
+    },
     "metadata": {"rules": f"{_P}.metadata:RulesMetadataGenerator"},
 }
 

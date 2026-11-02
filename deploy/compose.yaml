@@ -17,7 +17,7 @@ x-georg: &georg
     context: ..
     dockerfile: deploy/Dockerfile
     args:
-      GEORG_EXTRAS: ${GEORG_EXTRAS:-classify whisper gdrive}
+      GEORG_EXTRAS: ${GEORG_EXTRAS:-classify whisper llm gdrive}
   env_file:
     - ${GEORG_RUN:-/run/georg}/georg.env
   environment:

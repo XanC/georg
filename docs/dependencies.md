@@ -45,6 +45,38 @@ Installed with `uv sync --extra whisper` (or `pip install georg[whisper]`). Need
 
 Check the extra's licenses with `uv run --no-dev --extra whisper --with pip-licenses python scripts/check_licenses.py`.
 
+## Optional extra `llm`
+
+Installed with `uv sync --extra llm` (or `pip install georg[llm]`). Needed only by the `llama_cpp` transcript formatter (the default), which imports it lazily.
+
+| Dependency | Use | License | Notes |
+|---|---|---|---|
+| llama-cpp-python | Runs GGUF language models on the CPU (bundles llama.cpp, MIT) | MIT | Built from source on install (needs a C/C++ compiler; CMake comes from PyPI), about 2 minutes. |
+| huggingface-hub | Downloads the model file on first use | Apache-2.0 | Pulls in filelock (Unlicense), fsspec (BSD), tqdm (MPL-2.0/MIT), hf-xet (Apache-2.0) and others. |
+| diskcache, numpy, jinja2, typing-extensions | llama-cpp-python dependencies | Apache-2.0, BSD, BSD, PSF | |
+
+Default model: [Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507) (Apache-2.0), as the Q4_K_M GGUF conversion from [unsloth/Qwen3-4B-Instruct-2507-GGUF](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) (Apache-2.0), 2.5 GB. Use only models under OSI-approved licenses (e.g. Apache-2.0 or MIT Qwen3, Mistral or Phi releases); Llama, Gemma and Qwen2.5-3B (Qwen research license) models are not allowed. The Qwen3 instruct-2507 models never emit reasoning; for hybrid Qwen3 models the formatter sends `/no_think` and drops any `<think>` block.
+
+The model is downloaded on first use into `cache_dir` (default: the Hugging Face cache, `$HF_HOME`). To pre-download it, for example on a host or image without network access at run time:
+
+```sh
+uv run --extra llm hf download unsloth/Qwen3-4B-Instruct-2507-GGUF \
+    Qwen3-4B-Instruct-2507-Q4_K_M.gguf --cache-dir /var/lib/georg/models
+```
+
+then set `cache_dir = "/var/lib/georg/models"` and `local_files_only = true`, or download with `--local-dir DIR` and set `model_path = "DIR/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"`. The Docker build arg `GEORG_BAKE_MODEL` (off by default) bakes a model into the image at `/opt/georg/models`:
+
+```sh
+docker build -f deploy/Dockerfile --build-arg GEORG_EXTRAS="llm" \
+    --build-arg GEORG_BAKE_MODEL="unsloth/Qwen3-4B-Instruct-2507-GGUF Qwen3-4B-Instruct-2507-Q4_K_M.gguf" .
+```
+
+with `model_path = "/opt/georg/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"` in the formatter options.
+
+Formatter options (`[processors] formatter = { type = "llama_cpp", options = { ... } }`): `model_repo`, `model_file`, `model_path`, `cache_dir`, `local_files_only`, `threads` (0 = llama.cpp default), `context_size` (4096), `temperature` (0), `retry_temperature` (0.3), `seed` (0), `min_chunk_words` (400), `max_chunk_words` (700), `disable_thinking` (true), `prompt_version` / `prompt_file` (the same templates as `openai_chat`). The transcript is split at sentence ends into chunks; a chunk whose words the model changes is retried once at `retry_temperature`, and if it still changes words its original text is kept unformatted and the review page shows a warning.
+
+Check the extra's licenses with `uv run --no-dev --extra llm --with pip-licenses python scripts/check_licenses.py`.
+
 ## Optional extra `gdrive`
 
 Installed with `uv sync --extra gdrive` (or `pip install georg[gdrive]`). Needed only by the `google_drive` input and the `google_drive_upload` output, which import it lazily; Drive API calls themselves use `httpx` against the Drive v3 REST API. See [google-drive.md](google-drive.md) for the service account setup.

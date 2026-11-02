@@ -70,7 +70,8 @@ class ProcessorsConfig(_Section):
     classifier: ModuleConfig
     detector: ModuleConfig
     transcriber: ModuleConfig
-    formatter: ModuleConfig
+    formatter: ModuleConfig = ModuleConfig(type="llama_cpp")
+    """Defaults to the local llama.cpp formatter, which needs no API key."""
     metadata: ModuleConfig
 
 

@@ -19,6 +19,12 @@ RUN uv sync --locked --no-dev --no-install-project $(for e in $GEORG_EXTRAS; do 
 COPY src ./src
 RUN uv sync --locked --no-dev $(for e in $GEORG_EXTRAS; do echo --extra $e; done)
 
+# Optionally bake a GGUF model for the `llama_cpp` formatter into the image (needs the
+# `llm` extra), e.g. "unsloth/Qwen3-4B-Instruct-2507-GGUF Qwen3-4B-Instruct-2507-Q4_K_M.gguf".
+# It lands in /opt/georg/models; point the formatter's `model_path` at the file.
+ARG GEORG_BAKE_MODEL=""
+RUN if [ -n "$GEORG_BAKE_MODEL" ]; then hf download $GEORG_BAKE_MODEL --local-dir /opt/georg/models; fi
+
 RUN useradd --create-home --uid 1000 georg
 USER georg
 CMD ["georg", "--help"]

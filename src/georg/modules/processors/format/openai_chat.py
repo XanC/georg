@@ -8,13 +8,9 @@ retried once, and if it still differs the result is returned with
 `words_preserved=False` and the differences listed for the reviewer.
 """
 
-import hashlib
-import re
 import time
 from collections.abc import Callable, Mapping
-from importlib import resources
 from pathlib import Path
-from string import Template
 from typing import Any
 
 import httpx
@@ -24,11 +20,10 @@ from georg.core.config import resolve_secret
 from georg.core.errors import ConfigError
 from georg.core.types import FormatContext, FormattedTranscript, Transcript
 from georg.llm.chat import ChatClient
-from georg.modules.processors.format.words import compare_word_sequences, tokenize
+from georg.modules.processors.format.prompt import clean_output, load_template
+from georg.modules.processors.format.words import compare_word_sequences
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
-_FENCE = re.compile(r"^```[\w-]*\n(?P<body>.*)\n```$", re.DOTALL)
-_HEADING = re.compile(r"^(?:#{1,6}[ \t]+[^\n]*|\*\*[^*\n]+\*\*|__[^_\n]+__)[ \t]*(?:\n|$)")
 
 
 class FormatterOptions(BaseModel):
@@ -48,22 +43,6 @@ class FormatterOptions(BaseModel):
     """HTTP attempts per request (transient errors only)."""
 
 
-def _load_template(opts: FormatterOptions) -> tuple[Template, str]:
-    try:
-        if opts.prompt_file is not None:
-            text = opts.prompt_file.read_text(encoding="utf-8")
-            prompt_id = "file-" + hashlib.sha256(text.encode()).hexdigest()[:12]
-        else:
-            name = f"format_{opts.prompt_version}.txt"
-            text = resources.files(__package__).joinpath("prompts", name).read_text("utf-8")
-            prompt_id = opts.prompt_version
-    except OSError as exc:
-        raise ConfigError(f"formatter prompt template not found: {exc}") from exc
-    if "$text" not in text:
-        raise ConfigError("formatter prompt template must contain $text")
-    return Template(text), prompt_id
-
-
 def split_for_formatting(transcript: Transcript, max_words: int) -> list[str]:
     """Group segment texts into chunks of at most `max_words` words (larger segments split)."""
     pieces: list[list[str]] = []
@@ -77,19 +56,6 @@ def split_for_formatting(transcript: Transcript, max_words: int) -> list[str]:
         else:
             chunks.append(list(piece))
     return [" ".join(chunk) for chunk in chunks]
-
-
-def _clean(output: str, source: str) -> str:
-    text = output.strip()
-    fenced = _FENCE.match(text)
-    if fenced:
-        text = fenced.group("body").strip()
-    heading = _HEADING.match(text)
-    if heading:
-        head = tokenize(heading.group(0))
-        if tokenize(source)[: len(head)] != head:
-            text = text[heading.end() :].strip()
-    return text
 
 
 class OpenAIChatFormatter:
@@ -106,7 +72,9 @@ class OpenAIChatFormatter:
             self.options = FormatterOptions.model_validate(dict(options))
         except ValidationError as exc:
             raise ConfigError(f"formatter options: {exc}") from exc
-        self._template, prompt_id = _load_template(self.options)
+        self._template, prompt_id = load_template(
+            self.options.prompt_version, self.options.prompt_file
+        )
         self.version = f"openai_chat-1+prompt-{prompt_id}"
         self._chat = ChatClient(
             base_url=self.options.base_url,
@@ -139,7 +107,7 @@ class OpenAIChatFormatter:
                 model=self.options.model,
                 temperature=self.options.temperature,
             )
-            formatted = _clean(result.content, text)
+            formatted = clean_output(result.content, text)
             if compare_word_sequences(text, formatted).preserved:
                 break
         return formatted

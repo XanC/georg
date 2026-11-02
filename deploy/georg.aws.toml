@@ -26,7 +26,11 @@ detector = { type = "heuristic" }
 transcriber = { type = "faster_whisper", options = { model = "large-v3-turbo", compute_type = "int8", language = "en" } }
 # Hosted alternative (lemonfox.ai or any OpenAI-compatible API):
 # transcriber = { type = "openai_compatible", options = { base_url = "https://api.lemonfox.ai/v1", api_key = "env:LEMONFOX_API_KEY" } }
-formatter = { type = "openai_chat", options = { model = "gpt-4o-mini", api_key = "env:OPENAI_API_KEY" } }
+# Local open-weights model on the CPU (needs the `llm` extra); no API key. The GGUF model
+# (~2.5 GB) is downloaded on first use; see docs/dependencies.md to pre-download it.
+formatter = { type = "llama_cpp", options = { cache_dir = "/var/lib/georg/models" } }
+# Hosted alternative (OpenAI or any OpenAI-compatible chat API):
+# formatter = { type = "openai_chat", options = { model = "gpt-4o-mini", api_key = "env:OPENAI_API_KEY" } }
 metadata = { type = "rules" }
 
 # Renditions default to sermon, service_hq and service_phone.

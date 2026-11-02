@@ -1,6 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Transcript formatter backed by an OpenAI-compatible chat model."""
+"""Transcript formatters: a local llama.cpp model or an OpenAI-compatible chat API."""
 
+from georg.modules.processors.format.llama_cpp import (
+    LlamaCppFormatter,
+    LlamaFormatterOptions,
+    split_sentences,
+)
 from georg.modules.processors.format.openai_chat import (
     FormatterOptions,
     OpenAIChatFormatter,
@@ -14,9 +19,12 @@ from georg.modules.processors.format.words import (
 
 __all__ = [
     "FormatterOptions",
+    "LlamaCppFormatter",
+    "LlamaFormatterOptions",
     "OpenAIChatFormatter",
     "WordComparison",
     "compare_word_sequences",
     "split_for_formatting",
+    "split_sentences",
     "tokenize",
 ]
