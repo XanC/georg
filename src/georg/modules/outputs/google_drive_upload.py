@@ -26,7 +26,7 @@ from georg.gdrive import (
     FOLDER_MIME,
     SCOPE_DRIVE,
     DriveClient,
-    ServiceAccountTokens,
+    GoogleTokens,
     TokenSource,
     quote_query,
 )
@@ -59,11 +59,11 @@ class GoogleDriveUploadOptions(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     folder_id: str = Field(min_length=1)
-    """Archive folder, may be "env:NAME"; it should be on a shared drive (docs/google-drive.md)."""
+    """Archive folder, may be "env:NAME"; for a service account, on a shared drive."""
     credentials_file: str = "env:GOOGLE_APPLICATION_CREDENTIALS"
-    """Path to the service account JSON key, usually "env:NAME"."""
+    """Service account key or `georg drive-login` file, usually "env:NAME"."""
     subject: str | None = None
-    """Workspace user to impersonate (domain-wide delegation); normally unset."""
+    """Workspace user a service account impersonates (domain-wide delegation)."""
     filename: str = "{date}.mp3"
     subfolder: str | None = None
     """Optional subfolder of `folder_id`, e.g. "SPX {mmddyy}"; created if missing."""
@@ -142,7 +142,7 @@ class GoogleDriveUploadOutput:
         self.folder_id = resolve_secret(opts.folder_id)
         self.renditions = frozenset({opts.rendition})
         client = http_client or httpx.Client(timeout=opts.timeout_s, follow_redirects=True)
-        tokens = credentials or ServiceAccountTokens(
+        tokens = credentials or GoogleTokens(
             opts.credentials_file, [SCOPE_DRIVE], subject=opts.subject, http_client=client
         )
         self._drive = DriveClient(tokens, client, attempts=opts.attempts, sleep=sleep)

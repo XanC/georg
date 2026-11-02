@@ -321,7 +321,7 @@ Runbook and implementation: [`docs/deploy-aws.md`](deploy-aws.md), `deploy/aws/`
 - **Cost ballpark** (list prices, unverified): about $2/month compute at ~10 h/week + ~$4 EBS + small S3/Route 53/Lambda ≈ **$7–10/month**, plus transcription/LLM API usage. Always-on would be ~$12–30/month.
 - **Portability:** with the watchdog off, the same compose file runs always-on on any VPS or office machine. The wake Lambda, schedule, and DNS hook live in `deploy/aws/` and are optional.
 
-**Input note:** original recordings come from a **private Google Drive** folder, which avoids YouTube's datacenter-IP blocking. Proposed access: a Google Cloud service account given read access to that folder (Drive API, `drive.readonly`), so no personal OAuth token needs refreshing. YouTube remains a possible later input.
+**Input note:** original recordings come from a **private Google Drive** folder, which avoids YouTube's datacenter-IP blocking. Access: either a Google Cloud service account shared on the folder, or (for a congregation without Google Workspace, as at St. Paul) a congregation-owned Google account that signs in once with `georg drive-login`; its storage also holds the Drive archive, which a service account cannot own outside a shared drive. YouTube remains a possible later input.
 
 ## 8. Licensing implementation
 
@@ -348,7 +348,7 @@ Runbook and implementation: [`docs/deploy-aws.md`](deploy-aws.md), `deploy/aws/`
 | D10 | Artifact store on AWS | Local EBS + S3 backup now; S3Store in a later phase | No |
 | D11 | Multiple sermons per service | Answered: one sermon per service; schema still allows N, detector proposes 1 | No |
 | D12 | Podcast feed: keep `podcast.pl` vs Georg output module | Keep `podcast.pl` + R2 sync; Georg writes data compatible with them | No |
-| D13 | Google Drive auth: service account vs user OAuth | Service account shared on the folder | **Yes (Q3)** |
+| D13 | Google Drive auth: service account vs user OAuth | **Decided:** both supported; St. Paul (no Workspace) signs in as its own church Google account, which also stores the archive | No |
 | D14 | Hosting: stop-when-idle EC2 vs always-on | Stop-when-idle (owner agreed in principle) | No |
 | D15 | Mastering chain | **Decided:** ffmpeg-native (`acompressor` + loudness normalisation), A/B-checked by ear against the legacy Mono compressor + wavegain | No |
 | D16 | Renditions in the MVP | **Decided:** sermon → WordPress; telephone service audio → SFTP output; HQ service audio → Google Drive output | No |

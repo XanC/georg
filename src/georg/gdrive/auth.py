@@ -1,11 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""OAuth access tokens for a Google service account.
+"""OAuth access tokens for Google Drive.
 
-`google-auth` signs the JWT assertion and parses the key file; its token request is
-sent with `httpx` through a small adapter, so no `requests` dependency is needed.
+Credentials come from a JSON file of one of two kinds: a service account key, or an
+"authorized user" file holding the refresh token of a Google account that signed in once
+with `georg drive-login` (`georg.gdrive.login`). `google-auth` parses the file and
+refreshes tokens; its token request is sent with `httpx` through a small adapter, so no
+`requests` dependency is needed.
 """
 
 import importlib
+import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
@@ -70,12 +74,17 @@ class _AuthRequest:
         return _AuthResponse(response)
 
 
-class ServiceAccountTokens:
-    """`TokenSource` backed by a service account JSON key file.
+SERVICE_ACCOUNT = "service_account"
+AUTHORIZED_USER = "authorized_user"
 
-    `credentials_file` is a path or an "env:NAME" reference to one. The file is read on
-    the first `token()` call. `subject` impersonates a Workspace user through
-    domain-wide delegation.
+
+class GoogleTokens:
+    """`TokenSource` backed by a credentials JSON file.
+
+    `credentials_file` is a path or an "env:NAME" reference to one, read on the first
+    `token()` call. A service account key is used with `scopes`; `subject` impersonates
+    a Workspace user through domain-wide delegation. An authorized-user file keeps the
+    scopes granted when the account signed in, and cannot take a `subject`.
     """
 
     def __init__(
@@ -91,18 +100,48 @@ class ServiceAccountTokens:
         self._subject = subject
         self._client = http_client or httpx.Client(timeout=30.0)
         self._credentials: Any = None
+        self.kind: str | None = None
+
+    def _read(self) -> dict[str, Any]:
+        try:
+            info = json.loads(self.path.read_text())
+        except (OSError, ValueError) as exc:
+            raise ModuleError(
+                f"cannot read Google credentials {self.path}: {type(exc).__name__}"
+            ) from exc
+        if not isinstance(info, dict):
+            raise ModuleError(f"Google credentials {self.path} is not a JSON object")
+        return info
 
     def _load(self) -> Any:
-        service_account = _import("google.oauth2.service_account")
+        info = self._read()
+        kind = info.get("type")
         try:
-            creds = service_account.Credentials.from_service_account_file(
-                str(self.path), scopes=self._scopes
-            )
-        except (OSError, ValueError, KeyError) as exc:
+            if kind == SERVICE_ACCOUNT:
+                service_account = _import("google.oauth2.service_account")
+                creds = service_account.Credentials.from_service_account_info(
+                    info, scopes=self._scopes
+                )
+                creds = creds.with_subject(self._subject) if self._subject else creds
+            elif kind == AUTHORIZED_USER:
+                if self._subject:
+                    raise ModuleError(
+                        "`subject` needs a service account; "
+                        f"{self.path} is a signed-in Google account"
+                    )
+                user = _import("google.oauth2.credentials")
+                creds = user.Credentials.from_authorized_user_info(info)
+            else:
+                raise ModuleError(
+                    f"Google credentials {self.path} have type {kind!r}; expected "
+                    f"{SERVICE_ACCOUNT!r} or {AUTHORIZED_USER!r}"
+                )
+        except (ValueError, KeyError) as exc:
             raise ModuleError(
-                f"cannot read Google service account key {self.path}: {type(exc).__name__}"
+                f"cannot read Google credentials {self.path}: {type(exc).__name__}"
             ) from exc
-        return creds.with_subject(self._subject) if self._subject else creds
+        self.kind = kind
+        return creds
 
     def token(self, *, force_refresh: bool = False) -> str:
         if self._credentials is None:
@@ -114,9 +153,10 @@ class ServiceAccountTokens:
                 creds.refresh(_AuthRequest(self._client))
             except exceptions.RefreshError as exc:
                 retryable = bool(getattr(exc, "retryable", False))
-                raise ModuleError(
-                    f"Google token refresh failed: {exc}", retryable=retryable
-                ) from exc
+                message = f"Google token refresh failed: {exc}"
+                if self.kind == AUTHORIZED_USER and not retryable:
+                    message += "; the sign-in may have been revoked: run `georg drive-login`"
+                raise ModuleError(message, retryable=retryable) from exc
             except exceptions.TransportError as exc:
                 raise ModuleError(f"Google token refresh failed: {exc}", retryable=True) from exc
         token = creds.token

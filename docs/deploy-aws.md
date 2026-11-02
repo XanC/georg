@@ -102,9 +102,10 @@ put /georg/GEORG_SECRET_KEY "$(python3 -c 'import secrets; print(secrets.token_u
 # georg-bridge HMAC key; the same value goes into the site's wp-config.php (docs/wordpress.md).
 put /georg/GEORG_WP_KEY "$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
 
-# Google service account (Drive input and archive output) as a file.
-put /georg/files/google-service-account.json "$(cat service-account.json)"
-put /georg/GOOGLE_APPLICATION_CREDENTIALS /run/secrets/google-service-account.json
+# Google credentials (Drive input and archive output) as a file: the output of
+# `georg drive-login` or a service account key (docs/google-drive.md).
+put /georg/files/google-credentials.json "$(cat drive-credentials.json)"
+put /georg/GOOGLE_APPLICATION_CREDENTIALS /run/secrets/google-credentials.json
 put /georg/GEORG_DRIVE_FOLDER_ID …
 put /georg/GEORG_ARCHIVE_FOLDER_ID …
 

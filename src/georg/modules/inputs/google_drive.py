@@ -7,7 +7,8 @@ joined in name order); other files, such as the bulletin document, are passed on
 `hints["documents"]`. A subfolder is reported only once all of its videos have a size
 and have not been modified for `stable_minutes`, so uploads in progress are skipped.
 
-Access is through a Google service account the folder is shared with (read-only scope).
+Access is as a service account the folder is shared with, or as a Google account that
+signed in with `georg drive-login` (docs/google-drive.md).
 """
 
 import fnmatch
@@ -31,7 +32,7 @@ from georg.gdrive import (
     FOLDER_MIME,
     SCOPE_READONLY,
     DriveClient,
-    ServiceAccountTokens,
+    GoogleTokens,
     TokenSource,
     parse_time,
     quote_query,
@@ -50,9 +51,9 @@ class GoogleDriveInputOptions(BaseModel):
     folder_id: str = Field(min_length=1)
     """The shared folder that contains one subfolder per service; may be "env:NAME"."""
     credentials_file: str = "env:GOOGLE_APPLICATION_CREDENTIALS"
-    """Path to the service account JSON key, usually "env:NAME"."""
+    """Service account key or `georg drive-login` file, usually "env:NAME"."""
     subject: str | None = None
-    """Workspace user to impersonate (domain-wide delegation); normally unset."""
+    """Workspace user a service account impersonates (domain-wide delegation)."""
     folder_pattern: str = "SPX *"
     """Shell-style pattern for service subfolder names."""
     date_format: str = "%m.%d.%y"
@@ -162,7 +163,7 @@ class GoogleDriveInput:
         self.name = config.name
         self.folder_id = resolve_secret(opts.folder_id)
         client = http_client or httpx.Client(timeout=opts.timeout_s, follow_redirects=True)
-        tokens = credentials or ServiceAccountTokens(
+        tokens = credentials or GoogleTokens(
             opts.credentials_file, [SCOPE_READONLY], subject=opts.subject, http_client=client
         )
         self._drive = DriveClient(tokens, client, attempts=opts.attempts, sleep=sleep)

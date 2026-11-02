@@ -234,6 +234,21 @@ def _user_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def _drive_login(args: argparse.Namespace) -> int:
+    from georg.gdrive import SCOPE_DRIVE, SCOPE_READONLY
+    from georg.gdrive.login import load_client, login
+
+    email = login(
+        load_client(args.client),
+        args.out,
+        scope=SCOPE_READONLY if args.read_only else SCOPE_DRIVE,
+        paste=args.no_browser,
+    )
+    print(f"signed in as {email or 'an unknown account'}; credentials written to {args.out}")
+    print("point the Drive modules' credentials_file (or $GOOGLE_APPLICATION_CREDENTIALS) at it")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="georg", description=__doc__)
     parser.add_argument("--version", action="version", version=f"georg {__version__}")
@@ -309,6 +324,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--password-stdin", action="store_true", help="read the password from standard input"
     )
     user_add.set_defaults(handler=_user_add)
+
+    drive = commands.add_parser(
+        "drive-login",
+        help="sign in to Google Drive as a Google account",
+        description="Sign in once as the Google account Georg reads recordings from and "
+        "archives to, and save its refresh token (docs/google-drive.md).",
+    )
+    drive.add_argument(
+        "--client", type=Path, required=True, help="Desktop app OAuth client JSON file"
+    )
+    drive.add_argument(
+        "--out",
+        type=Path,
+        default=Path("drive-credentials.json"),
+        help="credentials file to write (default: ./drive-credentials.json)",
+    )
+    drive.add_argument(
+        "--read-only", action="store_true", help="request read-only access (no archive upload)"
+    )
+    drive.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="print the address and ask for the redirected one, e.g. over SSH",
+    )
+    drive.set_defaults(handler=_drive_login)
 
     db = commands.add_parser("db", help="manage the database")
     db_commands = db.add_subparsers(dest="db_command", metavar="COMMAND", required=True)
