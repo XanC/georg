@@ -33,6 +33,10 @@ whisper = [
 gdrive = [
     "google-auth>=2.30",
 ]
+llm = [
+    "huggingface-hub>=0.24",
+    "llama-cpp-python>=0.3.9",
+]
 
 [dependency-groups]
 dev = [
@@ -74,7 +78,7 @@ packages = ["georg"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["inaSpeechSegmenter", "inaSpeechSegmenter.*", "faster_whisper", "faster_whisper.*", "numpy", "numpy.*", "google", "google.*"]
+module = ["inaSpeechSegmenter", "inaSpeechSegmenter.*", "faster_whisper", "faster_whisper.*", "numpy", "numpy.*", "google", "google.*", "llama_cpp", "llama_cpp.*", "huggingface_hub", "huggingface_hub.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

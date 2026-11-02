@@ -186,7 +186,7 @@ Notes:
 | 4 | detect | segments + params → `boundary_proposal` | trivial | parameters change |
 | 5 | transcribe | service audio → `transcript_raw` (timestamped) | **expensive ($ or CPU)** | provider changes |
 | 6 | extract_sermon | service audio + revision range → `sermon_audio` (MP3, padding, fades, loudness-normalized, ID3 tags) | cheap | range changes |
-| 7 | format | transcript slice for range → `transcript_formatted` | LLM call | range changes (if not hand-edited) |
+| 7 | format | transcript slice for range → `transcript_formatted` | local (`llama_cpp`, default) or hosted (`openai_chat`) LLM call | range changes (if not hand-edited) |
 | 8 | metadata | source hints + formatted transcript + config defaults → `metadata_proposal` | LLM call | on request |
 | 9 | draft | assemble revision #1 (author=system), mark "ready for review", notify | — | — |
 

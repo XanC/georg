@@ -271,7 +271,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=parse_boundaries,
         help="override detection: service_start,sermon_start,sermon_end,service_end",
     )
-    run.add_argument("--no-format", action="store_true", help="skip the LLM formatter")
+    run.add_argument("--no-format", action="store_true", help="skip the transcript formatter")
     run.set_defaults(handler=_run)
 
     disc = commands.add_parser("discover", help="find new recordings and queue them")

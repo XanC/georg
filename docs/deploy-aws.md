@@ -79,7 +79,7 @@ Store, writes them to `/run/georg`, updates the Route 53 record (if configured),
    sudo systemctl start georg.service georg-discover.timer
    ```
 
-   The first boot builds the image with the `classify`, `whisper` and `gdrive` extras
+   The first boot builds the image with the `classify`, `whisper`, `llm` and `gdrive` extras
    (several minutes; `GEORG_EXTRAS` in `deploy/compose.yaml` selects them).
 
 6. **Check.** `curl https://georg.stpaulaustin.org/healthz` and open the `WakeUrl` output
