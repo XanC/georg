@@ -29,6 +29,8 @@ Installed with `uv sync --extra classify` (or `pip install georg[classify]`). Ne
 
 inaSpeechSegmenter declares `tensorflow[and-cuda]` and `onnxruntime-gpu`, which pull in proprietary NVIDIA CUDA wheels. `pyproject.toml` overrides these (`[tool.uv] override-dependencies`) to plain `tensorflow` and no `onnxruntime-gpu`: Georg runs on CPU and never imports the ONNX-based VBx segmenter. Installing with pip instead of uv ignores the override and brings the NVIDIA wheels back.
 
+Generation speed is bound by memory bandwidth, so more threads than physical cores rarely helps. On shared or burstable vCPUs spinning OpenMP workers slow llama.cpp down several times over; the formatter therefore sets `OMP_WAIT_POLICY=PASSIVE` unless the environment already sets it.
+
 Check the extra's licenses with `uv run --no-dev --extra classify --with pip-licenses python scripts/check_licenses.py`.
 
 Measured cost (CPU only, 8 vCPU, synthetic 2-hour 16 kHz mono FLAC, default 600 s chunks): about 80 s and 2.4 GB peak RSS. Whole-file processing (`chunk_s = None`) took about 62 s but 9 GB.
