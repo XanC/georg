@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,7 @@ def transcript(*texts: str) -> Transcript:
 
 
 def chunk_of(messages: list[dict[str, str]]) -> str:
-    return messages[-1]["content"].split("Text:\n", 1)[1].strip()
+    return re.split(r"(?:Text|Sentences):\n", messages[-1]["content"], maxsplit=1)[1].strip()
 
 
 class FakeLlama:
@@ -53,6 +54,10 @@ class FakeLlama:
 
 
 def make(fake: FakeLlama, **options: Any) -> LlamaCppFormatter:
+    return LlamaCppFormatter({"mode": "rewrite", **options}, model_factory=lambda _: fake)
+
+
+def breaks(fake: FakeLlama, **options: Any) -> LlamaCppFormatter:
     return LlamaCppFormatter(options, model_factory=lambda _: fake)
 
 
@@ -76,7 +81,9 @@ def test_formats_with_shared_prompt_and_settings() -> None:
     prompt = call["messages"][-1]["content"]
     assert "Do NOT change any words" in prompt and "(en)" in prompt
     assert chunk_of(call["messages"]) == "grace to you and peace"
-    assert formatter.version.startswith("llama_cpp-r1-Qwen3-4B-Instruct-2507-Q4_K_M.gguf-prompt-v1")
+    assert formatter.version.startswith(
+        "llama_cpp-r1-rewrite-Qwen3-4B-Instruct-2507-Q4_K_M.gguf-prompt-v1"
+    )
 
 
 def test_thinking_block_and_fence_are_dropped() -> None:
@@ -166,7 +173,7 @@ def test_model_is_loaded_once() -> None:
         loads.append(options)
         return FakeLlama()
 
-    formatter = LlamaCppFormatter({"threads": 4}, model_factory=factory)
+    formatter = LlamaCppFormatter({"threads": 4, "mode": "rewrite"}, model_factory=factory)
     formatter.format(transcript("Amen."), CTX)
     formatter.format(transcript("Amen."), CTX)
     assert len(loads) == 1 and loads[0].threads == 4
@@ -177,7 +184,7 @@ def test_bad_response_shape_is_module_error() -> None:
         def create_chat_completion(self, messages: Any, **kwargs: Any) -> Any:
             return {"choices": []}
 
-    formatter = LlamaCppFormatter({}, model_factory=lambda _: Broken())
+    formatter = LlamaCppFormatter({"mode": "rewrite"}, model_factory=lambda _: Broken())
     with pytest.raises(ModuleError, match="unexpected chat response shape"):
         formatter.format(transcript("Amen."), CTX)
 
@@ -192,6 +199,7 @@ def test_bad_response_shape_is_module_error() -> None:
         {"context_size": 512},
         {"prompt_version": "../x"},
         {"modle_file": "typo.gguf"},
+        {"mode": "paraphrase"},
     ],
 )
 def test_invalid_options_are_config_errors(options: dict[str, Any]) -> None:
@@ -203,6 +211,7 @@ def test_version_tracks_model_and_settings() -> None:
     base = LlamaCppFormatter({}).version
     assert LlamaCppFormatter({"model_path": "/m/other.gguf"}).version != base
     assert LlamaCppFormatter({"max_chunk_words": 600}).version != base
+    assert LlamaCppFormatter({"mode": "rewrite"}).version != base
     assert LlamaCppFormatter({"threads": 8}).version == base
 
 
@@ -227,11 +236,12 @@ def test_registered_and_default_in_config(tmp_path: Path, monkeypatch: pytest.Mo
         'classifier = { type = "ina_speech_segmenter" }\ndetector = { type = "heuristic" }\n'
         'transcriber = { type = "faster_whisper" }\nmetadata = { type = "rules" }\n'
     )
-    fake = FakeLlama(lambda chunk, n: "Grace to you.")
+    fake = FakeLlama(lambda chunk, n: "2")
     monkeypatch.setattr(llama_cpp, "_load_model", lambda _: fake)
     formatter = build_processors(load_config(path).processors).formatter
-    assert isinstance(formatter, LlamaCppFormatter)
-    assert formatter.format(transcript("grace to you"), CTX).markdown == "Grace to you."
+    assert isinstance(formatter, LlamaCppFormatter) and formatter.options.mode == "breaks"
+    result = formatter.format(transcript("Grace to you.", "And peace."), CTX)
+    assert result.markdown == "Grace to you.\n\nAnd peace." and result.discrepancies == ()
 
 
 def test_build_processor_by_type() -> None:
@@ -245,3 +255,69 @@ def test_load_model_prefers_passive_openmp_and_needs_extra(monkeypatch: pytest.M
     with pytest.raises(ModuleError, match="llm"):
         llama_cpp._load_model(LlamaFormatterOptions())
     assert os.environ["OMP_WAIT_POLICY"] == "PASSIVE"
+
+
+def paragraphs_of(text: str) -> list[list[str]]:
+    return [re.findall(r"end(\d+)\.", p) for p in text.split("\n\n")]
+
+
+def test_breaks_mode_rebuilds_paragraphs_from_sentence_numbers() -> None:
+    fake = FakeLlama(lambda chunk, n: "<think>\n\n</think>\n\n3, 5.")
+    source = transcript(sentences(3), sentences(3, start=3))
+    result = breaks(fake).format(source, CTX)
+    assert paragraphs_of(result.markdown) == [["0", "1"], ["2", "3"], ["4", "5"]]
+    assert result.words_preserved and result.discrepancies == ()
+    call = fake.calls[0]
+    prompt = call["messages"][-1]["content"]
+    assert "start a new paragraph" in prompt and "(en)" not in prompt and "in en." in prompt
+    assert chunk_of(call["messages"]).splitlines()[1] == "[2] " + sentences(1, start=1)
+    assert call["temperature"] == 0.0 and call["max_tokens"] == 6 * 4 + 32
+    assert "-breaks-" in breaks(fake).version
+
+
+def test_breaks_unusable_reply_is_retried_then_left_unformatted() -> None:
+    replies = iter(["Sure! Paragraphs start at 3", "99", "4"])
+    fake = FakeLlama(lambda chunk, n: next(replies))
+    result = breaks(fake, min_chunk_words=50, max_chunk_words=60).format(
+        transcript(sentences(6), sentences(6, start=6)), CTX
+    )
+    assert [(c["temperature"], c["seed"]) for c in fake.calls] == [(0.0, 0), (0.3, 1), (0.0, 0)]
+    first = [str(i) for i in range(6)]
+    assert paragraphs_of(result.markdown) == [first, ["6", "7", "8"], ["9", "10", "11"]]
+    assert result.words_preserved
+    assert result.discrepancies == (
+        "chunk 1 of 2 (words 1-60): the model gave no usable breaks,"
+        " so this part is left unformatted",
+    )
+
+
+def test_breaks_empty_reply_is_accepted_only_for_short_text() -> None:
+    fake = FakeLlama(lambda chunk, n: "")
+    short = breaks(fake).format(transcript(sentences(3)), CTX)
+    assert short.markdown == sentences(3) and short.discrepancies == ()
+    long = breaks(fake, min_chunk_words=20, max_chunk_words=40).format(
+        transcript(sentences(3)), CTX
+    )
+    assert long.markdown == sentences(3) and len(long.discrepancies) == 1
+
+
+def test_breaks_last_paragraph_is_carried_into_the_next_chunk() -> None:
+    replies = iter(["11", "11, 21"])
+    fake = FakeLlama(lambda chunk, n: next(replies))
+    result = breaks(fake, min_chunk_words=100, max_chunk_words=200).format(
+        transcript(sentences(20), sentences(20, start=20)), CTX
+    )
+    assert len(fake.calls) == 2
+    second = chunk_of(fake.calls[1]["messages"]).splitlines()
+    assert len(second) == 30 and second[0] == "[1] " + sentences(1, start=10)
+    expected = [[str(i) for i in range(a, a + 10)] for a in (0, 10, 20, 30)]
+    assert paragraphs_of(result.markdown) == expected
+    assert result.words_preserved and result.discrepancies == ()
+
+
+def test_breaks_single_sentence_needs_no_model() -> None:
+    def factory(_: LlamaFormatterOptions) -> FakeLlama:
+        raise AssertionError("model loaded")
+
+    result = LlamaCppFormatter({}, model_factory=factory).format(transcript("Amen."), CTX)
+    assert result.markdown == "Amen."

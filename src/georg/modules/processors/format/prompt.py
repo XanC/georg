@@ -15,14 +15,16 @@ _HEADING = re.compile(r"^(?:#{1,6}[ \t]+[^\n]*|\*\*[^*\n]+\*\*|__[^_\n]+__)[ \t]
 _THINK = re.compile(r"^\s*<think>.*?</think>", re.DOTALL)
 
 
-def load_template(prompt_version: str, prompt_file: Path | None) -> tuple[Template, str]:
-    """Load `prompts/format_<version>.txt` or `prompt_file`; return it and a prompt id."""
+def load_template(
+    prompt_version: str, prompt_file: Path | None, stem: str = "format"
+) -> tuple[Template, str]:
+    """Load `prompts/<stem>_<version>.txt` or `prompt_file`; return it and a prompt id."""
     try:
         if prompt_file is not None:
             text = prompt_file.read_text(encoding="utf-8")
             prompt_id = "file-" + hashlib.sha256(text.encode()).hexdigest()[:12]
         else:
-            name = f"format_{prompt_version}.txt"
+            name = f"{stem}_{prompt_version}.txt"
             text = resources.files(__package__).joinpath("prompts", name).read_text("utf-8")
             prompt_id = prompt_version
     except OSError as exc:

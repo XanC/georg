@@ -42,7 +42,7 @@
   </div>
   {% elif report.get("discrepancies") %}
   <div class="flash warning" role="status">
-    <p>Parts of the transcript could not be formatted without changing words and were left unformatted.</p>
+    <p>Parts of the transcript could not be formatted safely and were left unformatted.</p>
     <ul>{% for d in report.discrepancies %}<li>{{ d }}</li>{% endfor %}</ul>
   </div>
   {% endif %}

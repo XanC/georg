@@ -6,18 +6,24 @@ is formatted. The model is downloaded from Hugging Face on first use into `cache
 (default: the Hugging Face cache) unless `model_path` points at a local GGUF file; after
 that no network access is needed.
 
-The prompt is the same versioned template the `openai_chat` formatter uses. The
-transcript is split at sentence ends into chunks of `min_chunk_words`-`max_chunk_words`
-words. Each chunk's output is checked with `compare_word_sequences`; a chunk whose words
-changed is retried once at `retry_temperature`, and if it still differs the chunk's
-original text is used unformatted and a warning is added to `discrepancies`.
+The transcript is split at sentence ends into chunks of `min_chunk_words`-`max_chunk_words`
+words. In the default `breaks` mode the model sees a chunk's numbered sentences and
+replies only with the numbers that start paragraphs, so the output is rebuilt from the
+original sentences and no word can change; the last paragraph of each chunk is carried
+into the next one as context, so chunk ends are not forced paragraph breaks. In
+`rewrite` mode the model returns the formatted text using the `openai_chat` prompt
+template, and each chunk is checked with `compare_word_sequences`.
+
+A chunk whose reply is unusable (unparseable numbers, or changed words) is retried once
+at `retry_temperature`; if that fails too its original text is used unformatted and a
+warning is added to `discrepancies`.
 """
 
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -32,6 +38,7 @@ DEFAULT_MODEL_REPO = "unsloth/Qwen3-4B-Instruct-2507-GGUF"
 DEFAULT_MODEL_FILE = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
 _SENTENCE_END = re.compile(r"[.?!][\"'\u201d\u2019\u00bb)\]]*$")
 _NO_THINK = "/no_think"
+_BREAKS_REPLY = re.compile(r"[\d\s,;\[\]]*")
 
 
 class LlamaLike(Protocol):
@@ -58,13 +65,18 @@ class LlamaFormatterOptions(BaseModel):
     retry_temperature: float = Field(default=0.3, ge=0.0, le=2.0)
     """Used for the single retry of a chunk whose words changed."""
     seed: int = Field(default=0, ge=0)
+    mode: Literal["breaks", "rewrite"] = "breaks"
+    """`breaks`: the model only picks paragraph starts. `rewrite`: it returns the text."""
     min_chunk_words: int = Field(default=400, gt=0)
     max_chunk_words: int = Field(default=700, gt=0)
     disable_thinking: bool = True
     """Send Qwen3's `/no_think` switch and drop any `<think>` block from the reply."""
     prompt_version: str = Field(default="v1", pattern=r"^[a-z0-9_-]+$")
     prompt_file: Path | None = None
-    """A custom template using `$text` and `$language`; overrides `prompt_version`."""
+    """A custom template using `$text` and `$language`; overrides `prompt_version`.
+
+    `breaks` mode loads `prompts/breaks_<version>.txt`, `rewrite` mode
+    `prompts/format_<version>.txt` (shared with `openai_chat`)."""
 
     @model_validator(mode="after")
     def _chunk_range(self) -> "LlamaFormatterOptions":
@@ -177,12 +189,13 @@ class LlamaCppFormatter:
         except ValidationError as exc:
             raise ConfigError(f"{TYPE_NAME}: {exc}") from exc
         o = self.options
-        self._template, prompt_id = load_template(o.prompt_version, o.prompt_file)
+        stem = "breaks" if o.mode == "breaks" else "format"
+        self._template, prompt_id = load_template(o.prompt_version, o.prompt_file, stem)
         self._factory = model_factory
         self._model: LlamaLike | None = None
         model = o.model_path.name if o.model_path else o.model_file
         self.version = (
-            f"{TYPE_NAME}-r{_REVISION}-{model}-prompt-{prompt_id}-t{o.temperature:g}"
+            f"{TYPE_NAME}-r{_REVISION}-{o.mode}-{model}-prompt-{prompt_id}-t{o.temperature:g}"
             f"-rt{o.retry_temperature:g}-s{o.seed}-w{o.min_chunk_words}-{o.max_chunk_words}"
             f"-nt{int(o.disable_thinking)}"
         )
@@ -192,20 +205,10 @@ class LlamaCppFormatter:
         chunks = split_sentences(transcript.text, o.min_chunk_words, o.max_chunk_words)
         if not chunks:
             return FormattedTranscript(markdown="", words_preserved=True)
-        warnings: list[str] = []
-        parts: list[str] = []
-        position = 1
-        for index, chunk in enumerate(chunks, start=1):
-            formatted = self._format_chunk(chunk, ctx.language)
-            words = len(chunk.split())
-            if formatted is None:
-                warnings.append(
-                    f"chunk {index} of {len(chunks)} (words {position}-{position + words - 1}):"
-                    " the model changed words, so this part is left unformatted"
-                )
-                formatted = chunk
-            parts.append(formatted)
-            position += words
+        if o.mode == "breaks":
+            parts, warnings = self._format_breaks(chunks, ctx.language)
+        else:
+            parts, warnings = self._format_rewrite(chunks, ctx.language)
         markdown = "\n\n".join(parts)
         check = compare_word_sequences(transcript.text, markdown)
         return FormattedTranscript(
@@ -214,26 +217,95 @@ class LlamaCppFormatter:
             discrepancies=(*warnings, *check.discrepancies),
         )
 
-    def _format_chunk(self, text: str, language: str) -> str | None:
+    def _format_rewrite(self, chunks: list[str], language: str) -> tuple[list[str], list[str]]:
+        parts: list[str] = []
+        warnings: list[str] = []
+        position = 1
+        for index, chunk in enumerate(chunks, start=1):
+            formatted = self._rewrite_chunk(chunk, language)
+            words = len(chunk.split())
+            if formatted is None:
+                warnings.append(
+                    _warning(index, len(chunks), position, words, "the model changed words")
+                )
+                formatted = chunk
+            parts.append(formatted)
+            position += words
+        return parts, warnings
+
+    def _rewrite_chunk(self, text: str, language: str) -> str | None:
         """The formatted chunk, or None if the model changed its words twice."""
-        o = self.options
-        messages: list[dict[str, str]] = []
-        if o.disable_thinking:
-            messages.append({"role": "system", "content": _NO_THINK})
-        prompt = self._template.safe_substitute(text=text, language=language)
-        messages.append({"role": "user", "content": prompt})
-        for temperature, seed in ((o.temperature, o.seed), (o.retry_temperature, o.seed + 1)):
-            formatted = clean_output(self._complete(messages, temperature, seed, text), text)
+        messages = self._messages(text, language)
+        max_tokens = min(len(text.split()) * 3 + 128, self.options.context_size // 2)
+        for temperature, seed in self._attempts():
+            reply = self._complete(messages, temperature, seed, max_tokens)
+            formatted = clean_output(reply, text)
             if formatted and compare_word_sequences(text, formatted).preserved:
                 return formatted
         return None
 
+    def _format_breaks(self, chunks: list[str], language: str) -> tuple[list[str], list[str]]:
+        paragraphs: list[list[str]] = []
+        warnings: list[str] = []
+        carry: list[str] = []
+        position = 1
+        for index, chunk in enumerate(chunks, start=1):
+            sentences = [" ".join(s) for s in _sentences(chunk)]
+            window = carry + sentences
+            found = self._paragraphs(window, language)
+            words = len(chunk.split())
+            if found is None:
+                warnings.append(
+                    _warning(index, len(chunks), position, words, "the model gave no usable breaks")
+                )
+                paragraphs.extend(p for p in (carry, sentences) if p)
+                carry = []
+            else:
+                *done, last = found
+                paragraphs.extend(done)
+                carry_words = sum(len(s.split()) for s in last)
+                if done and carry_words <= self.options.max_chunk_words // 2:
+                    carry = last
+                else:
+                    paragraphs.append(last)
+                    carry = []
+            position += words
+        if carry:
+            paragraphs.append(carry)
+        return [" ".join(p) for p in paragraphs], warnings
+
+    def _paragraphs(self, sentences: list[str], language: str) -> list[list[str]] | None:
+        """`sentences` grouped into paragraphs, or None if both replies were unusable."""
+        if len(sentences) < 2:
+            return [sentences]
+        numbered = "\n".join(f"[{i}] {s}" for i, s in enumerate(sentences, start=1))
+        messages = self._messages(numbered, language)
+        max_tokens = min(len(sentences) * 4 + 32, self.options.context_size // 2)
+        short = sum(len(s.split()) for s in sentences) < self.options.min_chunk_words
+        for temperature, seed in self._attempts():
+            reply = clean_output(self._complete(messages, temperature, seed, max_tokens), "")
+            starts = _parse_starts(reply, len(sentences))
+            if starts is not None and (starts or short):
+                return _group(sentences, starts)
+        return None
+
+    def _attempts(self) -> tuple[tuple[float, int], tuple[float, int]]:
+        o = self.options
+        return (o.temperature, o.seed), (o.retry_temperature, o.seed + 1)
+
+    def _messages(self, text: str, language: str) -> list[dict[str, str]]:
+        messages: list[dict[str, str]] = []
+        if self.options.disable_thinking:
+            messages.append({"role": "system", "content": _NO_THINK})
+        prompt = self._template.safe_substitute(text=text, language=language)
+        messages.append({"role": "user", "content": prompt})
+        return messages
+
     def _complete(
-        self, messages: Sequence[dict[str, str]], temperature: float, seed: int, text: str
+        self, messages: Sequence[dict[str, str]], temperature: float, seed: int, max_tokens: int
     ) -> str:
         if self._model is None:
             self._model = (self._factory or _load_model)(self.options)
-        max_tokens = min(len(text.split()) * 3 + 128, self.options.context_size // 2)
         try:
             result = self._model.create_chat_completion(
                 list(messages), temperature=temperature, seed=seed, max_tokens=max_tokens
@@ -246,3 +318,30 @@ class LlamaCppFormatter:
         if not isinstance(content, str):
             raise ModuleError(f"{TYPE_NAME}: chat response has no text content")
         return content
+
+
+def _parse_starts(reply: str, count: int) -> set[int] | None:
+    """Sentence numbers (2..count) from a reply like `4, 9, 13`; None if it isn't one."""
+    reply = reply.strip().rstrip(".")
+    if not _BREAKS_REPLY.fullmatch(reply):
+        return None
+    numbers = {int(n) for n in re.findall(r"\d+", reply)}
+    if any(n < 1 or n > count for n in numbers):
+        return None
+    return numbers - {1}
+
+
+def _group(sentences: list[str], starts: set[int]) -> list[list[str]]:
+    paragraphs: list[list[str]] = []
+    for number, sentence in enumerate(sentences, start=1):
+        if number == 1 or number in starts:
+            paragraphs.append([])
+        paragraphs[-1].append(sentence)
+    return paragraphs
+
+
+def _warning(index: int, total: int, position: int, words: int, reason: str) -> str:
+    return (
+        f"chunk {index} of {total} (words {position}-{position + words - 1}):"
+        f" {reason}, so this part is left unformatted"
+    )
