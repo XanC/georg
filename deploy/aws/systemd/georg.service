@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Georg (docker compose: web, worker, caddy, litestream)
+Requires=docker.service georg-boot.service
+After=docker.service georg-boot.service
+RequiresMountsFor=/srv/georg
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/georg/deploy
+ExecStart=/usr/bin/docker compose --env-file /run/georg/host.env up -d --remove-orphans
+ExecStop=/usr/bin/docker compose --env-file /run/georg/host.env down
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target

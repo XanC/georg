@@ -6,7 +6,7 @@ from pathlib import Path
 
 HEADER = "# SPDX-License-Identifier: AGPL-3.0-only"
 PHP_HEADER = "// SPDX-License-Identifier: AGPL-3.0-only"
-ROOTS = ("src", "tests", "scripts")
+ROOTS = ("src", "tests", "scripts", "deploy")
 PHP_ROOTS = ("wordpress",)
 
 

@@ -39,8 +39,10 @@ dev = [
     "mypy>=1.11",
     "pip-licenses>=5.0",
     "pytest>=8.3",
+    "pyyaml>=6.0",
     "ruff>=0.6",
     "types-paramiko>=3.4",
+    "types-pyyaml>=6.0",
 ]
 
 [tool.uv]

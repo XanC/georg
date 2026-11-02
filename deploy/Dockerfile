@@ -11,10 +11,13 @@ WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Optional extras to install, space-separated, e.g. "classify whisper gdrive".
+ARG GEORG_EXTRAS=""
+
 COPY pyproject.toml uv.lock README.md LICENSE ./
-RUN uv sync --locked --no-dev --no-install-project
+RUN uv sync --locked --no-dev --no-install-project $(for e in $GEORG_EXTRAS; do echo --extra $e; done)
 COPY src ./src
-RUN uv sync --locked --no-dev
+RUN uv sync --locked --no-dev $(for e in $GEORG_EXTRAS; do echo --extra $e; done)
 
 RUN useradd --create-home --uid 1000 georg
 USER georg

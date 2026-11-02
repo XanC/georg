@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Georg: look for new recordings
+Requires=georg.service
+After=georg.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/georg/deploy
+ExecStart=/usr/bin/docker compose --env-file /run/georg/host.env exec -T georg-worker georg discover --config /etc/georg/georg.toml

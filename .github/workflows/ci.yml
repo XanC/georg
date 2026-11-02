@@ -31,6 +31,8 @@ jobs:
         run: find wordpress -name '*.php' -print0 | xargs -0 -n1 php -l
       - name: georg-bridge signing tests
         run: php wordpress/georg-bridge/tests/signing-test.php
+      - name: CloudFormation lint
+        run: uvx cfn-lint deploy/aws/georg.yaml
       - name: Dependency licenses
         run: uv run --no-dev --with pip-licenses python scripts/check_licenses.py
 
@@ -42,3 +44,7 @@ jobs:
         run: docker build -f deploy/Dockerfile -t georg:ci .
       - name: Smoke test
         run: docker run --rm georg:ci georg --version
+      - name: Compose file
+        run: |
+          mkdir -p /tmp/georg-run && touch /tmp/georg-run/georg.env
+          GEORG_RUN=/tmp/georg-run COMPOSE_PROFILES=backup docker compose -f deploy/compose.yaml config --quiet

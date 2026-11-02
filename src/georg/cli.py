@@ -158,10 +158,21 @@ def _discover(args: argparse.Namespace) -> int:
 
 
 def _worker(args: argparse.Namespace) -> int:
+    from datetime import timedelta
+
+    from georg.idle import ActivityMarker, IdleWatchdog, run_command
     from georg.pipeline import Worker
 
     config, engine = _open(args)
-    worker = Worker(config, engine)
+    watchdog = None
+    if config.idle_shutdown_minutes is not None and not args.once:
+        watchdog = IdleWatchdog(
+            engine,
+            idle_after=timedelta(minutes=config.idle_shutdown_minutes),
+            marker=ActivityMarker.for_data_dir(config.data_dir),
+            shutdown=run_command(config.idle_shutdown_command),
+        )
+    worker = Worker(config, engine, watchdog=watchdog)
     if args.once:
         while worker.run_once():
             pass

@@ -33,6 +33,7 @@ from georg.db.repositories import (
     ServiceRepository,
     UserRepository,
 )
+from georg.idle import EXEMPT_PATHS, ActivityMarker
 from georg.jobs.queue import JobInfo, JobQueue
 from georg.storage.base import ArtifactNotFoundError
 from georg.storage.local import LocalStore
@@ -108,6 +109,7 @@ def create_app(
     store: LocalStore | None = None,
     queue: JobQueue | None = None,
     source_url: str | None = None,
+    activity: ActivityMarker | None = None,
 ) -> FastAPI:
     """Build the review UI. The session secret defaults to `$GEORG_SECRET_KEY`."""
     secret_key = secret_key or os.environ.get(SECRET_ENV)
@@ -118,6 +120,8 @@ def create_app(
     sessions = session_factory(engine)
     readers = session_factory(engine, immediate=False)
     source_url = source_url or os.environ.get(SOURCE_URL_ENV, DEFAULT_SOURCE_URL)
+    if activity is None and config.idle_shutdown_minutes is not None:
+        activity = ActivityMarker.for_data_dir(config.data_dir)
 
     app = FastAPI(
         title="Georg",
@@ -143,6 +147,8 @@ def create_app(
     async def security_headers(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
+        if activity is not None and request.url.path not in EXEMPT_PATHS:
+            activity.touch()
         response = await call_next(request)
         for name, value in _SECURITY_HEADERS.items():
             response.headers.setdefault(name, value)
