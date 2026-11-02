@@ -71,6 +71,7 @@ services:
       - "443:443/udp"
     environment:
       GEORG_HOSTNAME: ${GEORG_HOSTNAME:-georg.stpaulaustin.org}
+      GEORG_ORIGIN_HOSTNAME: ${GEORG_ORIGIN_HOSTNAME:-origin.georg.stpaulaustin.org}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ${GEORG_ROOT:-/srv/georg}/caddy/data:/data

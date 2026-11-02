@@ -93,18 +93,33 @@ def test_stale_secret_files_are_removed(tmp_path: Path) -> None:
 
 def test_updates_dns_when_zone_configured(tmp_path: Path) -> None:
     route53, _ = _run(
-        tmp_path, {"GEORG_HOSTED_ZONE_ID": "Z123", "GEORG_HOSTNAME": "georg.example.org"}
+        tmp_path,
+        {
+            "GEORG_HOSTED_ZONE_ID": "Z123",
+            "GEORG_ORIGIN_HOSTNAME": "origin.georg.example.org",
+            "GEORG_HOSTNAME": "georg.example.org",
+        },
     )
     (change,) = route53.changes
     assert change["HostedZoneId"] == "Z123"
     record = change["ChangeBatch"]["Changes"][0]
     assert record["Action"] == "UPSERT"
     assert record["ResourceRecordSet"] == {
-        "Name": "georg.example.org",
+        "Name": "origin.georg.example.org",
         "Type": "A",
         "TTL": 60,
         "ResourceRecords": [{"Value": "203.0.113.7"}],
     }
+    host = (tmp_path / "run" / "host.env").read_text()
+    assert "GEORG_ORIGIN_HOSTNAME='origin.georg.example.org'" in host
+
+
+def test_dns_falls_back_to_hostname_without_origin_hostname(tmp_path: Path) -> None:
+    route53, _ = _run(
+        tmp_path, {"GEORG_HOSTED_ZONE_ID": "Z123", "GEORG_HOSTNAME": "georg.example.org"}
+    )
+    (change,) = route53.changes
+    assert change["ChangeBatch"]["Changes"][0]["ResourceRecordSet"]["Name"] == ("georg.example.org")
 
 
 def test_dns_is_optional(tmp_path: Path) -> None:

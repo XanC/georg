@@ -59,6 +59,7 @@ options = { folder_id = "env:GEORG_ARCHIVE_FOLDER_ID" }
 [review]
 require_approval = true
 notify = ["reviewer@example.org"]
-# The WakeUrl stack output, so links in review emails start a stopped instance.
-base_url = "https://REPLACE-WITH-WAKE-URL.lambda-url.us-east-2.on.aws"
+# The public hostname: CloudFront serves it whether the instance is running or
+# not (the wake page is the failover origin and starts it on demand).
+base_url = "https://georg.stpaulaustin.org"
 smtp = { host = "email-smtp.us-east-2.amazonaws.com", username = "env:GEORG_SMTP_USER", password = "env:GEORG_SMTP_PASSWORD", sender = "Georg <georg@stpaulaustin.org>" }

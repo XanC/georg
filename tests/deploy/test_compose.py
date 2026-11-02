@@ -47,7 +47,11 @@ def test_litestream_replicates_the_database() -> None:
 
 
 def test_caddy_hostname_is_configurable() -> None:
-    assert "{$GEORG_HOSTNAME:georg.stpaulaustin.org}" in (DEPLOY / "Caddyfile").read_text()
+    caddyfile = (DEPLOY / "Caddyfile").read_text()
+    assert "{$GEORG_HOSTNAME:georg.stpaulaustin.org}" in caddyfile
+    assert "{$GEORG_ORIGIN_HOSTNAME:origin.georg.stpaulaustin.org}" in caddyfile
+    env = _compose()["services"]["caddy"]["environment"]
+    assert "GEORG_ORIGIN_HOSTNAME" in env
 
 
 def test_aws_config_example_loads_and_watchdog_reaches_the_host() -> None:

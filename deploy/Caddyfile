@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-# Automatic HTTPS (Let's Encrypt) for $GEORG_HOSTNAME; certificates persist in /data.
-{$GEORG_HOSTNAME:georg.stpaulaustin.org} {
+# Automatic HTTPS (Let's Encrypt) for $GEORG_HOSTNAME and $GEORG_ORIGIN_HOSTNAME;
+# certificates persist in /data. The origin name is what CloudFront connects to
+# (it sends Host: <origin domain>, not the viewer's); the public name is kept so
+# the instance also answers when it is pointed at directly (no CloudFront).
+{$GEORG_HOSTNAME:georg.stpaulaustin.org}, {$GEORG_ORIGIN_HOSTNAME:origin.georg.stpaulaustin.org} {
 	encode zstd gzip
 	reverse_proxy georg-web:8000
 	header Strict-Transport-Security "max-age=31536000"

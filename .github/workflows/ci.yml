@@ -32,7 +32,7 @@ jobs:
       - name: georg-bridge signing tests
         run: php wordpress/georg-bridge/tests/signing-test.php
       - name: CloudFormation lint
-        run: uvx cfn-lint deploy/aws/georg.yaml
+        run: uvx cfn-lint deploy/aws/georg.yaml deploy/aws/cloudfront-certificate.yaml
       - name: Dependency licenses
         run: uv run --no-dev --with pip-licenses python scripts/check_licenses.py
 

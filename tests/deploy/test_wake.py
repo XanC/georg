@@ -24,7 +24,7 @@ class FakeEc2:
 @pytest.fixture(autouse=True)
 def _env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("INSTANCE_ID", "i-0123")
-    monkeypatch.setenv("APP_URL", "https://georg.example.org/")
+    monkeypatch.setenv("ORIGIN_URL", "https://origin.georg.example.org/")
 
 
 def _call(ec2: FakeEc2, *, healthy: bool = False, **event: str) -> dict[str, Any]:
@@ -36,7 +36,7 @@ def _call(ec2: FakeEc2, *, healthy: bool = False, **event: str) -> dict[str, Any
 
     result: dict[str, Any] = wake.handler(event, None, ec2=ec2, probe=probe)
     if probes:
-        assert probes == ["https://georg.example.org"]
+        assert probes == ["https://origin.georg.example.org"]
     return result
 
 
@@ -50,24 +50,28 @@ def test_stopped_instance_is_started() -> None:
     assert result["headers"]["Cache-Control"] == "no-store"
 
 
-def test_starting_instance_shows_page_without_starting_again() -> None:
-    for state, healthy in (("pending", False), ("running", False)):
-        ec2 = FakeEc2(state)
-        result = _call(ec2, healthy=healthy)
-        assert result["statusCode"] == 200
-        assert "about a minute" in result["body"]
-        assert ec2.started == []
+def test_pending_instance_shows_page_without_starting_again() -> None:
+    ec2 = FakeEc2("pending")
+    result = _call(ec2)
+    assert result["statusCode"] == 200
+    assert "about a minute" in result["body"]
+    assert ec2.started == []
 
 
-def test_healthy_instance_redirects_keeping_path() -> None:
-    result = _call(FakeEc2("running"), healthy=True, rawPath="/sermons/5", rawQueryString="a=1")
-    assert result["statusCode"] == 302
-    assert result["headers"]["Location"] == "https://georg.example.org/sermons/5?a=1"
+def test_running_but_unhealthy_instance_keeps_starting() -> None:
+    ec2 = FakeEc2("running")
+    result = _call(ec2, healthy=False)
+    assert result["statusCode"] == 200
+    assert "about a minute" in result["body"]
+    assert ec2.started == []
 
 
-def test_redirect_cannot_leave_the_app_host() -> None:
-    result = _call(FakeEc2("running"), healthy=True, rawPath="//evil.example/x")
-    assert result["headers"]["Location"] == "https://georg.example.org/evil.example/x"
+def test_healthy_instance_reloads_same_url_instead_of_redirecting() -> None:
+    result = _call(FakeEc2("running"), healthy=True, rawPath="/sermons/5")
+    assert result["statusCode"] == 200
+    assert "Location" not in result["headers"]
+    assert 'http-equiv="refresh"' in result["body"]
+    assert "Georg is up" in result["body"]
 
 
 def test_stopping_instance_waits() -> None:

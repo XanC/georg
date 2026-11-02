@@ -2,14 +2,17 @@
 
 This is the runbook for the single-instance deployment in `deploy/aws/` (architecture §7).
 One EC2 instance runs Docker Compose (`deploy/compose.yaml`): `georg-web`, `georg-worker`,
-`caddy` (automatic HTTPS) and `litestream` (SQLite → S3). It powers itself off when idle and
-is started by a weekly schedule or by opening the wake page.
+`caddy` (automatic HTTPS) and `litestream` (SQLite → S3). It powers itself off when idle.
+CloudFront answers `georg.stpaulaustin.org` whether the instance is running or not: the
+instance is the primary origin and a wake-page Lambda is the failover origin, so the
+browser only ever sees that one name.
 
 | Piece | Where |
 | --- | --- |
 | CloudFormation stack | `deploy/aws/georg.yaml` (wrapper: `deploy/aws/deploy.sh`) |
+| ACM certificate for CloudFront (us-east-1) | `deploy/aws/cloudfront-certificate.yaml` |
 | Boot: data volume, secrets, DNS | `deploy/aws/boot/`, `deploy/aws/systemd/` |
-| Wake page (Lambda function URL) | `deploy/aws/wake/index.py`, inlined in the template |
+| Wake origin (Lambda function URL) | `deploy/aws/wake/index.py`, inlined in the template |
 | Compose, Caddy, Litestream | `deploy/compose.yaml`, `deploy/Caddyfile`, `deploy/litestream.yml` |
 | Georg config for the host | `deploy/georg.aws.toml` → `/srv/georg/config/georg.toml` |
 
@@ -53,7 +56,8 @@ Store, writes them to `/run/georg`, updates the Route 53 record (if configured),
    ```
 
    Optional parameters: `InstanceType` (default `t3.large`), `DataVolumeSize` (50),
-   `Hostname` (`georg.stpaulaustin.org`), `HostedZoneId` (empty = no DNS updates),
+   `Hostname` (`georg.stpaulaustin.org`), `OriginHostname` (`origin.georg.stpaulaustin.org`),
+   `HostedZoneId` (empty = no DNS updates), `CertificateArn` (empty = no CloudFront),
    `WakeSchedule` (`cron(0 17-21 ? * SUN *)`: hourly 17:00–21:00, so a recording uploaded late is still found) and `WakeTimezone` (`America/Chicago`),
    `WakeScheduleState`, `SnapshotSchedule`, `SnapshotRetainCount`, `GitRef`, `SesIdentity`.
    Set `REGION`/`STACK` in the environment to change the region (default `us-east-2`) or
@@ -64,26 +68,72 @@ Store, writes them to `/run/georg`, updates the Route 53 record (if configured),
      --query 'Stacks[0].Outputs' --output table
    ```
 
-4. **DNS.** With `HostedZoneId` set, the instance UPSERTs an A record for `Hostname` at
-   every boot (TTL 60; no Elastic IP, so nothing is billed while stopped). Without a
-   hosted zone, point the name at the instance's public IP yourself — it changes at each
-   start, so a Route 53 zone (or delegating a subdomain such as `georg.stpaulaustin.org`
-   to one) is strongly recommended. Caddy obtains the certificate once the name resolves.
+4. **DNS and CloudFront** — see the next section. With `CertificateArn` set the stack
+   creates a CloudFront distribution whose alias is `Hostname`, whose primary origin is
+   `OriginHostname` on the instance, and whose failover origin is the wake page. The
+   instance keeps the `OriginHostname` A record in `HostedZoneId` pointing at itself
+   (no Elastic IP, so nothing is billed while stopped; while stopped the record points
+   at a released IP, and the TLS handshake or connection failure is exactly what makes
+   CloudFront fail over).
 
 5. **Configuration.** Connect with Session Manager (no SSH port is open):
 
    ```sh
    aws ssm start-session --region us-east-2 --target i-…
    sudo cp /opt/georg/deploy/georg.aws.toml /srv/georg/config/georg.toml
-   sudo editor /srv/georg/config/georg.toml   # set review.base_url to the WakeUrl output
+   sudo editor /srv/georg/config/georg.toml   # set outputs, email, review.base_url
    sudo systemctl start georg.service georg-discover.timer
    ```
 
    The first boot builds the image with the `classify`, `whisper`, `llm` and `gdrive` extras
    (several minutes; `GEORG_EXTRAS` in `deploy/compose.yaml` selects them).
 
-6. **Check.** `curl https://georg.stpaulaustin.org/healthz` and open the `WakeUrl` output
-   in a browser while the instance is stopped.
+6. **Check.** `curl https://georg.stpaulaustin.org/healthz` (through CloudFront) while
+   the instance is running, and open `https://georg.stpaulaustin.org/` in a browser
+   while it is stopped — the wake page should answer, start the instance, and keep
+   reloading until Georg is up.
+
+## DNS and CloudFront
+
+Two names are involved:
+
+- `Hostname` (`georg.stpaulaustin.org`): what browsers use. It points at the CloudFront
+  distribution, never at the instance.
+- `OriginHostname` (`origin.georg.stpaulaustin.org`): how CloudFront reaches the
+  instance. Caddy gets a Let's Encrypt certificate for it (HTTP-01, so the security
+  group stays open to the world — restricting it to CloudFront's prefix list would
+  break certificate issuance). The boot script UPSERTs its A record at every boot.
+
+DNS for `stpaulaustin.org` lives in Cloudflare. Setup, by hand:
+
+1. **Create a Route 53 hosted zone for `OriginHostname`** (`origin.georg.stpaulaustin.org`)
+   and pass its id as `HostedZoneId`. In Cloudflare, delegate it: one NS record named
+   `origin.georg` for each of the four name servers the zone lists (DNS only, as NS
+   always is).
+2. **Create the ACM certificate in us-east-1** (CloudFront only accepts us-east-1
+   certificates):
+
+   ```sh
+   aws cloudformation deploy --region us-east-1 --stack-name georg-cert \
+     --template-file deploy/aws/cloudfront-certificate.yaml \
+     --parameter-overrides Hostname=georg.stpaulaustin.org
+   aws acm describe-certificate --region us-east-1 \
+     --certificate-arn <CertificateArn output> \
+     --query 'Certificate.DomainValidationOptions[0].ResourceRecord'
+   ```
+
+   Add the reported `Name`/`Value` as a DNS-only CNAME in Cloudflare and wait for the
+   certificate status to become `ISSUED` (usually a few minutes).
+3. **Point `georg` at the distribution** (the `DistributionDomainName` stack output):
+   a DNS-only CNAME named `georg` → `d…….cloudfront.net` in Cloudflare. Proxied would
+   also work but adds nothing; DNS-only keeps behaviour predictable.
+
+Then rerun `deploy/aws/deploy.sh` with `HostedZoneId` and `CertificateArn`.
+
+Without `CertificateArn` the stack creates no distribution; point `Hostname` at the
+instance directly, set `OriginHostname` to that same name, and review links still
+work but nothing answers while the instance is stopped except the wake page's own
+URL (`WakeUrl` output).
 
 ## Secrets (SSM Parameter Store)
 
@@ -159,12 +209,17 @@ than `/healthz` count as activity. The container cannot power off the host, so i
 
 The instance starts again:
 
-- on the schedule (`WakeSchedule`, `WakeTimezone`; default Sundays 13:00 Chicago time,
-  after the morning services are uploaded);
-- when someone opens the wake page (`WakeUrl` output, also used for links in review
-  emails): it starts the instance, shows "Starting Georg; this takes about a minute" and
-  reloads until `/healthz` answers, then redirects to the same path on the admin URL;
+- on the schedule (`WakeSchedule`, `WakeTimezone`; default hourly 17:00–21:00 on Sundays,
+  Chicago time, after the morning services are uploaded);
+- when someone opens `https://georg.stpaulaustin.org/` while it is stopped: CloudFront
+  fails over (GET/HEAD/OPTIONS only) to the wake page, which starts the instance, shows
+  "Starting Georg; this takes about a minute" and reloads the same URL until the
+  instance origin answers;
 - manually: `aws ec2 start-instances --region us-east-2 --instance-ids i-…`.
+
+POST forms in the review UI do not fail over (CloudFront only fails over GET, HEAD and
+OPTIONS), so a submit while the instance is stopped shows an error; submit again once
+the wake page has brought it up.
 
 **Always-on hosting:** remove `idle_shutdown_minutes` (and `idle_shutdown_command`) from
 `/srv/georg/config/georg.toml` and `sudo systemctl restart georg`. Optionally set
@@ -229,6 +284,8 @@ volume or update the stack afterwards.
 | EBS snapshots (incremental) | — | ≈ $0.05/GiB-month changed |
 | S3 backups, Lambda, Scheduler, SSM standard params | cents | cents |
 | Route 53 hosted zone (optional) | — | $0.50/month |
+| CloudFront + ACM certificate | ≈ $0.09/GB + pennies/10k requests | same |
+| Cloudflare DNS | — | $0 (free plan) |
 
 A few hours of processing per week plus review sessions comes to well under $15/month;
 always-on would add ≈ $60/month for the instance alone. Check current prices before
