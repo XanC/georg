@@ -14,8 +14,18 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Optional extras to install, space-separated, e.g. "classify whisper gdrive".
 ARG GEORG_EXTRAS=""
 
+# The `llm` extra compiles llama.cpp; target AVX2 rather than the build host's CPU so the
+# image also runs when the instance type changes.
+ARG LLAMA_CMAKE_ARGS="-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON"
+
 COPY pyproject.toml uv.lock README.md LICENSE ./
-RUN uv sync --locked --no-dev --no-install-project $(for e in $GEORG_EXTRAS; do echo --extra $e; done)
+RUN case " $GEORG_EXTRAS " in *" llm "*) \
+        apt-get update && apt-get install -y --no-install-recommends build-essential ;; \
+    esac \
+    && CMAKE_ARGS="$LLAMA_CMAKE_ARGS" uv sync --locked --no-dev --no-install-project \
+        $(for e in $GEORG_EXTRAS; do echo --extra $e; done) \
+    && if dpkg -s build-essential >/dev/null 2>&1; then \
+        apt-get purge -y --auto-remove build-essential && rm -rf /var/lib/apt/lists/*; fi
 COPY src ./src
 RUN uv sync --locked --no-dev $(for e in $GEORG_EXTRAS; do echo --extra $e; done)
 
