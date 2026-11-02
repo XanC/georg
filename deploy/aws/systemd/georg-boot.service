@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Georg boot: secrets from SSM Parameter Store, Route 53 record
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/srv/georg
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/georg/boot.env
+ExecStart=/usr/bin/python3 /opt/georg/deploy/aws/boot/georg_boot.py
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

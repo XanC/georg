@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Poll the inputs while the instance is up. Polling alone does not keep the
+# instance awake; a newly found recording queues a job, which does.
+[Unit]
+Description=Georg: look for new recordings every 15 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target

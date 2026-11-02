@@ -105,6 +105,12 @@ class GeorgConfig(_Section):
     renditions: tuple[RenditionSpec, ...] = Field(default_factory=default_renditions)
     outputs: tuple[OutputConfig, ...] = ()
     review: ReviewConfig = ReviewConfig()
+    idle_shutdown_minutes: int | None = Field(default=None, gt=0)
+    """Power the host off after this long with no jobs and no web requests (off if unset)."""
+    idle_shutdown_command: tuple[str, ...] = Field(
+        default=("sudo", "systemctl", "poweroff"), min_length=1
+    )
+    """Run by the worker's idle watchdog; see docs/deploy-aws.md for the container setup."""
 
     @model_validator(mode="after")
     def _references(self) -> "GeorgConfig":

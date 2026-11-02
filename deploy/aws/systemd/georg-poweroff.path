@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# The idle watchdog (in the georg-worker container) creates this file to ask the
+# host to power off. /run is a tmpfs, so a request never survives a reboot.
+[Unit]
+Description=Watch for Georg's idle power-off request
+
+[Path]
+PathExists=/run/georg/shutdown/poweroff
+
+[Install]
+WantedBy=multi-user.target

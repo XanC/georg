@@ -1,0 +1,505 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Georg on one stop-when-idle EC2 instance: gp3 data volume, instance role, private
+  S3 backup bucket, Sunday wake schedule, wake-page Lambda function URL, and EBS
+  snapshots. See docs/deploy-aws.md. Deploy in us-east-2 unless you choose otherwise.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: Instance }
+        Parameters: [InstanceType, ImageId, VpcId, SubnetId, DataVolumeSize, RootVolumeSize]
+      - Label: { default: Application }
+        Parameters: [Hostname, HostedZoneId, GitRepository, GitRef, SsmPrefix, SesIdentity]
+      - Label: { default: Schedules and backups }
+        Parameters:
+          - WakeSchedule
+          - WakeTimezone
+          - WakeScheduleState
+          - SnapshotSchedule
+          - SnapshotRetainCount
+          - BackupNoncurrentDays
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.large
+    Description: Needs at least 4 GB RAM for the classifier; can be changed while stopped.
+  ImageId:
+    Type: AWS::EC2::Image::Id
+    Description: >-
+      Ubuntu 24.04 amd64 AMI, e.g. from SSM parameter
+      /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id.
+      Pinned on purpose; changing it replaces the instance.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: A public subnet (route to an internet gateway) in VpcId.
+  DataVolumeSize:
+    Type: Number
+    Default: 50
+    MinValue: 10
+    Description: GiB, gp3; holds SQLite, artifacts and Caddy certificates.
+  RootVolumeSize:
+    Type: Number
+    Default: 30
+    MinValue: 16
+    Description: GiB, gp3; OS and Docker images.
+  Hostname:
+    Type: String
+    Default: georg.stpaulaustin.org
+    Description: Public name of the admin UI; Caddy obtains its certificate.
+  HostedZoneId:
+    Type: String
+    Default: ""
+    Description: >-
+      Route 53 hosted zone holding Hostname. Empty: no DNS updates; point the name
+      at the instance yourself.
+  GitRepository:
+    Type: String
+    Default: https://github.com/XanC/georg.git
+  GitRef:
+    Type: String
+    Default: main
+    Description: Branch, tag or commit checked out on first boot.
+  SsmPrefix:
+    Type: String
+    Default: /georg/
+    AllowedPattern: ^/[A-Za-z0-9_.-]+/$
+    Description: SSM Parameter Store path holding Georg's secrets.
+  SesIdentity:
+    Type: String
+    Default: "*"
+    Description: SES identity (domain or address) the instance may send as.
+  WakeSchedule:
+    Type: String
+    Default: cron(0 13 ? * SUN *)
+    Description: EventBridge Scheduler expression that starts the instance.
+  WakeTimezone:
+    Type: String
+    Default: America/Chicago
+  WakeScheduleState:
+    Type: String
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+  SnapshotSchedule:
+    Type: String
+    Default: cron(0 12 ? * MON *)
+    Description: Data Lifecycle Manager snapshot schedule (UTC).
+  SnapshotRetainCount:
+    Type: Number
+    Default: 8
+    MinValue: 1
+  BackupNoncurrentDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: Days to keep superseded object versions in the backup bucket.
+
+Conditions:
+  HasDns: !Not [!Equals [!Ref HostedZoneId, ""]]
+
+Resources:
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+            BucketKeyEnabled: true
+      VersioningConfiguration: { Status: Enabled }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: !Ref BackupNoncurrentDays }
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 }
+      Tags: [{ Key: application, Value: georg }]
+
+  BackupBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BackupBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource: [!GetAtt BackupBucket.Arn, !Sub "${BackupBucket.Arn}/*"]
+            Condition: { Bool: { aws:SecureTransport: "false" } }
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Shell access through SSM Session Manager; no SSH port is open.
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: georg
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadSecrets
+                Effect: Allow
+                Action: [ssm:GetParametersByPath, ssm:GetParameters, ssm:GetParameter]
+                Resource:
+                  - !Sub
+                    - arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${Path}
+                    - Path: !Select [0, !Split ["/*", !Join ["", [!Ref SsmPrefix, "*"]]]]
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}*
+              - Sid: BackupBucketList
+                Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation]
+                Resource: !GetAtt BackupBucket.Arn
+              - Sid: BackupBucketObjects
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub "${BackupBucket.Arn}/*"
+              - Sid: SendMail
+                Effect: Allow
+                Action: [ses:SendEmail, ses:SendRawEmail]
+                Resource: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SesIdentity}
+              - !If
+                - HasDns
+                - Sid: UpdateOwnRecord
+                  Effect: Allow
+                  Action: route53:ChangeResourceRecordSets
+                  Resource: !Sub arn:${AWS::Partition}:route53:::hostedzone/${HostedZoneId}
+                  Condition:
+                    ForAllValues:StringEquals:
+                      route53:ChangeResourceRecordSetsNormalizedRecordNames: [!Ref Hostname]
+                      route53:ChangeResourceRecordSetsRecordTypes: [A]
+                - !Ref AWS::NoValue
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Georg web (HTTP for ACME and redirects, HTTPS)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: udp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIpv6: "::/0" }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIpv6: "::/0" }
+        - { IpProtocol: udp, FromPort: 443, ToPort: 443, CidrIpv6: "::/0" }
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        MetadataOptions:
+          HttpTokens: required
+          # 2 hops, so containers (Litestream) can use the instance role.
+          HttpPutResponseHopLimit: 2
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeType: gp3
+              VolumeSize: !Ref RootVolumeSize
+              Encrypted: true
+              DeleteOnTermination: true
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      IamInstanceProfile: !Ref InstanceProfile
+      # Powering off from inside (the idle watchdog) stops the instance.
+      InstanceInitiatedShutdownBehavior: stop
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          SubnetId: !Ref SubnetId
+          AssociatePublicIpAddress: true
+          GroupSet: [!Ref SecurityGroup]
+      Tags:
+        - { Key: Name, Value: georg }
+        - { Key: application, Value: georg }
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # First boot only (cloud-init). Every boot: georg-boot.service, georg.service.
+          set -euxo pipefail
+          exec > >(tee -a /var/log/georg-setup.log) 2>&1
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends docker.io docker-compose-v2 git python3-boto3
+          mkdir -p /etc/georg
+          cat > /etc/georg/boot.env <<'ENV'
+          GEORG_REGION=${AWS::Region}
+          GEORG_HOSTNAME=${Hostname}
+          GEORG_HOSTED_ZONE_ID=${HostedZoneId}
+          GEORG_SSM_PREFIX=${SsmPrefix}
+          GEORG_BACKUP_BUCKET=${BackupBucket}
+          GEORG_ROOT=/srv/georg
+          ENV
+          if [ ! -d /opt/georg/.git ]; then
+            git clone ${GitRepository} /opt/georg
+            git -C /opt/georg checkout ${GitRef}
+          fi
+          /opt/georg/deploy/aws/boot/setup-data-volume.sh /srv/georg
+          install -m 0644 /opt/georg/deploy/aws/systemd/georg* /etc/systemd/system/
+          systemctl daemon-reload
+          systemctl enable georg-boot.service georg.service georg-poweroff.path georg-discover.timer
+          systemctl start georg-boot.service georg-poweroff.path
+          docker compose --env-file /run/georg/host.env -f /opt/georg/deploy/compose.yaml build
+          if [ -f /srv/georg/config/georg.toml ]; then
+            systemctl start georg.service georg-discover.timer
+          fi
+
+  DataVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AvailabilityZone: !GetAtt Instance.AvailabilityZone
+      Size: !Ref DataVolumeSize
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - { Key: Name, Value: georg-data }
+        - { Key: application, Value: georg }
+        - { Key: georg-snapshots, Value: !Ref AWS::StackName }
+
+  DataVolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref Instance
+      VolumeId: !Ref DataVolume
+      Device: /dev/sdf
+
+  SnapshotRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: dlm.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole
+
+  SnapshotPolicy:
+    Type: AWS::DLM::LifecyclePolicy
+    Properties:
+      Description: Georg data volume snapshots
+      State: ENABLED
+      ExecutionRoleArn: !GetAtt SnapshotRole.Arn
+      PolicyDetails:
+        PolicyType: EBS_SNAPSHOT_MANAGEMENT
+        ResourceTypes: [VOLUME]
+        TargetTags:
+          - { Key: georg-snapshots, Value: !Ref AWS::StackName }
+        Schedules:
+          - Name: georg-data
+            CopyTags: true
+            CreateRule:
+              CronExpression: !Ref SnapshotSchedule
+            RetainRule:
+              Count: !Ref SnapshotRetainCount
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { aws:SourceAccount: !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: start-georg
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ec2:StartInstances
+                Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${Instance}
+
+  WakeScheduleRule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Description: Start Georg when the week's recording is expected
+      ScheduleExpression: !Ref WakeSchedule
+      ScheduleExpressionTimezone: !Ref WakeTimezone
+      State: !Ref WakeScheduleState
+      FlexibleTimeWindow: { Mode: "OFF" }
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:ec2:startInstances
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: !Sub '{"InstanceIds": ["${Instance}"]}'
+        RetryPolicy: { MaximumRetryAttempts: 3 }
+
+  WakeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: wake-georg
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ec2:StartInstances
+                Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${Instance}
+              - Effect: Allow
+                Action: ec2:DescribeInstances
+                Resource: "*"
+
+  WakeFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Georg wake page
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt WakeRole.Arn
+      Timeout: 10
+      MemorySize: 128
+      Environment:
+        Variables:
+          INSTANCE_ID: !Ref Instance
+          APP_URL: !Sub https://${Hostname}
+      Code:
+        # Copy of deploy/aws/wake/index.py (tests/deploy checks they match).
+        ZipFile: |
+          # SPDX-License-Identifier: AGPL-3.0-only
+          """Wake page (Lambda function URL): start the Georg instance, then redirect to it.
+
+          Any path is kept, so review links can point at this URL: /sermons/5 starts the
+          instance, shows "starting" until APP_URL/healthz answers, then redirects to
+          APP_URL/sermons/5. Inlined into deploy/aws/georg.yaml; keep under 4096 chars.
+          """
+
+          import html
+          import os
+          import urllib.request
+
+          PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <meta http-equiv="refresh" content="5"><title>Georg</title></head>
+          <body style="font-family:sans-serif;max-width:32em;margin:4em auto;padding:0 1em">
+          <h1>Georg</h1><p>{}</p><p><small>This page reloads by itself.</small></p></body></html>"""
+          STARTING = "Starting Georg; this takes about a minute."
+
+
+          def healthy(url, timeout=3.0):
+              try:
+                  with urllib.request.urlopen(url + "/healthz", timeout=timeout) as r:
+                      return r.status == 200
+              except OSError:
+                  return False
+
+
+          def page(message, status=200):
+              return {
+                  "statusCode": status,
+                  "headers": {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"},
+                  "body": PAGE.format(html.escape(message)),
+              }
+
+
+          def handler(event, context, ec2=None, probe=healthy):
+              instance_id = os.environ["INSTANCE_ID"]
+              app_url = os.environ["APP_URL"].rstrip("/")
+              if ec2 is None:
+                  import boto3
+
+                  ec2 = boto3.client("ec2")
+              path = event.get("rawPath") or "/"
+              if event.get("rawQueryString"):
+                  path += "?" + event["rawQueryString"]
+              reservations = ec2.describe_instances(InstanceIds=[instance_id])["Reservations"]
+              state = reservations[0]["Instances"][0]["State"]["Name"]
+              if state == "running" and probe(app_url):
+                  return {
+                      "statusCode": 302,
+                      "headers": {"Location": app_url + "/" + path.lstrip("/"), "Cache-Control": "no-store"},
+                      "body": "",
+                  }
+              if state == "stopped":
+                  ec2.start_instances(InstanceIds=[instance_id])
+                  return page(STARTING)
+              if state in ("pending", "running"):
+                  return page(STARTING)
+              if state == "stopping":
+                  return page("Georg is shutting down after being idle; it will start again shortly.")
+              return page(f"Georg cannot be started (instance state: {state}).", 503)
+
+  WakeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${WakeFunction}
+      RetentionInDays: 30
+
+  WakeUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt WakeFunction.Arn
+      AuthType: NONE
+
+  WakeUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WakeFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+  WakeInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WakeFunction
+      Action: lambda:InvokeFunction
+      Principal: "*"
+      InvokedViaFunctionUrl: true
+
+Outputs:
+  InstanceId:
+    Value: !Ref Instance
+  WakeUrl:
+    Description: Use as review.base_url in georg.toml so review links wake the instance.
+    Value: !GetAtt WakeUrl.FunctionUrl
+  AppUrl:
+    Value: !Sub https://${Hostname}/
+  BackupBucket:
+    Value: !Ref BackupBucket
+  DataVolumeId:
+    Value: !Ref DataVolume

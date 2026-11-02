@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Automatic HTTPS (Let's Encrypt) for $GEORG_HOSTNAME; certificates persist in /data.
+{$GEORG_HOSTNAME:georg.stpaulaustin.org} {
+	encode zstd gzip
+	reverse_proxy georg-web:8000
+	header Strict-Transport-Security "max-age=31536000"
+}

@@ -12,6 +12,7 @@ from sqlalchemy import Engine
 
 from georg.core.config import GeorgConfig
 from georg.db.engine import session_factory
+from georg.idle import IdleWatchdog
 from georg.jobs.queue import JobQueue, LeasedJob, LeaseLostError
 from georg.notify import notify_review
 from georg.pipeline.registry import Processors, build_processors
@@ -67,12 +68,14 @@ class Worker:
         queue: JobQueue | None = None,
         processors: Processors | None = None,
         worker_id: str | None = None,
+        watchdog: IdleWatchdog | None = None,
     ) -> None:
         self.config = config
         self.sessions = session_factory(engine)
         self.queue = queue or JobQueue(engine)
         self.worker_id = worker_id or f"{socket.gethostname()}:{os.getpid()}"
         self._processors = processors
+        self.watchdog = watchdog
         self.handlers: dict[str, Callable[[dict[str, Any]], object]] = {
             DISCOVER: lambda _: discover(self.config, self.sessions, self.queue),
             PROCESS: self._process,
@@ -124,9 +127,14 @@ class Worker:
         return True
 
     def run(self, *, poll_seconds: float = 30.0, stop: threading.Event | None = None) -> None:
-        """Run jobs until `stop` is set, sleeping `poll_seconds` when idle."""
+        """Run jobs until `stop` is set, sleeping `poll_seconds` when idle.
+
+        Between jobs the idle watchdog, if any, may shut the host down.
+        """
         stop = stop or threading.Event()
         while not stop.is_set():
             self.queue.reclaim_stale()
             if not self.run_once():
+                if self.watchdog is not None:
+                    self.watchdog.check()
                 stop.wait(poll_seconds)

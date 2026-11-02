@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Georg on one host: web, worker, Caddy (HTTPS) and Litestream (SQLite -> S3).
+# See docs/deploy-aws.md. Run from this directory with
+#   docker compose --env-file /run/georg/host.env up -d
+# Paths on the host (defaults match deploy/aws):
+#   ${GEORG_ROOT}/data         Georg data_dir (SQLite + artifacts), persistent
+#   ${GEORG_ROOT}/config/georg.toml
+#   ${GEORG_ROOT}/caddy        Caddy certificates and state, persistent
+#   ${GEORG_RUN}/georg.env     secrets (mode 0600, written at boot; never in this repo)
+#   ${GEORG_RUN}/secrets/      secret files, e.g. the Google service-account JSON
+#   ${GEORG_RUN}/shutdown/     the idle watchdog drops "poweroff" here for the host
+name: georg
+
+x-georg: &georg
+  image: georg:local
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+    args:
+      GEORG_EXTRAS: ${GEORG_EXTRAS:-classify whisper gdrive}
+  env_file:
+    - ${GEORG_RUN:-/run/georg}/georg.env
+  environment:
+    GEORG_CONFIG: /etc/georg/georg.toml
+  volumes:
+    - ${GEORG_ROOT:-/srv/georg}/data:/var/lib/georg
+    - ${GEORG_ROOT:-/srv/georg}/config/georg.toml:/etc/georg/georg.toml:ro
+    - ${GEORG_RUN:-/run/georg}/secrets:/run/secrets:ro
+  restart: unless-stopped
+
+services:
+  georg-web:
+    <<: *georg
+    command: ["georg", "web", "--config", "/etc/georg/georg.toml", "--host", "0.0.0.0"]
+    environment:
+      GEORG_CONFIG: /etc/georg/georg.toml
+      # Caddy is the only client; trust its X-Forwarded-* headers.
+      FORWARDED_ALLOW_IPS: "*"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  georg-worker:
+    <<: *georg
+    command: ["georg", "worker", "--config", "/etc/georg/georg.toml"]
+    depends_on:
+      georg-web:
+        condition: service_healthy
+    volumes:
+      - ${GEORG_ROOT:-/srv/georg}/data:/var/lib/georg
+      - ${GEORG_ROOT:-/srv/georg}/config/georg.toml:/etc/georg/georg.toml:ro
+      - ${GEORG_RUN:-/run/georg}/secrets:/run/secrets:ro
+      - ${GEORG_RUN:-/run/georg}/shutdown:/run/georg/shutdown
+    # Long jobs: give the worker time to notice SIGTERM; unfinished leases are
+    # reclaimed on the next start.
+    stop_grace_period: 30s
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      GEORG_HOSTNAME: ${GEORG_HOSTNAME:-georg.stpaulaustin.org}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${GEORG_ROOT:-/srv/georg}/caddy/data:/data
+      - ${GEORG_ROOT:-/srv/georg}/caddy/config:/config
+    depends_on:
+      - georg-web
+
+  litestream:
+    image: litestream/litestream:0.3.13
+    restart: unless-stopped
+    # Same uid as Georg, so the SQLite -shm/-wal files stay writable by both.
+    user: "1000:1000"
+    command: ["replicate", "-config", "/etc/litestream.yml"]
+    environment:
+      GEORG_BACKUP_BUCKET: ${GEORG_BACKUP_BUCKET:-}
+      AWS_REGION: ${AWS_REGION:-us-east-2}
+    volumes:
+      - ./litestream.yml:/etc/litestream.yml:ro
+      - ${GEORG_ROOT:-/srv/georg}/data:/var/lib/georg
+    depends_on:
+      georg-web:
+        condition: service_healthy
+    # Enabled with COMPOSE_PROFILES=backup (set in host.env on AWS).
+    profiles: ["backup"]

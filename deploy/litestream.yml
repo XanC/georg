@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Continuous replication of Georg's SQLite database to S3 (credentials from the
+# instance role). Restore: see docs/deploy-aws.md.
+dbs:
+  - path: /var/lib/georg/georg.sqlite3
+    replicas:
+      - type: s3
+        bucket: ${GEORG_BACKUP_BUCKET}
+        path: litestream/georg.sqlite3
+        region: ${AWS_REGION}
+        retention: 720h
+        snapshot-interval: 24h

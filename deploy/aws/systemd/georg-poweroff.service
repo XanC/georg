@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Power off after Georg's idle watchdog asked to
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/rm -f /run/georg/shutdown/poweroff
+ExecStart=/usr/bin/systemctl poweroff

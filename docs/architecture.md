@@ -308,6 +308,8 @@ Web UI stack: server-rendered Jinja2 + htmx + wavesurfer.js (regions plugin). No
 
 Georg typically handles one service per week, so the instance is **stopped most of the time**. The application is unchanged; only deployment adds three small pieces.
 
+Runbook and implementation: [`docs/deploy-aws.md`](deploy-aws.md), `deploy/aws/`.
+
 - **One EC2 instance** (start t3.medium / t4g.medium; size after measuring the classifier) running Docker Compose: `georg-web`, `georg-worker`, `caddy` (automatic HTTPS; certificates persist on EBS).
 - **EBS gp3 volume** (~50 GB) for SQLite (WAL mode) and the local artifact store. It persists while the instance is stopped. SQLite must *not* live on EFS/NFS, which is why Fargate/App Runner/Lambda are not recommended.
 - **Wake on schedule:** EventBridge Scheduler starts the instance after the usual service time. The worker polls the input (Google Drive) until the recording appears or a timeout passes, processes it, and emails "ready for review" (SES).
