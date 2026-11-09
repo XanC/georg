@@ -12,9 +12,15 @@ from pathlib import Path
 from sqlalchemy.orm import Session, sessionmaker
 
 from georg.core.config import GeorgConfig, NamedModuleConfig
-from georg.core.contracts import OutputTarget
+from georg.core.contracts import MediaInputSource, OutputTarget
 from georg.core.errors import ModuleError
-from georg.core.types import ArtifactRef, PublicationRequest, ServiceBoundaries, SourceItem
+from georg.core.types import (
+    ArtifactRef,
+    MediaInput,
+    PublicationRequest,
+    ServiceBoundaries,
+    SourceItem,
+)
 from georg.db.models import Artifact
 from georg.db.repositories import (
     ArtifactRepository,
@@ -187,7 +193,11 @@ def _run(
         raise ModuleError(f"service {service_id} has no included recording parts")
     work = config.data_dir / "work" / str(service_id)
     item = item.model_copy(update={"parts": included})
-    parts = build_input(_input_config(config, input_name)).fetch(item, work / "parts")
+    source = build_input(_input_config(config, input_name))
+    if isinstance(source, MediaInputSource):
+        parts: Sequence[MediaInput] = source.fetch_media(item, work / "parts")
+    else:
+        parts = source.fetch(item, work / "parts")
     out_dir = work / "out"
     shutil.rmtree(out_dir, ignore_errors=True)
     result = run_local(

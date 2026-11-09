@@ -8,7 +8,7 @@ import pytest
 from fake_drive import FOLDER_MIME, FakeDrive
 
 from georg.core.config import NamedModuleConfig
-from georg.core.contracts import InputSource
+from georg.core.contracts import InputSource, MediaInputSource
 from georg.core.errors import ConfigError, ModuleError, SourceNotReadyError
 from georg.core.types import SourceItem
 from georg.modules.inputs.google_drive import GoogleDriveInput, folder_date
@@ -43,7 +43,9 @@ def service_folder(drive: FakeDrive, name: str, *videos: tuple[str, bytes]) -> s
 
 
 def test_conforms_to_input_source(drive: FakeDrive) -> None:
-    assert isinstance(make_input(drive), InputSource)
+    source = make_input(drive)
+    assert isinstance(source, InputSource)
+    assert isinstance(source, MediaInputSource)
 
 
 def test_folder_date_parsing() -> None:
@@ -223,6 +225,30 @@ def test_fetch_detects_changes_since_discovery(drive: FakeDrive, tmp_path: Path)
     del drive.files[item.parts[1].ref]
     with pytest.raises(SourceNotReadyError, match="no longer exists"):
         make_input(drive).fetch(item, tmp_path)
+
+
+def test_fetch_media_streams_parts_in_order(drive: FakeDrive, tmp_path: Path) -> None:
+    item = discovered(drive)
+    media = make_input(drive).fetch_media(item, tmp_path)
+    assert [type(m).__name__ for m in media] == ["RemoteMedia", "RemoteMedia"]
+    assert [m.name for m in media] == ["01-a.mp4", "02-b.mp4"]
+    urls = [m.url for m in media]  # type: ignore[attr-defined]
+    assert urls == [
+        f"https://www.googleapis.com/drive/v3/files/{p.ref}?alt=media&supportsAllDrives=true"
+        for p in item.parts
+    ]
+    assert media[0].key != media[1].key  # type: ignore[attr-defined]
+    assert list(tmp_path.rglob("*.mp4")) == []  # nothing downloaded
+    assert media[0].headers()["Authorization"] == "Bearer test-token"  # type: ignore[attr-defined]
+    media_calls = [r for r in drive.requests if r.url.params.get("alt") == "media"]
+    assert media_calls == []
+
+
+def test_fetch_media_detects_changes_since_discovery(drive: FakeDrive, tmp_path: Path) -> None:
+    item = discovered(drive)
+    drive.files[item.parts[1].ref].content = b"re-uploaded"
+    with pytest.raises(SourceNotReadyError, match="changed"):
+        make_input(drive).fetch_media(item, tmp_path)
 
 
 def test_fetch_retries_transient_errors(drive: FakeDrive, tmp_path: Path) -> None:

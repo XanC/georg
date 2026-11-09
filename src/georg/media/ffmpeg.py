@@ -2,23 +2,34 @@
 """ffmpeg/ffprobe operations used by the pipeline.
 
 Every function writes to a temporary sibling file and renames it into place, so a
-crash never leaves a truncated output under the final name.
+crash never leaves a truncated output under the final name. Inputs may be local
+paths or `RemoteMedia` HTTP(S) sources; credentials sent in `-headers` are
+redacted from errors.
 """
 
 import hashlib
 import json
 import os
+import re
 import subprocess
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from georg.core.config import RenditionSpec
 from georg.core.errors import ModuleError
-from georg.core.types import ArtifactRef, TimeRange
+from georg.core.types import ArtifactRef, MediaInput, RemoteMedia, TimeRange
 
 FFMPEG = os.environ.get("GEORG_FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("GEORG_FFPROBE", "ffprobe")
+
+_BEARER = re.compile(r"(?i)bearer\s+\S+")
+
+
+def _scrub(text: str) -> str:
+    """Remove bearer tokens before text reaches an error message or log."""
+    return _BEARER.sub("Bearer <redacted>", text)
 
 
 class MediaError(ModuleError):
@@ -34,38 +45,64 @@ class MediaInfo:
     channels: int | None
 
 
-def _run(args: Sequence[str]) -> str:
+def _run(args: Sequence[str], *, retryable: bool = False) -> str:
     try:
         proc = subprocess.run(args, capture_output=True, text=True, check=False)
     except FileNotFoundError as exc:
         raise MediaError(f"{args[0]} is not installed") from exc
     if proc.returncode != 0:
-        tail = "\n".join(proc.stderr.strip().splitlines()[-5:])
-        raise MediaError(f"{Path(args[0]).name} failed ({proc.returncode}): {tail}")
+        tail = _scrub("\n".join(proc.stderr.strip().splitlines()[-5:]))
+        raise MediaError(
+            f"{Path(args[0]).name} failed ({proc.returncode}): {tail}", retryable=retryable
+        )
     return proc.stdout
 
 
-def _ffmpeg(*args: str) -> None:
-    _run([FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", *args])
+def _ffmpeg(*args: str, retryable: bool = False) -> None:
+    _run(
+        [FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", *args],
+        retryable=retryable,
+    )
 
 
 def _tmp(dest: Path) -> Path:
     return dest.with_name(f".{dest.stem}.partial{dest.suffix}")
 
 
+def _headers_value(headers: Mapping[str, str]) -> str:
+    """An ffmpeg `-headers` argument: `Name: value` lines ended by CRLF."""
+    return "".join(f"{name}: {value}\r\n" for name, value in headers.items())
+
+
+def _name(part: MediaInput) -> str:
+    return part.name if isinstance(part, RemoteMedia) else str(part)
+
+
+def _probe_args(part: MediaInput, *, force_refresh: bool = False) -> list[str]:
+    args = [FFPROBE, "-v", "error"]
+    if isinstance(part, RemoteMedia):
+        args += ["-headers", _headers_value(part.headers(force_refresh=force_refresh))]
+        target = part.url
+    else:
+        target = str(part)
+    return [*args, "-print_format", "json", "-show_format", "-show_streams", target]
+
+
 def probe(path: Path) -> MediaInfo:
-    out = _run(
-        [
-            FFPROBE,
-            "-v",
-            "error",
-            "-print_format",
-            "json",
-            "-show_format",
-            "-show_streams",
-            str(path),
-        ]
-    )
+    return _probe_data(_run(_probe_args(path)), path)
+
+
+def probe_media(
+    part: MediaInput, *, force_refresh: bool = False, retryable: bool = False
+) -> MediaInfo:
+    """`probe` for a `MediaInput`: ffprobe a local file or a remote URL."""
+    if isinstance(part, RemoteMedia):
+        out = _run(_probe_args(part, force_refresh=force_refresh), retryable=retryable)
+        return _probe_data(out, Path(part.name))
+    return probe(part)
+
+
+def _probe_data(out: str, path: Path) -> MediaInfo:
     data = json.loads(out)
     streams = data.get("streams", [])
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
@@ -85,25 +122,89 @@ def probe(path: Path) -> MediaInfo:
     )
 
 
-def extract_audio(
-    parts: Sequence[Path], dest: Path, *, sample_rate: int = 44100, channels: int = 2
-) -> Path:
-    """Join the audio of `parts`, in order, into one lossless FLAC file."""
-    if not parts:
-        raise MediaError("no source parts")
+def _input_args(part: MediaInput, *, force_refresh: bool = False) -> list[str]:
+    if isinstance(part, RemoteMedia):
+        return [
+            "-headers",
+            _headers_value(part.headers(force_refresh=force_refresh)),
+            "-i",
+            part.url,
+        ]
+    return ["-i", str(part)]
+
+
+def _extract_once(
+    parts: Sequence[MediaInput],
+    dest: Path,
+    *,
+    sample_rate: int,
+    channels: int,
+    force_refresh: bool,
+    remote: bool,
+) -> None:
     for part in parts:
-        if not probe(part).has_audio:
-            raise MediaError(f"{part}: no audio stream")
-    inputs = [arg for part in parts for arg in ("-i", str(part))]
+        if not probe_media(part, force_refresh=force_refresh, retryable=remote).has_audio:
+            raise MediaError(f"{_name(part)}: no audio stream")
+    inputs = [a for part in parts for a in _input_args(part, force_refresh=force_refresh)]
     fmt = f"aresample={sample_rate},aformat=sample_fmts=s16:channel_layouts="
     layout = "mono" if channels == 1 else "stereo"
     chains = "".join(f"[{i}:a:0]{fmt}{layout}[a{i}];" for i in range(len(parts)))
     joined = "".join(f"[a{i}]" for i in range(len(parts)))
     graph = f"{chains}{joined}concat=n={len(parts)}:v=0:a=1[out]"
+    _ffmpeg(
+        *inputs,
+        "-filter_complex",
+        graph,
+        "-map",
+        "[out]",
+        "-c:a",
+        "flac",
+        str(dest),
+        retryable=remote,
+    )
+
+
+def extract_audio(
+    parts: Sequence[MediaInput],
+    dest: Path,
+    *,
+    sample_rate: int = 44100,
+    channels: int = 2,
+    attempts: int = 3,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Path:
+    """Join the audio of `parts`, in order, into one lossless FLAC file.
+
+    With `RemoteMedia` parts ffmpeg streams each URL (range reads, so the moov
+    atom's position does not matter) and only the audio lands on disk. A failed
+    run is retried `attempts` times with refreshed credentials, then raises a
+    retryable error so the job queue retries the stage; the partial output is
+    always removed.
+    """
+    if not parts:
+        raise MediaError("no source parts")
+    remote = any(isinstance(part, RemoteMedia) for part in parts)
+    tries = attempts if remote else 1
     tmp = _tmp(dest)
-    _ffmpeg(*inputs, "-filter_complex", graph, "-map", "[out]", "-c:a", "flac", str(tmp))
-    tmp.replace(dest)
-    return dest
+    for attempt in range(1, tries + 1):
+        try:
+            _extract_once(
+                parts,
+                tmp,
+                sample_rate=sample_rate,
+                channels=channels,
+                force_refresh=attempt > 1,
+                remote=remote,
+            )
+        except MediaError as exc:
+            tmp.unlink(missing_ok=True)
+            if not exc.retryable or attempt == tries:
+                raise
+            sleep(min(2.0**attempt, 30.0))
+            continue
+        tmp.replace(dest)
+        return dest
+    raise MediaError("unreachable")
 
 
 def cut(src: Path, span: TimeRange, dest: Path, *, fade_ms: int = 0) -> Path:

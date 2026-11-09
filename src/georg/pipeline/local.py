@@ -21,7 +21,9 @@ from georg.core.types import (
     BoundaryProposal,
     FormatContext,
     FormattedTranscript,
+    MediaInput,
     MetadataContext,
+    RemoteMedia,
     SermonMetadata,
     ServiceBoundaries,
     SourceItem,
@@ -75,8 +77,13 @@ class LocalRunResult:
     """Seconds per stage; 0 for cache hits."""
 
 
-def _source_key(parts: Sequence[Path]) -> str:
-    stats = [(p.resolve(), p.stat().st_size, p.stat().st_mtime_ns) for p in parts]
+def _source_key(parts: Sequence[MediaInput]) -> str:
+    stats = [
+        p.key
+        if isinstance(p, RemoteMedia)
+        else (p.resolve(), p.stat().st_size, p.stat().st_mtime_ns)
+        for p in parts
+    ]
     return StageCache.key(EXTRACT_VERSION, *stats)
 
 
@@ -85,7 +92,7 @@ def _plain_markdown(transcript: Transcript) -> str:
 
 
 def run_local(
-    parts: Sequence[Path],
+    parts: Sequence[MediaInput],
     out_dir: Path,
     processors: Processors,
     *,

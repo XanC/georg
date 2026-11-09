@@ -181,7 +181,7 @@ Notes:
 
 | # | Stage | Input → Output | Cost | Re-run when |
 |---|---|---|---|---|
-| 1 | acquire | SourceItem → `source_media` | download | rarely |
+| 1 | acquire | SourceItem → `source_media` | download, or streamed by ffmpeg for HTTP sources (Drive) | rarely |
 | 2 | prepare_audio | source → `service_audio` (FLAC, full quality) + `analysis_audio` (16 kHz mono) | cheap | rarely |
 | 3 | classify | analysis audio → `segments` (silence/noise/music/speech) | **expensive (ML)** | classifier version changes |
 | 4 | detect | segments + params → `boundary_proposal` | trivial | parameters change |

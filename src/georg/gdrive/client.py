@@ -114,6 +114,14 @@ class DriveClient:
     def _auth(self, force_refresh: bool = False) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._tokens.token(force_refresh=force_refresh)}"}
 
+    def media_url(self, file_id: str) -> str:
+        """The `alt=media` download URL for `file_id`; supports HTTP range reads."""
+        return f"{API_URL}/files/{file_id}?alt=media&supportsAllDrives=true"
+
+    def media_headers(self, *, force_refresh: bool = False) -> dict[str, str]:
+        """Authorization headers for a direct (e.g. ffmpeg) read of `media_url`."""
+        return self._auth(force_refresh)
+
     def _wait(self, attempt: int, response: httpx.Response | None = None) -> None:
         delay = self._backoff_s * 2 ** (attempt - 1)
         if response is not None:

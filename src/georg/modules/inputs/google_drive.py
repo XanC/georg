@@ -9,6 +9,10 @@ bulletin document, are passed on as `hints["documents"]`. A subfolder is reporte
 once all of its videos have a size and have not been modified for `stable_minutes`, so
 uploads in progress are skipped.
 
+Parts are handed to the pipeline as `RemoteMedia` (`fetch_media`): ffmpeg streams each
+`alt=media` URL straight from Drive (which supports HTTP range reads) and only the
+extracted audio lands on disk, so a recording larger than the data volume still works.
+
 Access is as a service account the folder is shared with, or as a Google account that
 signed in with `georg drive-login` (docs/google-drive.md).
 """
@@ -28,7 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from georg.core.config import NamedModuleConfig, resolve_secret
 from georg.core.errors import ConfigError, ModuleError, SourceNotReadyError
-from georg.core.types import SourceItem, SourcePart
+from georg.core.types import MediaInput, RemoteMedia, SourceItem, SourcePart
 from georg.gdrive import (
     FOLDER_MIME,
     SCOPE_READONLY,
@@ -236,6 +240,22 @@ class GoogleDriveInput:
             url=f"https://drive.google.com/drive/folders/{folder.ref}",
             hints={"documents": documents, "folder_name": name},
         )
+
+    def fetch_media(self, item: SourceItem, dest_dir: Path) -> list[MediaInput]:
+        """Return `RemoteMedia` for each part; ffmpeg streams them from Drive."""
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        media: list[MediaInput] = []
+        for index, part in enumerate(item.parts, start=1):
+            self._check_unchanged(part)
+            media.append(
+                RemoteMedia(
+                    url=self._drive.media_url(part.ref),
+                    name=local_name(index, part),
+                    key=f"drive\0{part.ref}\0{part.size}\0{part.checksum}",
+                    headers=self._drive.media_headers,
+                )
+            )
+        return media
 
     def fetch(self, item: SourceItem, dest_dir: Path) -> list[Path]:
         dest_dir.mkdir(parents=True, exist_ok=True)
