@@ -48,7 +48,7 @@ options = { base_url = "https://www.example.org", key_id = "2026-11", key = "env
 name = "phone"
 type = "sftp"
 renditions = ["service_phone"]
-options = { host = "ssh.example.org", username = "scripts", remote_path = "/var/www/html/phone/services/{date}.mp3", key_file = "env:GEORG_SFTP_KEY_FILE" }
+options = { host = "ssh.example.org", username = "scripts", remote_path = "/var/www/html/phone/services/{date}.mp3", key_path = "/run/secrets/sftp-key", known_hosts = "/run/secrets/sftp-known-hosts" }
 
 [[outputs]]
 name = "archive"

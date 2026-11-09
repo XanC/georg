@@ -164,7 +164,7 @@ put /georg/GEORG_ARCHIVE_FOLDER_ID …
 
 # SFTP key for the phone output, as a file.
 put /georg/files/sftp-key "$(cat id_ed25519)"
-put /georg/GEORG_SFTP_KEY_FILE /run/secrets/sftp-key
+put /georg/files/sftp-known-hosts "$(ssh-keyscan -t ed25519 ssh.example.org)"   # the outputs' key_path/known_hosts
 
 # Hosted transcription/formatting, if used.
 put /georg/OPENAI_API_KEY …
