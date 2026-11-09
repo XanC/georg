@@ -90,3 +90,28 @@ metadata = {{ type = "fake" }}
 def test_cli_reports_bad_config(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["db", "upgrade", "--config", str(tmp_path / "missing.toml")]) == 1
     assert "missing.toml" in capsys.readouterr().err
+
+
+def test_upgrade_marks_existing_failed_jobs_as_notified(db_path: Path, tmp_path: Path) -> None:
+    path = tmp_path / "old.sqlite3"
+    upgrade(path, "0001")
+    engine = create_engine(path)
+    try:
+        with engine.begin() as conn:
+            for status in ("failed", "queued"):
+                conn.execute(
+                    text(
+                        "INSERT INTO jobs (kind, payload_json, status, run_after, attempts,"
+                        " max_attempts, created_at, finished_at) VALUES ('discover', '{}',"
+                        " :status, '2026-11-01', 1, 5, '2026-11-01', '2026-11-02')"
+                    ),
+                    {"status": status},
+                )
+        upgrade(path)
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT status, failure_notified_at FROM jobs ORDER BY id")
+            ).all()
+    finally:
+        engine.dispose()
+    assert [(r[0], r[1] is not None) for r in rows] == [("failed", True), ("queued", False)]

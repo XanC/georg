@@ -53,6 +53,7 @@ class JobInfo:
     last_error: str | None
     created_at: datetime
     finished_at: datetime | None
+    failure_notified_at: datetime | None = None
 
 
 class JobQueue:
@@ -217,6 +218,22 @@ class JobQueue:
         with self._engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
 
+    def claim_failure_notices(self) -> list[JobInfo]:
+        """Mark failed jobs nobody has been told about as notified, and return them.
+
+        Claiming before the email is sent means each failure is reported at most once,
+        even with several workers or after a restart.
+        """
+        stmt = (
+            update(_table)
+            .where(_jobs.status == "failed", _jobs.failure_notified_at.is_(None))
+            .values(failure_notified_at=self._clock())
+            .returning(*_table.c)
+        )
+        with self._engine.begin() as conn:
+            rows = conn.execute(stmt).all()
+        return sorted((_info(row) for row in rows), key=lambda job: job.id)
+
     def reclaim_stale(self) -> int:
         """Requeue (or fail, if out of attempts) jobs whose lease has expired."""
         with self._engine.begin() as conn:
@@ -291,4 +308,5 @@ def _info(row: Row[Any]) -> JobInfo:
         last_error=row.last_error,
         created_at=row.created_at,
         finished_at=row.finished_at,
+        failure_notified_at=row.failure_notified_at,
     )

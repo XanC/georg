@@ -12,7 +12,7 @@ from georg.core.errors import ModuleError
 from georg.core.types import SermonMetadata, ServiceBoundaries, SourceItem, SourcePart
 from georg.db.engine import session_factory
 from georg.db.repositories import SermonRepository, ServiceRepository
-from georg.notify import notify_review
+from georg.notify import notify_review, redact
 
 
 class FakeSmtp:
@@ -113,3 +113,22 @@ def test_smtp_errors(config: GeorgConfig, engine: Engine) -> None:
         notify_review(config, sessions, service_id, factory=FakeSmtp)
     assert err.value.retryable
     FakeSmtp.fail = None
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("GET https://u:pw@h.example.org:8443/a/b?access_token=t0k#frag failed.",
+         "GET https://h.example.org:8443/a/b?[redacted] failed."),
+        ("(see https://h.example.org/x)", "(see https://h.example.org/x)"),
+        ("Bearer ya29.abc-def", "Bearer [redacted]"),
+        ("Authorization: Bearer ya29.abc", "Authorization: [redacted] [redacted]"),
+        ("refresh_token=rtok&client_secret=cs",
+         "refresh_token=[redacted]&client_secret=[redacted]"),
+        ('{"api_key": "sk-123", "x": 1}', '{"api_key": "[redacted]", "x": 1}'),
+        ("used hunter22 to log in", "used [redacted] to log in"),
+        ("run `georg drive-login`: revoked", "run `georg drive-login`: revoked"),
+    ],
+)  # fmt: skip
+def test_redact(text: str, expected: str) -> None:
+    assert redact(text, ["hunter22", "ab"]) == expected

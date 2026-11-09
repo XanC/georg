@@ -187,6 +187,8 @@ class Job(Base):
     last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     finished_at: Mapped[datetime | None]
+    failure_notified_at: Mapped[datetime | None]
+    """When reviewers were emailed about the job's permanent failure."""
 
 
 class Sermon(Base):
