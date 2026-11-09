@@ -9,6 +9,7 @@ from georg.media.ffmpeg import (
     encode_mp3,
     extract_audio,
     probe,
+    probe_media,
     sha256_file,
     verify_decode,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "encode_mp3",
     "extract_audio",
     "probe",
+    "probe_media",
     "sha256_file",
     "verify_decode",
 ]

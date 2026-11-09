@@ -31,6 +31,10 @@ Commands below use the AWS CLI v2 with credentials for the Georg account, region
 | `/run/georg/host.env` | non-secret Compose settings (hostname, bucket, region) | tmpfs |
 | `/opt/georg` | git checkout used to build the image | root volume |
 
+Source videos are never downloaded: the worker streams them straight from Google Drive
+and only the extracted audio (about 1 GB per service) and the stored artifacts take
+space, so the default 50 GB data volume fits with plenty of headroom.
+
 Every boot `georg-boot.service` reads all parameters under `/georg/` from SSM Parameter
 Store, writes them to `/run/georg`, updates the Route 53 record (if configured), and then
 `georg.service` runs `docker compose up`. Logs: `journalctl -u georg-boot -u georg`.

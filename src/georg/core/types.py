@@ -5,9 +5,11 @@ All times are integer milliseconds from the start of the service's source timeli
 (the concatenation of the source parts, in order). Ranges are half-open: [start, end).
 """
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Literal, Self
+from typing import Any, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -155,6 +157,32 @@ class SourceItem(Model):
     url: str | None = None
     hints: dict[str, Any] = Field(default_factory=dict)
     """Free-form clues for metadata generation, e.g. companion document names."""
+
+
+class MediaHeaders(Protocol):
+    """Request headers for a `RemoteMedia` source, e.g. a Drive bearer token."""
+
+    def __call__(self, *, force_refresh: bool = False) -> Mapping[str, str]:
+        """Return the headers; `force_refresh` renews expired credentials."""
+        ...
+
+
+@dataclass(frozen=True)
+class RemoteMedia:
+    """An HTTP(S) source ffmpeg reads directly, instead of a downloaded file.
+
+    `key` identifies the remote content (file id + size + checksum) so stage caches
+    stay stable without a local copy.
+    """
+
+    url: str
+    name: str
+    key: str
+    headers: MediaHeaders
+
+
+MediaInput = Path | RemoteMedia
+"""A part handed to the media stages: a local file or a streamable remote source."""
 
 
 class ArtifactRef(Model):

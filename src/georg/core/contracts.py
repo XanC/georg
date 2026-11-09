@@ -19,6 +19,7 @@ from georg.core.types import (
     ExternalRef,
     FormatContext,
     FormattedTranscript,
+    MediaInput,
     MetadataContext,
     PublicationRequest,
     SermonMetadata,
@@ -37,6 +38,25 @@ class InputSource(Protocol):
 
     def fetch(self, item: SourceItem, dest_dir: Path) -> list[Path]:
         """Download every part into `dest_dir`; return local paths in part order.
+
+        Raise `SourceNotReadyError` if a part changed since discovery.
+        """
+        ...
+
+
+@runtime_checkable
+class MediaInputSource(Protocol):
+    """Optional input capability: streamable media instead of downloaded files.
+
+    Inputs whose storage serves HTTP range reads (e.g. Drive's `alt=media`)
+    return `RemoteMedia` parts so the pipeline never writes the full video to
+    disk; only the extracted audio lands in the stage cache.
+    """
+
+    name: str
+
+    def fetch_media(self, item: SourceItem, dest_dir: Path) -> list[MediaInput]:
+        """Return one `MediaInput` per part, in part order.
 
         Raise `SourceNotReadyError` if a part changed since discovery.
         """
