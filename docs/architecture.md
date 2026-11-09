@@ -151,7 +151,8 @@ stage_runs       id, service_id, stage, module, module_version, params_json,
                  attempt, error, started_at, finished_at
 
 jobs             id, kind, payload_json, status, run_after, lease_until, worker_id,
-                 attempts, max_attempts, last_error      -- the queue
+                 attempts, max_attempts, last_error,
+                 failure_notified_at                     -- the queue
 
 sermons          id, service_id, current_revision_id     -- one per service now; schema allows more
 
@@ -192,7 +193,7 @@ Notes:
 
 Proposed choice (decision D3): **transcribe the whole service once**, then slice by timestamps for the sermon. Moving a boundary in review then only re-cuts audio and re-slices/re-formats text — no re-transcription. API cost difference is small (≈90 vs ≈25 minutes of audio per week), and a full-service transcript enables a future text-based detection strategy.
 
-Execution: the worker claims jobs from the `jobs` table (`UPDATE … RETURNING` with a lease), runs one job at a time by default, heartbeats the lease, and on failure retries with exponential backoff up to `max_attempts`, then marks the stage `failed` (visible in UI, with "Retry"). Stale leases (crashed worker) are re-queued. Any single stage can be re-run from the UI/CLI; downstream stages whose inputs changed are marked stale and re-queued.
+Execution: the worker claims jobs from the `jobs` table (`UPDATE … RETURNING` with a lease), runs one job at a time by default, heartbeats the lease, and on failure retries with exponential backoff up to `max_attempts`, then marks the stage `failed` (visible in UI, with "Retry") and emails the `review.notify` reviewers once per failed job (see [Email notices](deploy-aws.md#email-ses)). Stale leases (crashed worker) are re-queued. Any single stage can be re-run from the UI/CLI; downstream stages whose inputs changed are marked stale and re-queued.
 
 ### 5.2 Review
 

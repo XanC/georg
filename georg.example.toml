@@ -48,6 +48,7 @@ options = { folder_id = "env:GEORG_ARCHIVE_FOLDER_ID" }
 
 [review]
 require_approval = true
+# Told when a service is ready for review and when a job fails for good.
 notify = ["reviewer@example.org"]
 base_url = "https://georg.example.org"
 smtp = { host = "email-smtp.us-east-2.amazonaws.com", username = "env:GEORG_SMTP_USER", password = "env:GEORG_SMTP_PASSWORD", sender = "Georg <georg@example.org>" }

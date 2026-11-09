@@ -3,6 +3,7 @@
 
 import logging
 import os
+import smtplib
 import socket
 import threading
 from collections.abc import Callable
@@ -14,7 +15,7 @@ from georg.core.config import GeorgConfig
 from georg.db.engine import session_factory
 from georg.idle import IdleWatchdog
 from georg.jobs.queue import JobQueue, LeasedJob, LeaseLostError
-from georg.notify import notify_review
+from georg.notify import SmtpFactory, notify_job_failed, notify_review
 from georg.pipeline.registry import Processors, build_processors
 from georg.pipeline.service import (
     DISCOVER,
@@ -69,6 +70,7 @@ class Worker:
         processors: Processors | None = None,
         worker_id: str | None = None,
         watchdog: IdleWatchdog | None = None,
+        smtp_factory: SmtpFactory = smtplib.SMTP,
     ) -> None:
         self.config = config
         self.sessions = session_factory(engine)
@@ -76,11 +78,12 @@ class Worker:
         self.worker_id = worker_id or f"{socket.gethostname()}:{os.getpid()}"
         self._processors = processors
         self.watchdog = watchdog
+        self.smtp_factory = smtp_factory
         self.handlers: dict[str, Callable[[dict[str, Any]], object]] = {
             DISCOVER: lambda _: discover(self.config, self.sessions, self.queue),
             PROCESS: self._process,
             NOTIFY: lambda payload: notify_review(
-                self.config, self.sessions, int(payload["service_id"])
+                self.config, self.sessions, int(payload["service_id"]), factory=self.smtp_factory
             ),
             RENDER: lambda payload: render_revision(
                 self.config, self.sessions, int(payload["revision_id"]), self.processors
@@ -119,12 +122,38 @@ class Worker:
                 log.info("job %d: now %s", job.id, status)
             except LeaseLostError:
                 log.warning("job %d: lease lost before recording the failure", job.id)
+                return True
+            if status == "failed":
+                self.notify_failures()
             return True
         try:
             self.queue.complete(job.id, self.worker_id)
         except LeaseLostError:
             log.warning("job %d: lease lost before completion; it will run again", job.id)
         return True
+
+    def notify_failures(self) -> None:
+        """Email reviewers about failed jobs not yet reported, once per job.
+
+        Covers jobs failed by any worker, including leases that ran out of attempts.
+        Without email settings, failures are still marked as reported, so turning email
+        on later sends no backlog. Errors are logged; they never change a job's state
+        or stop the worker.
+        """
+        try:
+            jobs = self.queue.claim_failure_notices()
+        except Exception:
+            log.exception("cannot claim failed jobs for notification")
+            return
+        review = self.config.review
+        if not review.notify or review.smtp is None:
+            return
+        for job in jobs:
+            try:
+                notify_job_failed(self.config, self.sessions, job, factory=self.smtp_factory)
+                log.info("job %d: emailed reviewers about the failure", job.id)
+            except Exception:
+                log.exception("job %d: could not email reviewers about the failure", job.id)
 
     def run(self, *, poll_seconds: float = 30.0, stop: threading.Event | None = None) -> None:
         """Run jobs until `stop` is set, sleeping `poll_seconds` when idle.
@@ -134,6 +163,7 @@ class Worker:
         stop = stop or threading.Event()
         while not stop.is_set():
             self.queue.reclaim_stale()
+            self.notify_failures()
             if not self.run_once():
                 if self.watchdog is not None:
                     self.watchdog.check()

@@ -175,7 +175,23 @@ disabled or read them from files; never commit them.
 
 ### Email (SES)
 
-Review notifications use SMTP. With SES in `us-east-2`:
+Georg emails the `review.notify` addresses through `review.smtp`:
+
+- **Ready for review** when processing proposes a sermon revision.
+- **Job failed** (subject `Georg: <kind> failed for <service date>`) when a discover,
+  process, render, notify, or publish job fails for good: a non-retryable error, its
+  retries exhausted, or its lease expired with no attempts left. The body has the error,
+  the service, each output's publication status for publish jobs, the number of
+  attempts, and a link to the service (or the jobs page) when `review.base_url` is set.
+  A revoked Drive sign-in shows up here with the hint to run `georg drive-login`.
+  Failures that will be retried send nothing. Each failed job is emailed at most once,
+  even across worker restarts (`jobs.failure_notified_at`). URL query strings and user
+  info, bearer tokens, secret-looking `key=value` pairs, and the values of `env:`
+  settings are removed from the text. If sending fails, the worker logs it and carries
+  on.
+
+Without `notify` addresses or `smtp` settings, no email is sent; failed jobs are still
+marked as reported, so turning email on later sends no backlog. With SES in `us-east-2`:
 
 1. Verify the sending domain (or address) in SES and, while the account is in the SES
    sandbox, each recipient — or request production access.

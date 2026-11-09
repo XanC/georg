@@ -89,7 +89,7 @@ class SmtpConfig(_Section):
 class ReviewConfig(_Section):
     require_approval: bool = True
     notify: tuple[str, ...] = ()
-    """Email addresses told when a service is ready for review."""
+    """Email addresses told when a service is ready for review or a job fails for good."""
     base_url: str | None = None
     """Public address of the review web app, used for links in notices."""
     smtp: SmtpConfig | None = None
