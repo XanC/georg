@@ -96,6 +96,52 @@ def test_existing_subfolder_is_reused(drive: FakeDrive, tmp_path: Path) -> None:
     assert [f.name for f in drive.files.values() if f.mime == FOLDER_MIME] == ["SPX 11.01.26"]
 
 
+def test_archived_subfolder_is_found_inside_its_year_folder(
+    drive: FakeDrive, tmp_path: Path
+) -> None:
+    year = drive.folder("Services 2026", ARCHIVE)
+    service = drive.folder("SPX 11.01.26", year.id)
+    misc = drive.folder("Misc", ARCHIVE)
+    drive.folder("SPX 11.01.26", misc.id)  # not a year folder: not searched
+
+    ref = make_output(drive, subfolder="SPX {mmddyy}").publish(request(tmp_path))
+
+    assert drive.files[ref.external_id].parents == [service.id]
+    assert [f.name for f in drive.files.values() if f.mime == FOLDER_MIME] == [
+        "Services 2026",
+        "SPX 11.01.26",
+        "Misc",
+        "SPX 11.01.26",
+    ]
+
+
+def test_missing_subfolder_is_created_in_year_folder(drive: FakeDrive, tmp_path: Path) -> None:
+    drive.folder("Services 2025", ARCHIVE)
+    out = make_output(
+        drive, subfolder="SPX {mmddyy}", create_in="year", year_subfolder="Services {yyyy}"
+    )
+    ref = out.publish(request(tmp_path))
+    folder = drive.files[drive.files[ref.external_id].parents[0]]
+    year = drive.files[folder.parents[0]]
+    assert folder.name == "SPX 11.01.26" and year.name == "Services 2026"
+    assert year.parents == [ARCHIVE]
+    # A second publish reuses both folders.
+    assert out.publish(request(tmp_path)).external_id == ref.external_id
+    assert [f.name for f in drive.files.values() if f.mime == FOLDER_MIME] == [
+        "Services 2025",
+        "Services 2026",
+        "SPX 11.01.26",
+    ]
+
+
+def test_create_in_year_reuses_existing_year_folder(drive: FakeDrive, tmp_path: Path) -> None:
+    year = drive.folder("Services 2026", ARCHIVE)
+    out = make_output(drive, subfolder="SPX {mmddyy}", create_in="year")
+    ref = out.publish(request(tmp_path))
+    folder = drive.files[drive.files[ref.external_id].parents[0]]
+    assert folder.name == "SPX 11.01.26" and folder.parents == [year.id]
+
+
 def test_retry_after_success_does_not_upload_again(drive: FakeDrive, tmp_path: Path) -> None:
     out = make_output(drive)
     first = out.publish(request(tmp_path))
@@ -182,6 +228,9 @@ def test_request_errors(drive: FakeDrive, tmp_path: Path) -> None:
     [
         ({"filename": "{title}.mp3"}, ("service_hq",), False),
         ({"subfolder": "a/{date}"}, ("service_hq",), False),
+        ({"year_subfolder": "a/{date}"}, ("service_hq",), False),
+        ({"year_patterns": [""]}, ("service_hq",), False),
+        ({"create_in": "middle"}, ("service_hq",), False),
         ({"chunk_size": 1000}, ("service_hq",), False),
         ({"extra": True}, ("service_hq",), False),
         ({}, ("sermon",), False),

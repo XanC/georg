@@ -1,17 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """`InputSource` for recordings uploaded to a Google Drive folder.
 
-The configured folder holds one subfolder per service, named like "SPX 11.01.26". Every
-video in a subfolder is one part of the recording (an interrupted recording has several,
-joined in name order); other files, such as the bulletin document, are passed on as
-`hints["documents"]`. A subfolder is reported only once all of its videos have a size
-and have not been modified for `stable_minutes`, so uploads in progress are skipped.
+The configured folder holds one subfolder per service, named like "SPX 11.01.26", either
+at its top level or inside a year folder like "Services 2026" (see
+`georg.service_folders`). Every video in a subfolder is one part of the recording (an
+interrupted recording has several, joined in name order); other files, such as the
+bulletin document, are passed on as `hints["documents"]`. A subfolder is reported only
+once all of its videos have a size and have not been modified for `stable_minutes`, so
+uploads in progress are skipped.
 
 Access is as a service account the folder is shared with, or as a Google account that
 signed in with `georg drive-login` (docs/google-drive.md).
 """
 
-import fnmatch
 import hashlib
 import logging
 import os
@@ -37,6 +38,15 @@ from georg.gdrive import (
     parse_time,
     quote_query,
 )
+from georg.gdrive.folders import DriveFolderStore
+from georg.service_folders import (
+    Folder,
+    ServiceFolderLayout,
+    check_date_format,
+    check_patterns,
+    folder_date,  # noqa: F401  (re-exported for existing imports)
+    pattern_prefix,
+)
 
 TYPE_NAME = "google_drive"
 FILE_FIELDS = "id, name, mimeType, size, md5Checksum, modifiedTime, createdTime, trashed"
@@ -58,6 +68,8 @@ class GoogleDriveInputOptions(BaseModel):
     """Shell-style pattern for service subfolder names."""
     date_format: str = "%m.%d.%y"
     """`strptime` format of the date that follows the pattern's literal prefix."""
+    year_patterns: tuple[str, ...] = ("Services *",)
+    """Top-level folders service folders may be archived into; empty disables the search."""
     video_extensions: tuple[str, ...] = ("mp4", "mkv", "mov", "m4v")
     stable_minutes: float = Field(default=10, ge=0)
     """A video counts as complete once Drive's `modifiedTime` is at least this old."""
@@ -76,32 +88,24 @@ class GoogleDriveInputOptions(BaseModel):
     @field_validator("date_format")
     @classmethod
     def _date_format(cls, value: str) -> str:
-        sample = date(2026, 11, 1)
-        try:
-            parsed = datetime.strptime(sample.strftime(value), value).date()
-        except ValueError as exc:
-            raise ValueError(f"invalid date_format: {exc}") from exc
-        if parsed != sample:
-            raise ValueError("date_format must include the day, month, and year")
-        return value
+        return check_date_format(value)
+
+    @field_validator("year_patterns")
+    @classmethod
+    def _year_patterns(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return check_patterns(value)
 
     @property
     def prefix(self) -> str:
         """The pattern's literal part before its first wildcard."""
-        match = re.search(r"[*?\[]", self.folder_pattern)
-        return self.folder_pattern[: match.start()] if match else self.folder_pattern
+        return pattern_prefix(self.folder_pattern)
 
-
-def folder_date(name: str, prefix: str, date_format: str) -> date | None:
-    """Parse the service date after `prefix`, ignoring any trailing words."""
-    rest = name[len(prefix) :].strip() if name.startswith(prefix) else name.strip()
-    candidates = [rest, *rest.split()[:1]]
-    for text in candidates:
-        try:
-            return datetime.strptime(text, date_format).date()
-        except ValueError:
-            continue
-    return None
+    def layout(self) -> ServiceFolderLayout:
+        return ServiceFolderLayout(
+            folder_pattern=self.folder_pattern,
+            date_format=self.date_format,
+            year_patterns=self.year_patterns,
+        )
 
 
 def _size(raw: Mapping[str, Any]) -> int | None:
@@ -167,6 +171,8 @@ class GoogleDriveInput:
             opts.credentials_file, [SCOPE_READONLY], subject=opts.subject, http_client=client
         )
         self._drive = DriveClient(tokens, client, attempts=opts.attempts, sleep=sleep)
+        self._store = DriveFolderStore(self._drive, all_drives=opts.include_shared_drives)
+        self._layout = opts.layout()
         self._clock = clock
 
     @classmethod
@@ -191,27 +197,20 @@ class GoogleDriveInput:
         return now - modified >= timedelta(minutes=self.options.stable_minutes)
 
     def discover(self, since: datetime | None) -> Iterator[SourceItem]:
-        opts = self.options
-        folders = []
-        for raw in self._children(self.folder_id, f" and mimeType = '{FOLDER_MIME}'"):
-            name = str(raw.get("name", ""))
-            if not fnmatch.fnmatchcase(name, opts.folder_pattern):
-                continue
-            service_date = folder_date(name, opts.prefix, opts.date_format)
-            if service_date is None:
-                log.warning("google_drive: skipping %r: no %s date", name, opts.date_format)
-                continue
-            if since is not None and service_date < since.date():
-                continue
-            folders.append((service_date, name, raw))
-        folders.sort(key=lambda f: (f[0], f[1]))
-        for service_date, name, folder in folders:
-            item = self._item(folder, name, service_date)
+        found = [
+            service
+            for service in self._layout.service_folders(self._store, self.folder_id)
+            if since is None or service.date >= since.date()
+        ]
+        found.sort(key=lambda service: (service.date, service.folder.name))
+        for service in found:
+            item = self._item(service.folder, service.date)
             if item is not None:
                 yield item
 
-    def _item(self, folder: Mapping[str, Any], name: str, service_date: date) -> SourceItem | None:
-        files = list(self._children(str(folder["id"])))
+    def _item(self, folder: Folder, service_date: date) -> SourceItem | None:
+        name = folder.name
+        files = list(self._children(folder.ref))
         videos = sorted((f for f in files if self._is_video(f)), key=_part_order)
         if not videos:
             log.info("google_drive: %r has no video yet", name)
@@ -229,12 +228,12 @@ class GoogleDriveInput:
         created = [t for t in (parse_time(v.get("createdTime")) for v in videos) if t]
         return SourceItem(
             source_type=TYPE_NAME,
-            source_ref=str(folder["id"]),
+            source_ref=folder.ref,
             parts=tuple(_part(v) for v in videos),
             title=name,
             service_date=service_date,
             recorded_at=min(created) if created else None,
-            url=f"https://drive.google.com/drive/folders/{folder['id']}",
+            url=f"https://drive.google.com/drive/folders/{folder.ref}",
             hints={"documents": documents, "folder_name": name},
         )
 

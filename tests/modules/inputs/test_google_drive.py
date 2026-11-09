@@ -84,6 +84,37 @@ def test_discover_lists_complete_services_across_pages(drive: FakeDrive) -> None
     assert all(r.url.params["supportsAllDrives"] == "true" for r in list_calls)
 
 
+def test_discover_finds_services_archived_into_year_folders(drive: FakeDrive) -> None:
+    service_folder(drive, "SPX 11.01.26", ("service.mp4", b"video"))
+    archived = drive.folder("SPX 10.25.26", drive.folder("Services 2026", ROOT).id)
+    drive.add("a.mp4", archived.id, b"archived", modified=OLD)
+    old = drive.folder("SPX 12.28.25", drive.folder("Services 2025", ROOT).id)
+    drive.add("b.mp4", old.id, b"older", modified=OLD)
+    drive.folder("Misc", ROOT)
+    drive.folder("Assets Audio", ROOT)
+    drive.folder("Services of interest", ROOT)  # no matching service folders inside
+    drive.add("SPX 11.08.26.mp4", ROOT, b"loose file, not a folder")
+
+    items = list(make_input(drive).discover(None))
+
+    assert [i.title for i in items] == ["SPX 12.28.25", "SPX 10.25.26", "SPX 11.01.26"]
+    assert items[1].source_ref == archived.id
+    assert items[0].service_date == date(2025, 12, 28)
+
+
+def test_discover_year_patterns_disabled_or_custom(drive: FakeDrive) -> None:
+    year = drive.folder("Services 2026", ROOT)
+    archived = drive.folder("SPX 10.25.26", year.id)
+    drive.add("a.mp4", archived.id, b"archived", modified=OLD)
+    by_year = drive.folder("2026", ROOT)
+    other = drive.folder("SPX 11.01.26", by_year.id)
+    drive.add("b.mp4", other.id, b"other scheme", modified=OLD)
+
+    assert [i.title for i in make_input(drive, year_patterns=[]).discover(None)] == []
+    custom = make_input(drive, year_patterns=["Services *", "20??"])
+    assert [i.title for i in custom.discover(None)] == ["SPX 10.25.26", "SPX 11.01.26"]
+
+
 def test_discover_orders_parts_by_name_then_created_time(drive: FakeDrive) -> None:
     folder = drive.folder("SPX 11.01.26", ROOT)
     t = OLD - timedelta(hours=1)

@@ -5,16 +5,20 @@ Each upload records the publication key in the file's `appProperties`, so
 `find_existing` locates it again and a retry or re-publish updates that file instead
 of creating a duplicate. Content is sent with Drive's resumable upload protocol and
 checked against Drive's reported size and MD5.
+
+The per-service subfolder (`subfolder`) is located wherever it currently lives — at
+the top level of `folder_id` or inside a year folder like "Services 2026" — by the
+shared `georg.service_folders` layout, so a service already archived keeps one folder
+instead of getting a duplicate at the top level.
 """
 
 import hashlib
 import logging
-import string
 import time
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -23,7 +27,6 @@ from georg.core.config import OutputConfig, resolve_secret
 from georg.core.errors import ConfigError, ModuleError
 from georg.core.types import ArtifactRef, ExternalRef, PublicationRequest
 from georg.gdrive import (
-    FOLDER_MIME,
     SCOPE_DRIVE,
     DriveClient,
     GoogleTokens,
@@ -31,6 +34,13 @@ from georg.gdrive import (
     quote_query,
 )
 from georg.gdrive.client import CHUNK_ALIGN
+from georg.gdrive.folders import DriveFolderStore
+from georg.service_folders import (
+    ServiceFolderLayout,
+    check_patterns,
+    check_template,
+    template_values,
+)
 
 TYPE_NAME = "google_drive_upload"
 KEY_PROPERTY = "georg_publication_key"
@@ -38,21 +48,8 @@ SHA256_PROPERTY = "georg_sha256"
 MAX_PROPERTY_BYTES = 124
 """Drive's limit on the UTF-8 size of an app property's key plus value."""
 FILE_FIELDS = "id, name, size, md5Checksum, webViewLink, trashed"
-TEMPLATE_FIELDS = frozenset({"date", "mmddyy", "yyyy", "yy", "mm", "dd"})
 
 log = logging.getLogger(__name__)
-
-
-def template_values(service_date: date) -> dict[str, str]:
-    """{date} is YYYY-MM-DD and {mmddyy} is MM.DD.YY (the "SPX 11.01.26" style)."""
-    return {
-        "date": service_date.isoformat(),
-        "mmddyy": service_date.strftime("%m.%d.%y"),
-        "yyyy": service_date.strftime("%Y"),
-        "yy": service_date.strftime("%y"),
-        "mm": service_date.strftime("%m"),
-        "dd": service_date.strftime("%d"),
-    }
 
 
 class GoogleDriveUploadOptions(BaseModel):
@@ -66,7 +63,13 @@ class GoogleDriveUploadOptions(BaseModel):
     """Workspace user a service account impersonates (domain-wide delegation)."""
     filename: str = "{date}.mp3"
     subfolder: str | None = None
-    """Optional subfolder of `folder_id`, e.g. "SPX {mmddyy}"; created if missing."""
+    """Optional per-service subfolder of `folder_id`, e.g. "SPX {mmddyy}"."""
+    year_patterns: tuple[str, ...] = ("Services *",)
+    """Top-level folders under `folder_id` the service subfolder may be archived into."""
+    create_in: Literal["root", "year"] = "root"
+    """Where a missing service subfolder is created: `folder_id` or its year folder."""
+    year_subfolder: str = "Services {yyyy}"
+    """Year folder that `create_in = "year"` creates or reuses for the service date."""
     rendition: str = "service_hq"
     mime: str = "audio/mpeg"
     chunk_size: int = Field(default=8 * 1024 * 1024, gt=0)
@@ -74,20 +77,23 @@ class GoogleDriveUploadOptions(BaseModel):
     timeout_s: float = Field(default=120.0, gt=0)
     attempts: int = Field(default=4, ge=1)
 
-    @field_validator("filename", "subfolder")
+    @field_validator("filename", "subfolder", "year_subfolder")
     @classmethod
     def _template(cls, value: str | None) -> str | None:
-        if value is None:
-            return value
-        try:
-            fields = {f for _, f, _, _ in string.Formatter().parse(value) if f is not None}
-        except ValueError as exc:
-            raise ValueError(f"invalid template: {exc}") from exc
-        if not fields <= TEMPLATE_FIELDS:
-            raise ValueError(f"unknown template fields {sorted(fields - TEMPLATE_FIELDS)}")
-        if not value.strip() or "/" in value:
-            raise ValueError("must be a non-empty name without '/'")
-        return value
+        return check_template(value) if value is not None else value
+
+    @field_validator("year_patterns")
+    @classmethod
+    def _year_patterns(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return check_patterns(value)
+
+    def layout(self) -> ServiceFolderLayout:
+        return ServiceFolderLayout(
+            service_template=self.subfolder or ServiceFolderLayout().service_template,
+            year_patterns=self.year_patterns,
+            year_template=self.year_subfolder,
+            create_in_year=self.create_in == "year",
+        )
 
     @field_validator("chunk_size")
     @classmethod
@@ -146,13 +152,11 @@ class GoogleDriveUploadOutput:
             opts.credentials_file, [SCOPE_DRIVE], subject=opts.subject, http_client=client
         )
         self._drive = DriveClient(tokens, client, attempts=opts.attempts, sleep=sleep)
+        self._store = DriveFolderStore(self._drive)
+        self._layout = opts.layout()
 
     def filename(self, service_date: date) -> str:
         return self.options.filename.format(**template_values(service_date))
-
-    def subfolder(self, service_date: date) -> str | None:
-        template = self.options.subfolder
-        return template.format(**template_values(service_date)) if template else None
 
     def _ref(self, raw: dict[str, Any]) -> ExternalRef:
         file_id = str(raw["id"])
@@ -226,17 +230,9 @@ class GoogleDriveUploadOutput:
         return self._find(request.publication_key)
 
     def _parent(self, service_date: date) -> str:
-        root = self.folder_id
-        name = self.subfolder(service_date)
-        if name is None:
-            return root
-        query = (
-            f"'{quote_query(root)}' in parents and name = '{quote_query(name)}' "
-            f"and mimeType = '{FOLDER_MIME}' and trashed = false"
-        )
-        for raw in self._drive.list_files(query, "id, name", order_by="createdTime"):
-            return str(raw["id"])
-        return str(self._drive.create_folder(name, root)["id"])
+        if self.options.subfolder is None:
+            return self.folder_id
+        return self._layout.locate(self._store, self.folder_id, service_date)
 
     def _artifact(self, request: PublicationRequest) -> ArtifactRef:
         try:
