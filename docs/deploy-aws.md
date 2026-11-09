@@ -190,7 +190,8 @@ Georg emails the `review.notify` addresses through `review.smtp`:
   settings are removed from the text. If sending fails, the worker logs it and carries
   on.
 
-Without `notify` addresses or `smtp` settings, no email is sent. With SES in `us-east-2`:
+Without `notify` addresses or `smtp` settings, no email is sent; failed jobs are still
+marked as reported, so turning email on later sends no backlog. With SES in `us-east-2`:
 
 1. Verify the sending domain (or address) in SES and, while the account is in the SES
    sandbox, each recipient — or request production access.

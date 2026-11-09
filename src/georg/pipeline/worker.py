@@ -136,15 +136,17 @@ class Worker:
         """Email reviewers about failed jobs not yet reported, once per job.
 
         Covers jobs failed by any worker, including leases that ran out of attempts.
-        Errors are logged; they never change a job's state or stop the worker.
+        Without email settings, failures are still marked as reported, so turning email
+        on later sends no backlog. Errors are logged; they never change a job's state
+        or stop the worker.
         """
-        review = self.config.review
-        if not review.notify or review.smtp is None:
-            return
         try:
             jobs = self.queue.claim_failure_notices()
         except Exception:
             log.exception("cannot claim failed jobs for notification")
+            return
+        review = self.config.review
+        if not review.notify or review.smtp is None:
             return
         for job in jobs:
             try:

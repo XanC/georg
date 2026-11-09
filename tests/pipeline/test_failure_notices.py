@@ -195,7 +195,7 @@ def test_smtp_failure_is_logged_and_swallowed(
 
 
 @pytest.mark.parametrize("notify, smtp", [((), True), (("a@x.org",), False)])
-def test_without_email_settings_nothing_happens(
+def test_without_email_settings_failures_are_marked_reported(
     tmp_path: Path, engine: Engine, notify: tuple[str, ...], smtp: bool
 ) -> None:
     config = _config(tmp_path, notify=notify)
@@ -207,7 +207,12 @@ def test_without_email_settings_nothing_happens(
     worker = _worker(config, engine, queue, "discover", ModuleError("broken"))
     assert worker.run_once()
     assert FakeSmtp.sent == []
-    assert queue.get(job_id).failure_notified_at is None
+    job = queue.get(job_id)
+    assert job.status == "failed" and job.failure_notified_at is not None
+
+    enabled = Worker(_config(tmp_path), engine, queue=queue, smtp_factory=FakeSmtp)
+    enabled.notify_failures()
+    assert FakeSmtp.sent == []
 
 
 def test_publish_failure_names_outputs_without_secrets(
