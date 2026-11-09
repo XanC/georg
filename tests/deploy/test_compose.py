@@ -62,3 +62,14 @@ def test_aws_config_example_loads_and_watchdog_reaches_the_host() -> None:
     assert config.idle_shutdown_command == ("touch", "/run/georg/shutdown/poweroff")
     data_mount = "${GEORG_ROOT:-/srv/georg}/data:" + str(config.data_dir)
     assert data_mount in _compose()["services"]["georg-worker"]["volumes"]
+
+
+def test_aws_config_sftp_output_options_validate() -> None:
+    from georg.core.config import load_config
+    from georg.modules.outputs.sftp import SftpOptions
+
+    config = load_config(DEPLOY / "georg.aws.toml")
+    (phone,) = [o for o in config.outputs if o.type == "sftp"]
+    options = SftpOptions.model_validate(dict(phone.options))
+    assert str(options.key_path) == "/run/secrets/sftp-key"
+    assert str(options.known_hosts) == "/run/secrets/sftp-known-hosts"
