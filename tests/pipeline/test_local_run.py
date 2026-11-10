@@ -137,6 +137,23 @@ def test_run_local_caches_expensive_stages(tmp_path: Path, parts: list[Path]) ->
     assert (tmp_path / "two" / "transcript.md").read_text().endswith("Grace to you.\n")
 
 
+def test_preview_is_the_whole_recording_cached_by_source(tmp_path: Path, parts: list[Path]) -> None:
+    cache = StageCache(tmp_path / "cache")
+    kwargs = {"cache": cache, "renditions": default_renditions()[:1], "documents": ["x"]}
+    first = run_local(parts, tmp_path / "one", processors(), **kwargs)  # type: ignore[arg-type]
+    preview = first.files["preview"]
+    info = probe(preview)
+    assert abs(info.duration_ms - first.duration_ms) < 100  # 0 to the end, not cut
+    assert abs(info.duration_ms - 12_000) < 200
+    assert (info.channels, info.sample_rate) == (1, 22050)
+    mtime = preview.stat().st_mtime_ns
+    override = PROPOSED.model_copy(update={"service_start_ms": 3_000})
+    second = run_local(parts, tmp_path / "two", processors(), boundaries=override, **kwargs)  # type: ignore[arg-type]
+    assert second.files["preview"] == preview
+    assert second.timings["preview"] == 0.0
+    assert preview.stat().st_mtime_ns == mtime
+
+
 def test_remote_probe_cache_uses_hashed_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

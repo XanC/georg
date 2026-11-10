@@ -35,6 +35,14 @@ from georg.modules.processors.classify import segments_from_json, segments_to_js
 from georg.pipeline.registry import Processors
 
 EXTRACT_VERSION = "extract-1"
+PREVIEW = "preview"
+"""Built-in rendition of the whole extracted recording, for the review page's player."""
+PREVIEW_VERSION = "preview-1"
+"""Bump whenever the preview's encoding changes."""
+PREVIEW_SPEC = RenditionSpec(
+    name=PREVIEW, span="service", channels=1, sample_rate=22050, bitrate_kbps=40
+)
+"""Encoding only (CBR so browsers seek accurately); never cut, so `span` is unused."""
 
 
 class StageCache:
@@ -150,6 +158,7 @@ def run_local(
 
     timed("extract", extract)
     duration_ms = ffmpeg.probe(audio).duration_ms
+    preview = timed("preview", lambda: _preview(cache, source_key, audio, duration_ms))
 
     segments: list[AudioSegment] = timed(
         "classify",
@@ -231,11 +240,30 @@ def run_local(
         mastered.unlink(missing_ok=True)
     timings["master"] = round(time.monotonic() - start, 1)
 
-    files = {name: ref.path for name, ref in refs.items()}
+    files = {PREVIEW: preview, **{name: ref.path for name, ref in refs.items()}}
     files["transcript"] = transcript_md
     result = LocalRunResult(proposal, chosen, metadata, formatted, files, duration_ms, timings)
     _write_report(out_dir / "report.json", result)
     return result
+
+
+def _preview(
+    cache: StageCache, source_key: str, audio: Path, duration_ms: int
+) -> tuple[Path, bool]:
+    """Encode the whole recording once per source; boundaries never change it."""
+    path = cache.path(PREVIEW, cache.key(source_key, PREVIEW_VERSION), ".mp3")
+    if path.exists():
+        return path, True
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.stem}.partial.mp3")
+    try:
+        ffmpeg.encode_mp3(audio, tmp, PREVIEW_SPEC)
+        ffmpeg.verify_decode(tmp, expected_ms=duration_ms)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    tmp.replace(path)
+    return path, False
 
 
 def _parse[T](cached: tuple[str, bool], parse: Callable[[str], T]) -> tuple[T, bool]:

@@ -35,7 +35,8 @@ formatter = { type = "llama_cpp", options = { cache_dir = "/var/lib/georg/models
 # formatter = { type = "openai_chat", options = { model = "gpt-4o-mini", api_key = "env:OPENAI_API_KEY" } }
 metadata = { type = "rules" }
 
-# Renditions default to sermon, service_hq and service_phone.
+# Renditions default to sermon, service_hq and service_phone. A built-in whole-recording
+# `preview` (for the review page's player) is always made; that name is reserved.
 
 # Needs the georg-bridge plugin (wordpress/georg-bridge) with the same key id and key in the
 # site's wp-config.php (docs/wordpress.md). Posts are drafts unless status = "publish".

@@ -34,6 +34,7 @@ BOUNDS = ServiceBoundaries(
 )
 META = SermonMetadata(title="Saints", preacher="Eric", scripture=("Matthew 5:1-12",))
 AUDIO = bytes(range(256)) * 40
+PREVIEW_AUDIO = bytes(range(256)) * 4096
 REPORT = {
     "proposal": {"confidence": 0.82, "explanation": "Sermon begins after the gospel reading."},
     "boundaries": {"service_start_ms": 60_000},
@@ -217,8 +218,60 @@ def test_review_page_shows_report_and_play_controls(env: Env) -> None:
     assert "after the gospel reading" in html
     assert "dropped &#39;amen&#39;" in html
     assert f'src="/artifacts/{env.audio_id}"' in html
-    assert 'id="seek-audio" data-origin-ms="60000"' in html
     assert "Blessed are the poor" in html
+
+
+def _add_preview(env: Env, tmp_path: Path) -> int:
+    path = tmp_path / "preview.mp3"
+    path.write_bytes(PREVIEW_AUDIO)
+    ref = LocalStore.for_data_dir(tmp_path / "data").put(path, mime="audio/mpeg")
+    with session_factory(env.engine).begin() as s:
+        meta = {"name": "preview", "span": "recording"}
+        artifact = ArtifactRepository(s).add(
+            env.service_id, "rendition", ref, storage_key=ref.sha256, meta=meta
+        )
+        return artifact.id
+
+
+def test_review_page_without_preview_falls_back_to_service_hq(env: Env) -> None:
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert "has no whole-recording preview yet" in html
+    assert "Reprocess the service" in html
+    assert 'id="seek-audio" data-origin-ms="60000"' in html
+    assert (
+        '<output id="player-position" for="seek-audio" class="position">0:01:00.0</output>' in html
+    )
+    assert html.count('class="set-from"') == 4
+
+
+def test_review_page_with_preview_uses_recording_time(env: Env, tmp_path: Path) -> None:
+    preview_id = _add_preview(env, tmp_path)
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert "no whole-recording preview" not in html
+    main = f'src="/artifacts/{preview_id}" id="seek-audio" data-origin-ms="0"'
+    assert main in html
+    assert html.count('id="seek-audio"') == 1
+    assert html.index(main) < html.index("Rendered audio (cut at the boundaries)")
+    assert html.index("cut at the boundaries") < html.index(f'src="/artifacts/{env.audio_id}"')
+    assert html.count(">preview<") == 0  # not listed again among the cut renditions
+    assert (
+        '<output id="player-position" for="seek-audio" class="position">0:00:00.0</output>' in html
+    )
+    for name in ("service_start", "sermon_start", "sermon_end", "service_end"):
+        assert f'class="play-from" data-field="f-{name}"' in html
+        assert f'class="set-from" data-field="f-{name}"' in html
+
+
+def test_preview_supports_range_requests(env: Env, tmp_path: Path) -> None:
+    preview_id = _add_preview(env, tmp_path)
+    _login(env)
+    part = env.client.get(f"/artifacts/{preview_id}", headers={"Range": "bytes=500000-500999"})
+    assert part.status_code == 206
+    assert part.content == PREVIEW_AUDIO[500_000:501_000]
+    assert part.headers["content-range"] == f"bytes 500000-500999/{len(PREVIEW_AUDIO)}"
+    assert part.headers["content-length"] == "1000"
 
 
 def test_save_metadata_creates_revision_without_render(env: Env) -> None:

@@ -16,13 +16,32 @@
 
 {% include "_render_status.html" %}
 
+<section aria-labelledby="recording-h" class="recording{% if preview %} sticky{% endif %}">
+  <h2 id="recording-h">Whole recording</h2>
+  {% if preview %}
+  <figure class="player main">
+    <figcaption>Full recording, low quality preview. Times are recording time, as in the boundary fields.</figcaption>
+    <audio controls preload="metadata" src="/artifacts/{{ preview.artifact.id }}" id="seek-audio" data-origin-ms="0"></audio>
+  </figure>
+  {% else %}
+  <p class="flash warning" role="status">
+    This service has no whole-recording preview yet (it was processed before previews existed).
+    {% if seek %}The controls below use the {{ seek.name }} rendition, which starts at the service start.{% endif %}
+    Reprocess the service to create the preview.
+  </p>
+  {% endif %}
+  {% if seek %}
+  <p>Player position: <output id="player-position" for="seek-audio" class="position">{{ (seek.origin_ms or 0)|hms }}.0</output></p>
+  {% endif %}
+</section>
+
 <section aria-labelledby="audio-h">
-  <h2 id="audio-h">Audio</h2>
+  <h2 id="audio-h">Rendered audio (cut at the boundaries)</h2>
   {% for f in audio %}
   <figure class="player">
     <figcaption>{{ f.name }}{% if not f.current and f.artifact.meta.get("boundaries") %} (earlier boundaries){% endif %}</figcaption>
     <audio controls preload="metadata" src="/artifacts/{{ f.artifact.id }}"
-      {% if seek and f.artifact.id == seek.artifact.id %}id="seek-audio" data-origin-ms="{{ f.origin_ms or 0 }}"{% endif %}></audio>
+      {% if not preview and seek and f.artifact.id == seek.artifact.id %}id="seek-audio" data-origin-ms="{{ f.origin_ms or 0 }}"{% endif %}></audio>
   </figure>
   {% else %}
   <p>No audio has been rendered yet.</p>
@@ -62,12 +81,14 @@
           <input id="f-{{ name }}" name="{{ name }}" value="{{ values[name] }}" inputmode="numeric"
             pattern="\d+:[0-5]\d:[0-5]\d(\.\d{1,3})?" required>
           <button type="button" class="play-from" data-field="f-{{ name }}" {% if not seek %}disabled{% endif %}
-            aria-label="Play {{ label | lower }} from here">▶ Play</button>
+            aria-label="Jump the player to {{ label | lower }}">▶ Jump to</button>
+          <button type="button" class="set-from" data-field="f-{{ name }}" {% if not seek %}disabled{% endif %}
+            aria-label="Set {{ label | lower }} to the player position">Set to player</button>
         </div>
       </div>
     {% endfor %}
     </div>
-    {% if not seek %}<p class="hint">Play buttons need the service_hq rendition.</p>{% endif %}
+    {% if not seek %}<p class="hint">The player controls need the recording preview or the service_hq rendition.</p>{% endif %}
   </fieldset>
   <fieldset>
     <legend>Metadata</legend>

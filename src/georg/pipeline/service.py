@@ -30,7 +30,7 @@ from georg.db.repositories import (
 )
 from georg.jobs.queue import JobQueue
 from georg.media import ffmpeg
-from georg.pipeline.local import LocalRunResult, StageCache, run_local
+from georg.pipeline.local import PREVIEW, LocalRunResult, StageCache, run_local
 from georg.pipeline.registry import Processors, build_input, build_output
 from georg.storage.local import LocalStore
 
@@ -245,11 +245,18 @@ def _store_files(
     if transcript:
         files.append(("report", out_dir / "report.json"))
     artifacts = ArtifactRepository(session)
+    previews = {a.sha256 for a in artifacts.for_service(service_id) if _is_preview(a)}
     sermon_audio_id = None
     for name, path in files:
         ref = store.put(path, mime=mimetypes.guess_type(path.name)[0] or "application/json")
         meta: dict[str, object] = {"name": name}
-        if name == "transcript":
+        if name == PREVIEW:
+            if ref.sha256 in previews:
+                continue
+            kind = "rendition"
+            ref = ref.model_copy(update={"duration_ms": ffmpeg.probe(path).duration_ms})
+            meta["span"] = "recording"
+        elif name == "transcript":
             kind = "transcript_formatted" if result.formatted else "transcript_raw"
         elif name == "report":
             kind = "boundary_proposal"
@@ -261,6 +268,10 @@ def _store_files(
         if kind == "sermon_audio" and sermon_audio_id is None:
             sermon_audio_id = artifact.id
     return sermon_audio_id
+
+
+def _is_preview(artifact: Artifact) -> bool:
+    return artifact.kind == "rendition" and artifact.meta.get("name") == PREVIEW
 
 
 def _renditions_for(
