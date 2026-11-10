@@ -65,6 +65,7 @@ class JobQueue:
         backoff_base: timedelta = timedelta(seconds=30),
         backoff_max: timedelta = timedelta(hours=1),
         max_attempts: int = 5,
+        retry_deadline: timedelta = timedelta(hours=48),
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
         if max_attempts < 1:
@@ -74,6 +75,7 @@ class JobQueue:
         self.backoff_base = backoff_base
         self.backoff_max = backoff_max
         self.max_attempts = max_attempts
+        self.retry_deadline = retry_deadline
         self._clock = clock
 
     def enqueue(
@@ -174,24 +176,38 @@ class JobQueue:
         The job is retried after an exponential backoff if it is retryable and has
         attempts left. Unless `retryable` is given, only a `ModuleError` with
         `retryable=True` is retried; other exceptions are treated as bugs.
+
+        A `ModuleError` carrying `retry_after` waits at least that long, and keeps
+        the job retrying past `max_attempts` while the next run would still land
+        within `retry_deadline` of the job's creation (long server-side waits,
+        like a daily download quota, should not burn the normal attempt budget).
         """
         if retryable is None:
             retryable = isinstance(error, ModuleError) and error.retryable
+        retry_after = error.retry_after if isinstance(error, ModuleError) else None
         message = error if isinstance(error, str) else f"{type(error).__name__}: {error}"
         now = self._clock()
         with self._engine.begin() as conn:
             row = conn.execute(
-                select(_jobs.attempts, _jobs.max_attempts).where(*self._owned(job_id, worker_id))
+                select(_jobs.attempts, _jobs.max_attempts, _jobs.created_at).where(
+                    *self._owned(job_id, worker_id)
+                )
             ).one_or_none()
             if row is None:
                 raise LeaseLostError(f"job {job_id} is not leased by {worker_id}")
-            if retryable and row.attempts < row.max_attempts:
+            delay = self.backoff(row.attempts)
+            if retry_after is not None and retry_after > delay:
+                delay = retry_after
+            if retryable and (
+                row.attempts < row.max_attempts
+                or (retry_after is not None and now + delay <= row.created_at + self.retry_deadline)
+            ):
                 self._update_owned(
                     conn,
                     job_id,
                     worker_id,
                     status="queued",
-                    run_after=now + self.backoff(row.attempts),
+                    run_after=now + delay,
                     worker_id=None,
                     lease_until=None,
                     last_error=message,

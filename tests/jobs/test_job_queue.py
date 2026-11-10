@@ -195,3 +195,46 @@ def test_concurrent_workers_never_share_a_job(db_path: Path, engine: Engine) -> 
     assert set(flat) == ids
     assert all(j.status == "succeeded" and j.attempts == 1 for j in queue.list())
     assert sum(1 for worker in leased if worker) >= 2
+
+
+def test_retry_after_waits_and_outlives_max_attempts(queue: JobQueue, clock: Clock) -> None:
+    """A long server-side wait keeps retrying until the job's retry deadline."""
+    job_id = queue.enqueue("process")
+    error = ModuleError("quota exceeded", retryable=True, retry_after=timedelta(hours=6))
+    for _ in range(8):  # max_attempts is 3, but quota waits don't stop there
+        job = queue.lease("w")
+        assert job is not None
+        assert queue.fail(job_id, "w", error) == "queued"
+        assert queue.get(job_id).run_after == clock.now + timedelta(hours=6)
+        clock.advance(hours=6)
+    job = queue.lease("w")
+    assert job is not None
+    # 48h after creation the next 6h wait lands past the deadline: permanently failed
+    assert queue.fail(job_id, "w", error) == "failed"
+    assert queue.get(job_id).last_error == "ModuleError: quota exceeded"
+
+
+def test_retry_after_below_backoff_uses_backoff(queue: JobQueue, clock: Clock) -> None:
+    job_id = queue.enqueue("process")
+    assert queue.lease("w") is not None
+    error = ModuleError("slow down", retryable=True, retry_after=timedelta(seconds=5))
+    assert queue.fail(job_id, "w", error) == "queued"
+    assert queue.get(job_id).run_after == clock.now + timedelta(seconds=30)
+
+
+def test_retry_after_does_not_make_other_errors_wait(queue: JobQueue, clock: Clock) -> None:
+    job_id = queue.enqueue("process")
+    assert queue.lease("w") is not None
+    assert queue.fail(job_id, "w", ModuleError("plain", retryable=True)) == "queued"
+    assert queue.get(job_id).run_after == clock.now + timedelta(seconds=30)
+
+
+def test_retry_after_retries_despite_exhausted_attempts(queue: JobQueue, clock: Clock) -> None:
+    job_id = queue.enqueue("process", max_attempts=1)
+    assert queue.lease("w") is not None
+    error = ModuleError("hard", retryable=True, retry_after=timedelta(hours=6))
+    # within the deadline a retry_after error still retries despite max_attempts=1
+    assert queue.fail(job_id, "w", error) == "queued"
+    clock.advance(hours=6)
+    assert queue.lease("w") is not None
+    assert queue.fail(job_id, "w", ModuleError("hard", retryable=True)) == "failed"

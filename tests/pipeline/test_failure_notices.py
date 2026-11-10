@@ -297,3 +297,25 @@ def test_drive_login_hint_survives_redaction(config: GeorgConfig, engine: Engine
     body = message.get_content()
     assert "Token has been expired or revoked." in body
     assert "the sign-in may have been revoked: run `georg drive-login`" in body
+
+
+def test_quota_failure_email_reports_drive_reason(config: GeorgConfig, engine: Engine) -> None:
+    """The permanent-failure email carries the server's own message."""
+    service_id, _, _ = _service(engine)
+    queue = JobQueue(engine, max_attempts=1, retry_deadline=timedelta(0))
+    queue.enqueue("process", {"service_id": service_id})
+    error = ModuleError(
+        "ffprobe failed (1): Server returned 403 Forbidden (access denied); "
+        "server answered 403: The download quota for this file has been "
+        "exceeded. (downloadQuotaExceeded)",
+        retryable=True,
+        retry_after=timedelta(hours=6),
+    )
+    worker = _worker(config, engine, queue, "process", error)
+    assert worker.run_once()
+    [job] = queue.list()
+    assert job.status == "failed"
+    [message] = FakeSmtp.sent
+    body = message.get_content()
+    assert "The download quota for this file has been exceeded." in body
+    assert "downloadQuotaExceeded" in body

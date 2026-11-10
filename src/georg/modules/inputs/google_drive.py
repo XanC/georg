@@ -80,6 +80,8 @@ class GoogleDriveInputOptions(BaseModel):
     include_shared_drives: bool = True
     timeout_s: float = Field(default=60.0, gt=0)
     attempts: int = Field(default=4, ge=1)
+    quota_retry_after_hours: float = Field(default=6, gt=0)
+    """Wait before retrying when Drive reports a download quota or rate limit."""
 
     @field_validator("video_extensions")
     @classmethod
@@ -253,6 +255,7 @@ class GoogleDriveInput:
                     name=local_name(index, part),
                     key=f"drive\0{part.ref}\0{part.size}\0{part.checksum}",
                     headers=self._drive.media_headers,
+                    quota_retry_after=timedelta(hours=self.options.quota_retry_after_hours),
                 )
             )
         return media
