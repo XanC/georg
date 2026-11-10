@@ -81,6 +81,7 @@ class SmtpConfig(_Section):
     port: int = 587
     starttls: bool = True
     username: str | None = None
+    """May be an "env:NAME" reference."""
     password: str | None = None
     """Normally an "env:NAME" reference."""
     sender: str
