@@ -104,8 +104,42 @@ class Transcript(Model):
         return " ".join(seg.text.strip() for seg in self.segments if seg.text.strip())
 
     def within(self, span: TimeRange) -> "Transcript":
-        kept = tuple(s for s in self.segments if span.contains(s.range))
-        return self.model_copy(update={"segments": kept})
+        """Keep the parts of the transcript overlapping `span`.
+
+        A segment with words contributes only its words whose midpoint is inside
+        the span; it is dropped when none remain. A segment without words is
+        kept when its midpoint is inside the span, so partially overlapping
+        segments survive only when mostly inside.
+        """
+        kept: list[TranscriptSegment] = []
+        for seg in self.segments:
+            if seg.range.end_ms <= span.start_ms or seg.range.start_ms >= span.end_ms:
+                continue
+            if seg.words:
+                words = tuple(
+                    w
+                    for w in seg.words
+                    if span.start_ms <= (w.range.start_ms + w.range.end_ms) / 2 < span.end_ms
+                )
+                if not words:
+                    continue
+                kept.append(
+                    seg.model_copy(
+                        update={
+                            "text": "".join(w.text for w in words).strip(),
+                            "range": TimeRange(
+                                start_ms=words[0].range.start_ms,
+                                end_ms=words[-1].range.end_ms,
+                            ),
+                            "words": words,
+                        }
+                    )
+                )
+            else:
+                midpoint = (seg.range.start_ms + seg.range.end_ms) / 2
+                if span.start_ms <= midpoint < span.end_ms:
+                    kept.append(seg)
+        return self.model_copy(update={"segments": tuple(kept)})
 
 
 class FormattedTranscript(Model):

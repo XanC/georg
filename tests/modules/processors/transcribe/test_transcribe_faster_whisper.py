@@ -101,7 +101,7 @@ def test_passes_options_and_language_fallback(tmp_path: Path) -> None:
         "initial_prompt": "St. Paul",
         "beam_size": 2,
         "vad_filter": True,
-        "word_timestamps": False,
+        "word_timestamps": True,
         "condition_on_previous_text": False,
     }
     assert out.language == "en"
@@ -134,7 +134,7 @@ def test_transcribe_defaults_and_each_new_option(tmp_path: Path) -> None:
         "initial_prompt": None,
         "beam_size": 5,
         "vad_filter": True,
-        "word_timestamps": False,
+        "word_timestamps": True,
         "condition_on_previous_text": False,
     }
 
@@ -178,9 +178,61 @@ def test_version_changes_with_each_output_option() -> None:
         {"hallucination_silence_threshold": 1.5},
         {"hotwords": "Eucharist"},
         {"prompt": "St. Paul"},
-        {"word_timestamps": True},
+        {"word_timestamps": False},
+        {"split_gap_seconds": 1.5},
     ]:
         assert make(FakeModel([]), **options)[0].version != base, options
+
+
+def test_stretched_segment_splits_at_word_gap(tmp_path: Path) -> None:
+    # A real 87-min service produced this: VAD let one segment stretch across a
+    # long non-speech region, hiding the sermon's closing words.
+    stretched = Segment(
+        2444.9,
+        2665.08,
+        " our Lord. Amen. For the right of the reception of new members, "
+        "I'd like to invite Ryan Buck",
+        -0.1,
+        [
+            Word(2444.9, 2445.2, " our", 0.9),
+            Word(2445.2, 2445.6, " Lord.", 0.9),
+            Word(2445.6, 2445.9, " Amen.", 0.9),
+            Word(2664.1, 2664.5, " For", 0.8),
+            Word(2664.5, 2664.8, " the", 0.8),
+            Word(2664.8, 2665.08, " right", 0.8),
+        ],
+    )
+    t, _ = make(FakeModel([stretched]))
+    out = t.transcribe(tmp_path / "s.flac", "en")
+    assert [s.text for s in out.segments] == ["our Lord. Amen.", "For the right"]
+    first, second = out.segments
+    assert first.range == TimeRange(start_ms=2444900, end_ms=2445900)
+    assert second.range == TimeRange(start_ms=2664100, end_ms=2665080)
+    assert [w.text for w in first.words] == [" our", " Lord.", " Amen."]
+
+
+def test_gap_split_threshold_and_disable(tmp_path: Path) -> None:
+    words = [
+        Word(0.0, 0.5, " Hello", 0.9),
+        Word(2.0, 2.5, " there", 0.9),  # 1.5 s gap
+    ]
+    t, _ = make(FakeModel([Segment(0.0, 2.5, " Hello there", -0.1, words)]))
+    out = t.transcribe(tmp_path / "s.flac", "en")
+    assert len(out.segments) == 1  # 1.5 s < default 2.0 s gap
+
+    t, _ = make(
+        FakeModel([Segment(0.0, 2.5, " Hello there", -0.1, words)]),
+        split_gap_seconds=1.0,
+    )
+    out = t.transcribe(tmp_path / "s.flac", "en")
+    assert [s.text for s in out.segments] == ["Hello", "there"]
+
+    t, _ = make(
+        FakeModel([Segment(0.0, 2.5, " Hello there", -0.1, words)]),
+        split_gap_seconds=0.0,
+    )
+    out = t.transcribe(tmp_path / "s.flac", "en")
+    assert len(out.segments) == 1  # 0 disables splitting
 
 
 def test_invalid_options() -> None:
