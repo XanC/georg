@@ -19,6 +19,12 @@ options = { folder_id = "env:GEORG_DRIVE_FOLDER_ID", credentials_file = "env:GOO
 classifier = { type = "ina_speech_segmenter" }
 detector = { type = "heuristic" }
 # Local Whisper (needs the `whisper` extra); no API key or subscription.
+# Defaults are tuned for long service recordings: `vad_filter` (default true) and
+# `condition_on_previous_text` (default false) prevent the classic Whisper loop where
+# one hallucinated segment ("Thank you.") repeats for the whole file over music/noise.
+# Extra options: prompt (Whisper initial_prompt for names/vocabulary), hotwords,
+# vad_parameters (Silero VAD tuning), hallucination_silence_threshold (needs
+# word_timestamps = true), word_timestamps, beam_size, download_root, local_files_only.
 transcriber = { type = "faster_whisper", options = { model = "large-v3-turbo", compute_type = "int8", language = "en" } }
 # Hosted alternative (lemonfox.ai or any OpenAI-compatible API):
 # transcriber = { type = "openai_compatible", options = { base_url = "https://api.lemonfox.ai/v1", api_key = "env:LEMONFOX_API_KEY" } }

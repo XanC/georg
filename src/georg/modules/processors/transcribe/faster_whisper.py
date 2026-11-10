@@ -9,6 +9,9 @@ Audio is decoded with Georg's FFmpeg rather than faster-whisper's bundled PyAV d
 so any input FFmpeg reads works and PyAV version changes cannot break decoding.
 """
 
+import hashlib
+import json
+import logging
 import subprocess
 from collections.abc import Callable, Iterable
 from importlib import metadata
@@ -22,8 +25,21 @@ from georg.core.types import TimeRange, Transcript, TranscriptSegment, Transcrip
 from georg.media.ffmpeg import FFMPEG
 
 TYPE_NAME = "faster_whisper"
-_REVISION = 1
+_REVISION = 2
 SAMPLE_RATE = 16_000
+
+_logger = logging.getLogger(__name__)
+
+# Texts Whisper hallucinates over silence, music and noise. Compared after
+# normalization, so bracketed/all-caps stage directions ("[Music]", "CHOIR SINGS")
+# match too.
+_HALLUCINATION_TEXTS = frozenset(
+    {"thank you", "thanks for watching", "you", "choir sings", "music", "applause"}
+)
+_REPEAT_RUN_MIN = 3
+_REPEAT_RUN_MIN_SECONDS = 20.0
+_HALLUCINATION_MIN_SECONDS = 20.0
+_HALLUCINATION_MAX_WORDS = 3
 
 
 class WhisperWordLike(Protocol):
@@ -68,7 +84,20 @@ class FasterWhisperOptions(BaseModel):
     prompt: str | None = None
     """Passed as Whisper's `initial_prompt` (names, vocabulary)."""
     beam_size: int = Field(default=5, ge=1)
-    vad_filter: bool = False
+    vad_filter: bool = True
+    """Silero VAD before transcription. On by default: without it long recordings
+    with music/noise can loop the same hallucinated segment for the whole file."""
+    vad_parameters: dict[str, Any] | None = None
+    """Passed through as faster-whisper's `vad_parameters` (e.g. threshold,
+    min_silence_duration_ms) when set."""
+    condition_on_previous_text: bool = False
+    """Off by default: conditioning on previous text lets one hallucination drag
+    the following windows into the same loop."""
+    hallucination_silence_threshold: float | None = None
+    """Seconds of silence that mark a segment as a hallucination candidate.
+    Only passed when set; faster-whisper requires `word_timestamps=True` for it."""
+    hotwords: str | None = None
+    """Passed through as faster-whisper's `hotwords` prompt."""
     word_timestamps: bool = False
     download_root: Path | None = None
     local_files_only: bool = False
@@ -126,6 +155,63 @@ def decode_pcm(audio: Path) -> Any:
     return np.frombuffer(proc.stdout, dtype=np.float32)
 
 
+def _normalized(text: str) -> str:
+    return " ".join("".join(ch for ch in text.lower() if ch.isalnum() or ch.isspace()).split())
+
+
+def drop_repeated_segments(segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
+    """Remove hallucinated repetition from raw Whisper output.
+
+    Two filters: runs of >=3 consecutive segments with identical normalized text
+    spanning >=20 s (the classic Whisper "Thank you." loop over music/noise), and
+    lone >=20 s segments of <=3 words matching a known-hallucination text.
+    """
+
+    def _drop(group: list[TranscriptSegment], why: str) -> None:
+        _logger.info(
+            "faster_whisper: dropped %d segment(s) %d-%d ms (%s; %r)",
+            len(group),
+            group[0].range.start_ms,
+            group[-1].range.end_ms,
+            why,
+            group[0].text,
+        )
+
+    kept: list[TranscriptSegment] = []
+    run: list[TranscriptSegment] = []
+
+    def flush() -> None:
+        if not run:
+            return
+        span = run[-1].range.end_ms - run[0].range.start_ms
+        if len(run) >= _REPEAT_RUN_MIN and span >= _REPEAT_RUN_MIN_SECONDS * 1000:
+            _drop(run, f"repeated {len(run)} times over {span / 1000:.1f} s")
+        else:
+            kept.extend(run)
+
+    for seg in segments:
+        if run and _normalized(seg.text) == _normalized(run[-1].text):
+            run.append(seg)
+        else:
+            flush()
+            run = [seg]
+    flush()
+
+    result = []
+    for seg in kept:
+        duration_s = (seg.range.end_ms - seg.range.start_ms) / 1000
+        normalized = _normalized(seg.text)
+        if (
+            duration_s >= _HALLUCINATION_MIN_SECONDS
+            and len(normalized.split()) <= _HALLUCINATION_MAX_WORDS
+            and normalized in _HALLUCINATION_TEXTS
+        ):
+            _drop([seg], "known hallucination")
+        else:
+            result.append(seg)
+    return result
+
+
 def _range(start: float, end: float) -> TimeRange:
     start_ms = max(0, round(start * 1000))
     return TimeRange(start_ms=start_ms, end_ms=max(round(end * 1000), start_ms + 1))
@@ -168,10 +254,26 @@ class FasterWhisperTranscriber:
         self._decode = audio_decoder
         self._model: WhisperModelLike | None = None
         o = self.options
+        extra = {
+            k: v
+            for k, v in {
+                "vad_parameters": o.vad_parameters,
+                "hallucination_silence_threshold": o.hallucination_silence_threshold,
+                "hotwords": o.hotwords,
+                "prompt": o.prompt,
+            }.items()
+            if v is not None
+        }
         self.version = (
             f"{TYPE_NAME}-r{_REVISION}-fw{_library_version()}-{Path(o.model).name}"
-            f"-{o.compute_type}-b{o.beam_size}-vad{int(o.vad_filter)}-w{int(o.word_timestamps)}"
+            f"-{o.compute_type}-b{o.beam_size}-vad{int(o.vad_filter)}"
+            f"-c{int(o.condition_on_previous_text)}-w{int(o.word_timestamps)}"
         )
+        if extra:
+            digest = hashlib.sha256(
+                json.dumps(extra, sort_keys=True, default=str).encode()
+            ).hexdigest()[:8]
+            self.version += f"-x{digest}"
 
     def transcribe(self, audio: Path, language: str | None) -> Transcript:
         o = self.options
@@ -186,8 +288,16 @@ class FasterWhisperTranscriber:
                 beam_size=o.beam_size,
                 vad_filter=o.vad_filter,
                 word_timestamps=o.word_timestamps,
+                condition_on_previous_text=o.condition_on_previous_text,
+                **({"vad_parameters": o.vad_parameters} if o.vad_parameters is not None else {}),
+                **(
+                    {"hallucination_silence_threshold": o.hallucination_silence_threshold}
+                    if o.hallucination_silence_threshold is not None
+                    else {}
+                ),
+                **({"hotwords": o.hotwords} if o.hotwords is not None else {}),
             )
-            segments = [_segment(s) for s in raw_segments]
+            segments = drop_repeated_segments([_segment(s) for s in raw_segments])
         except (ValidationError, ModuleError):
             raise
         except Exception as exc:
