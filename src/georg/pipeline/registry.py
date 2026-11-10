@@ -96,6 +96,8 @@ class Processors:
     transcriber: Transcriber
     formatter: TranscriptFormatter | None
     metadata: MetadataGenerator
+    sermon_transcriber: Transcriber | None = None
+    sermon_transcribe_pad_ms: int = 2_000
 
 
 def build_processors(config: ProcessorsConfig, *, formatter: bool = True) -> Processors:
@@ -106,4 +108,10 @@ def build_processors(config: ProcessorsConfig, *, formatter: bool = True) -> Pro
         transcriber=build_processor("transcriber", config.transcriber),
         formatter=build_processor("formatter", config.formatter) if formatter else None,
         metadata=build_processor("metadata", config.metadata),
+        sermon_transcriber=(
+            build_processor("transcriber", config.sermon_transcriber)
+            if config.sermon_transcriber is not None
+            else None
+        ),
+        sermon_transcribe_pad_ms=config.sermon_transcribe_pad_ms,
     )

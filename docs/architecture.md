@@ -185,20 +185,21 @@ Notes:
 | 2 | prepare_audio | source → `service_audio` (FLAC, full quality) + `analysis_audio` (16 kHz mono) | cheap | rarely |
 | 3 | classify | analysis audio → `segments` (silence/noise/music/speech) | **expensive (ML)** | classifier version changes |
 | 4 | detect | segments + params → `boundary_proposal` | trivial | parameters change |
-| 5 | transcribe | service audio → `transcript_raw` (timestamped) | **expensive ($ or CPU)** | provider changes |
+| 5 | transcribe | service audio → `transcript_raw` (timestamped, used for detection) | **expensive ($ or CPU)** | provider changes |
 | 6 | extract_sermon | service audio + revision range → `sermon_audio` (MP3, padding, fades, loudness-normalized, ID3 tags) | cheap | range changes |
-| 7 | format | transcript slice for range → `transcript_formatted` | local (`llama_cpp`, default) or hosted (`openai_chat`) LLM call | range changes (if not hand-edited) |
-| 8 | metadata | source hints + formatted transcript + config defaults → `metadata_proposal` | LLM call | on request |
-| 9 | draft | assemble revision #1 (author=system), mark "ready for review", notify | — | — |
+| 7 | transcribe_sermon | padded sermon audio → `transcript_raw` (timestamped, published text) | **expensive ($ or CPU)** | sermon range or provider changes |
+| 8 | format | sermon transcript → `transcript_formatted` | local (`llama_cpp`, default) or hosted (`openai_chat`) LLM call | sermon range changes |
+| 9 | metadata | source hints + sermon transcript + config defaults → `metadata_proposal` | LLM call | on request |
+| 10 | draft | assemble revision #1 (author=system), mark "ready for review", notify | — | — |
 
-Proposed choice (decision D3): **transcribe the whole service once**, then slice by timestamps for the sermon. Moving a boundary in review then only re-cuts audio and re-slices/re-formats text — no re-transcription. API cost difference is small (≈90 vs ≈25 minutes of audio per week), and a full-service transcript enables a future text-based detection strategy.
+Decision D3: Georg transcribes the whole service once for boundary detection and keeps that transcript in the report. After boundaries are selected, it cuts two seconds of padding around the sermon and runs a second transcription for the published text. The sermon result is shifted back onto the recording timeline and trimmed to the reviewed bounds. The sermon pass is cached by source, provider version, and cut range; moving a boundary therefore reruns that pass and its downstream stages, while a save without a boundary change does not.
 
 Execution: the worker claims jobs from the `jobs` table (`UPDATE … RETURNING` with a lease), runs one job at a time by default, heartbeats the lease, and on failure retries with exponential backoff up to `max_attempts`, then marks the stage `failed` (visible in UI, with "Retry") and emails the `review.notify` reviewers once per failed job (see [Email notices](deploy-aws.md#email-ses)). Stale leases (crashed worker) are re-queued. Any single stage can be re-run from the UI/CLI; downstream stages whose inputs changed are marked stale and re-queued.
 
 ### 5.2 Review
 
 1. Reviewer opens the service: waveform (wavesurfer.js) with color-coded classification segments, proposed sermon region, and draggable start/end handles; can play the sermon or ±N seconds around each boundary.
-2. Edits to range, metadata, or transcript create a new revision. A range change enqueues `extract_sermon` + `format` (format only if the transcript hasn't been hand-edited; otherwise the UI offers "regenerate from new range").
+2. Edits to range, metadata, or transcript create a new revision. A range change enqueues the sermon transcription, extraction, formatting, and metadata stages; the rendered result becomes the next revision. A sermon transcription failure falls back to the matching slice of the full-service transcript.
 3. "Approve" records an approval for the current revision (only allowed once all derived artifacts for that revision are ready).
 4. Revision history with diffs is visible; any revision can be restored (which creates a new revision).
 

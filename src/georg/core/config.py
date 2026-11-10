@@ -71,6 +71,10 @@ class ProcessorsConfig(_Section):
     classifier: ModuleConfig
     detector: ModuleConfig
     transcriber: ModuleConfig
+    sermon_transcriber: ModuleConfig | None = None
+    """Optional transcriber used again on the extracted sermon audio."""
+    sermon_transcribe_pad_ms: int = Field(default=2_000, ge=0)
+    """Audio padding on each side of the sermon for the sermon-only transcription."""
     formatter: ModuleConfig = ModuleConfig(type="llama_cpp")
     """Defaults to the local llama.cpp formatter, which needs no API key."""
     metadata: ModuleConfig
