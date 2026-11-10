@@ -8,6 +8,7 @@ module is constructed.
 
 import os
 import tomllib
+from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
@@ -95,6 +96,12 @@ class ReviewConfig(_Section):
     smtp: SmtpConfig | None = None
 
 
+class DiscoveryConfig(_Section):
+    start_date: date | None = None
+    """Oldest service date automatic discovery picks up; unset means no cutoff.
+    `georg discover --since` overrides it for one run."""
+
+
 class GeorgConfig(_Section):
     instance: str = Field(pattern=r"^[a-z][a-z0-9-]*$")
     """Short stable name; part of every publication key, so never change it."""
@@ -106,6 +113,7 @@ class GeorgConfig(_Section):
     renditions: tuple[RenditionSpec, ...] = Field(default_factory=default_renditions)
     outputs: tuple[OutputConfig, ...] = ()
     review: ReviewConfig = ReviewConfig()
+    discovery: DiscoveryConfig = DiscoveryConfig()
     idle_shutdown_minutes: int | None = Field(default=None, gt=0)
     """Power the host off after this long with no jobs and no web requests (off if unset)."""
     idle_shutdown_command: tuple[str, ...] = Field(

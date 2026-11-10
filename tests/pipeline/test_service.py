@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 import os
 import time
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -74,6 +75,25 @@ def test_discover_then_worker_proposes_a_revision(config: GeorgConfig, engine: E
 
     # A retry after the proposal was saved changes nothing.
     assert process_service(config, sessions, service_id, processors()) is None
+
+
+def test_discover_respects_configured_start_date(config: GeorgConfig, engine: Engine) -> None:
+    from georg.core.config import DiscoveryConfig
+
+    old_folder = config.inputs[0].options["root"] / "SPX 10.25.26"
+    old_folder.mkdir()
+    tone(old_folder / "1.wav", 5, 440)
+    old = time.time() - 3600
+    os.utime(old_folder / "1.wav", (old, old))
+    config = config.model_copy(update={"discovery": DiscoveryConfig(start_date=date(2026, 11, 1))})
+    sessions = session_factory(engine)
+
+    # The configured floor applies on its own, and still clamps an earlier `since`.
+    [service_id] = discover(config, sessions, JobQueue(engine))
+    with sessions() as s:
+        assert ServiceRepository(s).get(service_id).service_date == date(2026, 11, 1)
+    assert discover(config, sessions, JobQueue(engine), since=datetime(2026, 10, 1)) == []
+    assert discover(config, sessions, JobQueue(engine), since=datetime(2026, 11, 2)) == []
 
 
 def test_failed_job_is_recorded(config: GeorgConfig, engine: Engine) -> None:

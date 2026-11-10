@@ -73,7 +73,8 @@ class LocalFolderInput:
             newest = max(st.st_mtime for st in stats.values())
             if newest > settled_before:
                 continue
-            if since is not None and datetime.fromtimestamp(newest, UTC) < since:
+            service_date = folder_date(folder.name)
+            if since is not None and service_date is not None and service_date < since.date():
                 continue
             yield SourceItem(
                 source_type=self.source_type,
@@ -89,7 +90,7 @@ class LocalFolderInput:
                     for f in media
                 ),
                 title=folder.name,
-                service_date=folder_date(folder.name),
+                service_date=service_date,
                 hints={"documents": [f.name for f in files if f not in media]},
             )
 

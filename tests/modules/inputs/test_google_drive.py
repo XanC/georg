@@ -144,6 +144,17 @@ def test_discover_skips_folders_still_uploading(drive: FakeDrive) -> None:
     ]
 
 
+def test_discover_since_filters_year_folders(drive: FakeDrive) -> None:
+    service_folder(drive, "SPX 11.01.26", ("v.mp4", b"new"))
+    archived = drive.folder("SPX 10.25.26", drive.folder("Services 2026", ROOT).id)
+    drive.add("a.mp4", archived.id, b"archived", modified=OLD)
+    old = drive.folder("SPX 12.28.25", drive.folder("Services 2025", ROOT).id)
+    drive.add("b.mp4", old.id, b"older", modified=OLD)
+
+    since = datetime(2026, 11, 1, tzinfo=UTC)
+    assert [i.title for i in make_input(drive).discover(since)] == ["SPX 11.01.26"]
+
+
 def test_discover_since_and_custom_naming(drive: FakeDrive) -> None:
     service_folder(drive, "SPX 10.25.26", ("v.mp4", b"a"))
     service_folder(drive, "SPX 11.01.26", ("v.mp4", b"b"))

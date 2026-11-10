@@ -14,6 +14,11 @@ idle_shutdown_command = ["touch", "/run/georg/shutdown/poweroff"]
 timezone = "America/Chicago"
 language = "en"
 
+# Oldest service date discovery picks up automatically; older folders (including ones
+# archived into "Services YYYY") are ignored. `georg discover --since` overrides it once.
+[discovery]
+start_date = 2026-11-01
+
 [[inputs]]
 name = "drive"
 type = "google_drive"

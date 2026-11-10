@@ -6,7 +6,7 @@ import mimetypes
 import shutil
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -52,6 +52,9 @@ def discover(
     since: datetime | None = None,
 ) -> list[int]:
     """Record new recordings from every input and queue them; return their service IDs."""
+    floor = config.discovery.start_date
+    if floor is not None and (since is None or since.date() < floor):
+        since = datetime(floor.year, floor.month, floor.day, tzinfo=UTC)
     new_ids = []
     for input_config in config.inputs:
         source = build_input(input_config)
