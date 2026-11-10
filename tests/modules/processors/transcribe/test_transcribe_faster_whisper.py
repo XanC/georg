@@ -10,8 +10,12 @@ import pytest
 
 from georg.core.contracts import Transcriber
 from georg.core.errors import ConfigError, ModuleError
+from georg.core.types import TimeRange, TranscriptSegment
 from georg.modules.processors.transcribe import FasterWhisperOptions, FasterWhisperTranscriber
-from georg.modules.processors.transcribe.faster_whisper import decode_pcm
+from georg.modules.processors.transcribe.faster_whisper import (
+    decode_pcm,
+    drop_repeated_segments,
+)
 
 
 @dataclass
@@ -98,6 +102,7 @@ def test_passes_options_and_language_fallback(tmp_path: Path) -> None:
         "beam_size": 2,
         "vad_filter": True,
         "word_timestamps": False,
+        "condition_on_previous_text": False,
     }
     assert out.language == "en"
     assert out.segments == ()
@@ -120,6 +125,43 @@ def test_words_and_degenerate_ranges(tmp_path: Path) -> None:
     assert seg.words[0].range.end_ms == 1001
 
 
+def test_transcribe_defaults_and_each_new_option(tmp_path: Path) -> None:
+    model = FakeModel([])
+    t, _ = make(model)
+    t.transcribe(tmp_path / "s.flac", "en")
+    assert model.calls[0][1] == {
+        "language": "en",
+        "initial_prompt": None,
+        "beam_size": 5,
+        "vad_filter": True,
+        "word_timestamps": False,
+        "condition_on_previous_text": False,
+    }
+
+    model = FakeModel([])
+    t, _ = make(
+        model,
+        vad_filter=False,
+        vad_parameters={"threshold": 0.4},
+        condition_on_previous_text=True,
+        hallucination_silence_threshold=1.5,
+        hotwords="Eucharist",
+        word_timestamps=True,
+    )
+    t.transcribe(tmp_path / "s.flac", "en")
+    assert model.calls[0][1] == {
+        "language": "en",
+        "initial_prompt": None,
+        "beam_size": 5,
+        "vad_filter": False,
+        "vad_parameters": {"threshold": 0.4},
+        "word_timestamps": True,
+        "condition_on_previous_text": True,
+        "hallucination_silence_threshold": 1.5,
+        "hotwords": "Eucharist",
+    }
+
+
 def test_version_reflects_parameters() -> None:
     a, _ = make(FakeModel([]))
     b, _ = make(FakeModel([]), model="small", compute_type="float16")
@@ -127,11 +169,60 @@ def test_version_reflects_parameters() -> None:
     assert "small-float16" in b.version
 
 
+def test_version_changes_with_each_output_option() -> None:
+    base = make(FakeModel([]))[0].version
+    for options in [
+        {"vad_filter": False},
+        {"vad_parameters": {"threshold": 0.4}},
+        {"condition_on_previous_text": True},
+        {"hallucination_silence_threshold": 1.5},
+        {"hotwords": "Eucharist"},
+        {"prompt": "St. Paul"},
+        {"word_timestamps": True},
+    ]:
+        assert make(FakeModel([]), **options)[0].version != base, options
+
+
 def test_invalid_options() -> None:
     with pytest.raises(ConfigError):
         FasterWhisperTranscriber({"beam_size": 0})
     with pytest.raises(ConfigError):
         FasterWhisperTranscriber({"unknown": 1})
+
+
+def seg(start: float, end: float, text: str) -> TranscriptSegment:
+    return TranscriptSegment(
+        text=text,
+        range=TimeRange(start_ms=int(start * 1000), end_ms=int(end * 1000)),
+        avg_logprob=-0.1,
+        words=(),
+    )
+
+
+def test_guard_drops_thank_you_loop() -> None:
+    loop = [seg(i * 30.0, (i + 1) * 30.0, " Thank you. ") for i in range(4)]
+    speech = seg(120.0, 128.0, "In the name of the Father")
+    out = drop_repeated_segments([speech, *loop])
+    assert [s.text for s in out] == ["In the name of the Father"]
+
+
+def test_guard_drops_lone_long_hallucination() -> None:
+    out = drop_repeated_segments([seg(0.0, 30.0, " CHOIR SINGS "), seg(30.0, 35.0, "Let us pray.")])
+    assert [s.text for s in out] == ["Let us pray."]
+
+
+def test_guard_keeps_short_repeats_and_speech() -> None:
+    amens = [seg(float(i), float(i) + 1.0, "Amen.") for i in range(3)]
+    repeats = [seg(float(i), float(i) + 1.0, "Lord, hear our prayer.") for i in range(3)]
+    out = drop_repeated_segments(amens + repeats)
+    assert len(out) == 6
+
+
+def test_guard_keeps_long_repeated_speech() -> None:
+    # Same words but a real phrase with many words is not in the hallucination
+    # set; a run spanning <20 s also survives.
+    segs = [seg(float(i * 5), float(i * 5) + 4.0, "Glory to God in the highest") for i in range(3)]
+    assert len(drop_repeated_segments(segs)) == 3
 
 
 def test_model_errors_are_module_errors(tmp_path: Path) -> None:

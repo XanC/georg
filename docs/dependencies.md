@@ -47,6 +47,8 @@ Installed with `uv sync --extra whisper` (or `pip install georg[whisper]`). Need
 
 Check the extra's licenses with `uv run --no-dev --extra whisper --with pip-licenses python scripts/check_licenses.py`.
 
+The defaults are tuned for long service recordings with music and noise: `vad_filter` defaults to `true` and `condition_on_previous_text` to `false`. Without them, Whisper can fall into a repetition loop where one hallucinated segment (e.g. "Thank you.") repeats for nearly the whole file; a production ~87-minute recording lost its entire sermon to this. Georg additionally drops long runs of identical repeated segments and lone long segments with known hallucinated texts before storing the transcript. Further options: `prompt` (Whisper `initial_prompt`, for names/vocabulary), `hotwords`, `vad_parameters` (Silero VAD tuning, passed through to faster-whisper), `hallucination_silence_threshold` (requires `word_timestamps = true`), `word_timestamps`, `beam_size`, `download_root`, `local_files_only`.
+
 ## Optional extra `llm`
 
 Installed with `uv sync --extra llm` (or `pip install georg[llm]`). Needed only by the `llama_cpp` transcript formatter (the default), which imports it lazily.
