@@ -129,6 +129,20 @@
   {% endif %}
 </section>
 
+{% if user.role == "admin" %}
+<section aria-labelledby="reprocess-h">
+  <h2 id="reprocess-h">Reprocess</h2>
+  <p class="hint">
+    Runs the whole pipeline again (e.g. after a processor upgrade) and replaces the
+    current proposal with a fresh one. Manual edits stay in the revision history.
+  </p>
+  <form method="post" action="/sermons/{{ sermon.id }}/reprocess">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Reprocess this service</button>
+  </form>
+</section>
+{% endif %}
+
 <section aria-labelledby="history-h">
   <h2 id="history-h">Revision history</h2>
   <div class="scroll">

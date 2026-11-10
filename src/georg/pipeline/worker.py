@@ -95,7 +95,13 @@ class Worker:
 
     def _process(self, payload: dict[str, Any]) -> int | None:
         service_id = int(payload["service_id"])
-        revision_id = process_service(self.config, self.sessions, service_id, self.processors)
+        revision_id = process_service(
+            self.config,
+            self.sessions,
+            service_id,
+            self.processors,
+            reprocess=bool(payload.get("reprocess", False)),
+        )
         if revision_id is not None and self.config.review.notify:
             self.queue.enqueue(NOTIFY, {"service_id": service_id})
         return revision_id

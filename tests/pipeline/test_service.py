@@ -77,6 +77,51 @@ def test_discover_then_worker_proposes_a_revision(config: GeorgConfig, engine: E
     assert process_service(config, sessions, service_id, processors()) is None
 
 
+def test_reprocess_adds_a_second_system_revision(config: GeorgConfig, engine: Engine) -> None:
+    sessions = session_factory(engine)
+    sermon_id, first_id = processed(config, engine)
+    with sessions() as s:
+        service_id = SermonRepository(s).get(sermon_id).service_id
+
+    new_id = process_service(config, sessions, service_id, processors(), reprocess=True)
+    assert new_id is not None and new_id != first_id
+    with sessions() as s:
+        sermons = SermonRepository(s)
+        [first, current] = sermons.revisions(sermon_id)
+        assert current.id == new_id
+        assert current.author == "system"
+        assert current.number == 2
+        assert current.parent_revision_id == first.id
+        assert sermons.get(sermon_id).current_revision_id == new_id
+        assert ServiceRepository(s).get(service_id).status_summary == "awaiting review"
+
+
+def test_reprocess_is_refused_once_published(config: GeorgConfig, engine: Engine) -> None:
+    sessions = session_factory(engine)
+    sermon_id, revision_id = processed(config, engine)
+    with sessions.begin() as s:
+        service_id = SermonRepository(s).get(sermon_id).service_id
+        PublicationRepository(s).prepare(sermon_id, "website", revision_id, "georg:test:k")
+
+    with pytest.raises(ModuleError, match="publication") as err:
+        process_service(config, sessions, service_id, processors(), reprocess=True)
+    assert not err.value.retryable
+
+
+def test_worker_reruns_a_reprocess_job(config: GeorgConfig, engine: Engine) -> None:
+    sessions = session_factory(engine)
+    queue = JobQueue(engine)
+    [service_id] = discover(config, sessions, queue)
+    worker = Worker(config, engine, queue=queue, processors=processors(), worker_id="w")
+    assert worker.run_once()
+
+    queue.enqueue("process", {"service_id": service_id, "reprocess": True})
+    assert worker.run_once()
+    with sessions() as s:
+        [sermon] = SermonRepository(s).for_service(service_id)
+        assert len(SermonRepository(s).revisions(sermon.id)) == 2
+
+
 def test_discover_respects_configured_start_date(config: GeorgConfig, engine: Engine) -> None:
     from georg.core.config import DiscoveryConfig
 

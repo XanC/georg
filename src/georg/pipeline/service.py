@@ -85,11 +85,15 @@ def process_service(
     *,
     store: LocalStore | None = None,
     cache: StageCache | None = None,
+    reprocess: bool = False,
 ) -> int | None:
-    """Fetch, analyse and render a service, then propose its first sermon revision.
+    """Fetch, analyse and render a service, then propose a new sermon revision.
 
     Returns the new revision's ID, or None if the sermon already has revisions
     (e.g. a retry after the proposal was saved), in which case nothing changes.
+    With `reprocess`, an already-processed service runs again: the proposal is
+    added as a new `system` revision (the previous proposal stays restorable),
+    unless the sermon already has a publication record, which is refused.
     """
     store = store or LocalStore.for_data_dir(config.data_dir)
     cache = cache or StageCache(config.data_dir / "cache")
@@ -102,8 +106,13 @@ def process_service(
         )
         input_name = service.hints.get(INPUT_HINT)
         existing = SermonRepository(session).for_service(service_id)
-        if any(sermon.current_revision_id for sermon in existing):
+        has_revisions = any(sermon.current_revision_id for sermon in existing)
+        if has_revisions and not reprocess:
             return None
+        if reprocess:
+            publications = PublicationRepository(session)
+            if any(publications.for_sermon(sermon.id) for sermon in existing):
+                raise ModuleError(f"service {service_id} has a publication; refusing to reprocess")
     if not included:
         raise ModuleError(f"service {service_id} has no included recording parts")
 
