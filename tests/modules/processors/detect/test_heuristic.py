@@ -13,8 +13,10 @@ from georg.core.types import (
     TimeRange,
     Transcript,
     TranscriptSegment,
+    TranscriptWord,
 )
 from georg.modules.processors.detect import HeuristicBoundaryDetector, HeuristicDetectorParams
+from georg.modules.processors.detect.heuristic import _normalize, _Run
 
 MIN = 60_000
 S = 1_000
@@ -48,7 +50,7 @@ TYPICAL: list[tuple[SegmentLabel, float]] = [
     ("silence", 3),
 ]
 TYPICAL_MS = 78 * MIN
-TYPICAL_EXPECTED = (5 * MIN, 32 * MIN + 100, 50 * MIN, 75 * MIN + 10 * S)
+TYPICAL_EXPECTED = (5 * MIN, 32 * MIN - 200, 50 * MIN + S, 75 * MIN + 10 * S)
 
 
 def bounds(p: BoundaryProposal) -> tuple[int, int, int, int]:
@@ -86,7 +88,7 @@ def test_satisfies_protocol() -> None:
     det = HeuristicBoundaryDetector()
     assert isinstance(det, BoundaryDetector)
     assert det.type_name == "heuristic"
-    assert det.version
+    assert det.version == "heuristic-3"
 
 
 def test_typical_service_without_transcript() -> None:
@@ -94,7 +96,7 @@ def test_typical_service_without_transcript() -> None:
     assert bounds(p) == TYPICAL_EXPECTED
     assert p.confidence == pytest.approx(0.8)
     assert "No transcript" in p.explanation
-    assert "00:32:00.1" in p.explanation
+    assert "00:31:59.8" in p.explanation
 
 
 def test_transcript_refines_sermon_end() -> None:
@@ -105,7 +107,7 @@ def test_transcript_refines_sermon_end() -> None:
         (3010, 3200, 0.99),  # singing after the music resumes; ignored
     )
     p = detect(build(TYPICAL), TYPICAL_MS, tr)
-    assert bounds(p) == (*TYPICAL_EXPECTED[:2], 2990 * S, TYPICAL_EXPECTED[3])
+    assert bounds(p) == (*TYPICAL_EXPECTED[:2], 2991 * S, TYPICAL_EXPECTED[3])
     assert p.confidence == pytest.approx(1.0)
     assert "confident transcript segment" in p.explanation
 
@@ -130,7 +132,7 @@ def test_sermon_found_only_by_later_probe() -> None:
         ("silence", 3),
     ]
     p = detect(build(spec), 75 * MIN)
-    assert bounds(p) == (0, 20 * MIN + 100, 28 * MIN, 72 * MIN + 10 * S)
+    assert bounds(p) == (0, 20 * MIN - 200, 28 * MIN + S, 72 * MIN + 10 * S)
     assert p.confidence == pytest.approx(0.9 * 0.8)
     assert "only at 0.333" in p.explanation
 
@@ -185,7 +187,7 @@ def test_no_speech_at_all() -> None:
 def test_transcript_segment_running_into_music_ends_with_the_speech() -> None:
     tr = transcript((1925, 2400, 0.97), (2400, 2995, 0.95), (2995, 3200, 0.95))
     p = detect(build(TYPICAL), TYPICAL_MS, tr)
-    assert bounds(p) == (*TYPICAL_EXPECTED[:2], 3000 * S, TYPICAL_EXPECTED[3])
+    assert bounds(p) == (*TYPICAL_EXPECTED[:2], 3001 * S, TYPICAL_EXPECTED[3])
 
 
 def test_walk_passes_noisy_probe_inside_sermon() -> None:
@@ -211,7 +213,7 @@ def test_short_sermon_tries_later_probe() -> None:
         ("silence", 3),
     ]
     p = detect(build(spec), 76 * MIN)
-    assert bounds(p) == (0, 12 * MIN + 100, 27 * MIN, 73 * MIN + 10 * S)
+    assert bounds(p) == (0, 12 * MIN - 200, 27 * MIN + S, 73 * MIN + 10 * S)
     assert p.confidence == pytest.approx(0.9 * 0.8)
     assert "only at 0.333" in p.explanation
     assert "implausibly short" not in p.explanation
@@ -220,7 +222,7 @@ def test_short_sermon_tries_later_probe() -> None:
 def test_very_short_sermon() -> None:
     spec: list[tuple[SegmentLabel, float]] = [("music", 25), ("speech", 4), ("music", 31)]
     p = detect(build(spec), 60 * MIN)
-    assert bounds(p) == (0, 25 * MIN + 100, 29 * MIN, 60 * MIN)
+    assert bounds(p) == (0, 25 * MIN - 200, 29 * MIN + S, 60 * MIN)
     assert p.confidence == pytest.approx(0.8 * 0.5)
     assert "implausibly short" in p.explanation
 
@@ -228,7 +230,7 @@ def test_very_short_sermon() -> None:
 def test_very_long_sermon() -> None:
     spec: list[tuple[SegmentLabel, float]] = [("music", 10), ("speech", 50), ("music", 10)]
     p = detect(build(spec), 72 * MIN)
-    assert bounds(p) == (0, 10 * MIN + 100, 60 * MIN, 70 * MIN + 10 * S)
+    assert bounds(p) == (0, 10 * MIN - 200, 60 * MIN + S, 70 * MIN + 10 * S)
     assert p.confidence == pytest.approx(0.8 * 0.6)
     assert "implausibly long" in p.explanation
 
@@ -238,7 +240,111 @@ def test_parameters_change_behavior() -> None:
         HeuristicDetectorParams(end_music_tail_ms=0, sermon_start_offset_ms=0)
     )
     p = det.detect(build(TYPICAL), TYPICAL_MS, None)
-    assert bounds(p) == (5 * MIN, 32 * MIN, 50 * MIN, 75 * MIN)
+    assert bounds(p) == (5 * MIN, 32 * MIN - 300, 50 * MIN + S, 75 * MIN)
+
+
+def _sermon_end_run(next_word_start: int | None = None) -> _Run:
+    words = [
+        TranscriptWord(
+            text=" Amen.",
+            range=TimeRange(start_ms=2_445_820, end_ms=2_446_360),
+            probability=0.99,
+        )
+    ]
+    transcript_segments = [
+        TranscriptSegment(
+            text="Amen.",
+            range=TimeRange(start_ms=2_445_820, end_ms=2_446_400),
+            avg_logprob=math.log(0.99),
+            words=tuple(words),
+        )
+    ]
+    if next_word_start is not None:
+        transcript_segments.append(
+            TranscriptSegment(
+                text=" next",
+                range=TimeRange(start_ms=next_word_start, end_ms=next_word_start + 100),
+                words=(
+                    TranscriptWord(
+                        text=" next",
+                        range=TimeRange(start_ms=next_word_start, end_ms=next_word_start + 100),
+                        probability=0.99,
+                    ),
+                ),
+            )
+        )
+    segments = [
+        AudioSegment(range=TimeRange(start_ms=2_400_000, end_ms=2_446_400), label="speech"),
+        AudioSegment(range=TimeRange(start_ms=2_500_000, end_ms=2_600_000), label="music"),
+    ]
+    transcript = Transcript(
+        language="en",
+        provider="fake",
+        segments=tuple(transcript_segments),
+    )
+    return _Run(
+        HeuristicDetectorParams(),
+        _normalize(segments, 3_000_000),
+        3_000_000,
+        transcript,
+    )
+
+
+def test_sermon_end_padding_preserves_amen_and_caps_at_next_word() -> None:
+    end = _sermon_end_run().sermon_end(2_440_000, 2_500_000, 2_000_000, 3_000_000)
+    assert end == 2_447_400
+    assert end >= 2_446_900
+
+    capped = _sermon_end_run(2_446_700).sermon_end(2_440_000, 2_500_000, 2_000_000, 3_000_000)
+    assert capped == 2_446_600
+    assert _sermon_end_run().sermon_end(2_440_000, 2_500_000, 2_000_000, 2_446_500) == 2_446_500
+
+
+def test_sermon_start_padding_respects_previous_word() -> None:
+    previous = TranscriptSegment(
+        text=" previous",
+        range=TimeRange(start_ms=999_800, end_ms=1_000_300),
+        words=(
+            TranscriptWord(
+                text=" previous",
+                range=TimeRange(start_ms=999_800, end_ms=1_000_300),
+                probability=0.99,
+            ),
+        ),
+    )
+    transcript = Transcript(language="en", provider="fake", segments=(previous,))
+    run = _Run(
+        HeuristicDetectorParams(),
+        [],
+        2_000_000,
+        transcript,
+    )
+    assert run.sermon_start(1_000_000, 1_000_500, 0) == 1_000_400
+
+
+def test_service_end_includes_chained_short_closing_speech() -> None:
+    segments = [
+        AudioSegment(range=TimeRange(start_ms=0, end_ms=60_000), label="music"),
+        AudioSegment(range=TimeRange(start_ms=60_000, end_ms=600_000), label="speech"),
+        AudioSegment(range=TimeRange(start_ms=610_000, end_ms=613_000), label="speech"),
+        AudioSegment(range=TimeRange(start_ms=613_000, end_ms=700_000), label="silence"),
+    ]
+    p = detect(segments, 700_000)
+    assert p.boundaries.service_end_ms == 615_000
+    assert "trailing speech/music segment" in p.explanation
+
+
+def test_service_start_uses_beginning_of_40_second_prelude() -> None:
+    segments = [
+        AudioSegment(range=TimeRange(start_ms=0, end_ms=40_000), label="music"),
+        AudioSegment(range=TimeRange(start_ms=40_000, end_ms=640_000), label="speech"),
+        AudioSegment(range=TimeRange(start_ms=640_000, end_ms=700_000), label="music"),
+    ]
+    det = HeuristicBoundaryDetector()
+    p = det.detect(segments, 700_000, None)
+    assert det.params.start_music_confirm_ms == 20_000
+    assert p.boundaries.service_start_ms == 0
+    assert "first sustained music" in p.explanation
 
 
 def test_from_options() -> None:
