@@ -10,6 +10,7 @@ so any input FFmpeg reads works and PyAV version changes cannot break decoding.
 """
 
 import hashlib
+import itertools
 import json
 import logging
 import subprocess
@@ -25,7 +26,7 @@ from georg.core.types import TimeRange, Transcript, TranscriptSegment, Transcrip
 from georg.media.ffmpeg import FFMPEG
 
 TYPE_NAME = "faster_whisper"
-_REVISION = 2
+_REVISION = 3
 SAMPLE_RATE = 16_000
 
 _logger = logging.getLogger(__name__)
@@ -98,7 +99,11 @@ class FasterWhisperOptions(BaseModel):
     Only passed when set; faster-whisper requires `word_timestamps=True` for it."""
     hotwords: str | None = None
     """Passed through as faster-whisper's `hotwords` prompt."""
-    word_timestamps: bool = False
+    word_timestamps: bool = True
+    """On by default: word timings let Georg split segments that stretch across
+    long non-speech regions (a VAD artefact) and trim them at sermon bounds."""
+    split_gap_seconds: float = Field(default=2.0, ge=0.0)
+    """Segments are split wherever consecutive words are this far apart or more."""
     download_root: Path | None = None
     local_files_only: bool = False
 
@@ -212,6 +217,49 @@ def drop_repeated_segments(segments: list[TranscriptSegment]) -> list[Transcript
     return result
 
 
+def split_at_word_gaps(
+    segments: list[TranscriptSegment], gap_seconds: float
+) -> list[TranscriptSegment]:
+    """Split segments whose words have a gap of >= `gap_seconds` between them.
+
+    With `vad_filter`, faster-whisper can return one segment whose timestamps
+    stretch across a long non-speech region. Splitting at word gaps gives each
+    piece a truthful range, which `Transcript.within` and the boundary detector
+    rely on. Segments without words pass through unchanged, and
+    `split_gap_seconds = 0` disables splitting.
+    """
+    gap_ms = round(gap_seconds * 1000)
+    if gap_ms <= 0:
+        return list(segments)
+    out: list[TranscriptSegment] = []
+    for seg in segments:
+        words = list(seg.words)
+        cuts = [
+            i
+            for i in range(1, len(words))
+            if words[i].range.start_ms - words[i - 1].range.end_ms >= gap_ms
+        ]
+        if not cuts:
+            out.append(seg)
+            continue
+        bounds = [0, *cuts, len(words)]
+        for lo, hi in itertools.pairwise(bounds):
+            piece = words[lo:hi]
+            out.append(
+                seg.model_copy(
+                    update={
+                        "text": "".join(w.text for w in piece).strip(),
+                        "range": TimeRange(
+                            start_ms=piece[0].range.start_ms,
+                            end_ms=piece[-1].range.end_ms,
+                        ),
+                        "words": tuple(piece),
+                    }
+                )
+            )
+    return out
+
+
 def _range(start: float, end: float) -> TimeRange:
     start_ms = max(0, round(start * 1000))
     return TimeRange(start_ms=start_ms, end_ms=max(round(end * 1000), start_ms + 1))
@@ -268,6 +316,7 @@ class FasterWhisperTranscriber:
             f"{TYPE_NAME}-r{_REVISION}-fw{_library_version()}-{Path(o.model).name}"
             f"-{o.compute_type}-b{o.beam_size}-vad{int(o.vad_filter)}"
             f"-c{int(o.condition_on_previous_text)}-w{int(o.word_timestamps)}"
+            f"-gap{o.split_gap_seconds:g}"
         )
         if extra:
             digest = hashlib.sha256(
@@ -297,7 +346,9 @@ class FasterWhisperTranscriber:
                 ),
                 **({"hotwords": o.hotwords} if o.hotwords is not None else {}),
             )
-            segments = drop_repeated_segments([_segment(s) for s in raw_segments])
+            segments = drop_repeated_segments(
+                split_at_word_gaps([_segment(s) for s in raw_segments], o.split_gap_seconds)
+            )
         except (ValidationError, ModuleError):
             raise
         except Exception as exc:
