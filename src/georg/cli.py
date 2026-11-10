@@ -147,11 +147,14 @@ def _open(args: argparse.Namespace) -> tuple["GeorgConfig", "Engine"]:
 
 
 def _discover(args: argparse.Namespace) -> int:
+    from georg.core.config import DiscoveryConfig
     from georg.db.engine import session_factory
     from georg.jobs.queue import JobQueue
     from georg.pipeline import discover
 
     config, engine = _open(args)
+    if args.since is not None:
+        config = config.model_copy(update={"discovery": DiscoveryConfig(start_date=args.since)})
     new = discover(config, session_factory(engine), JobQueue(engine))
     print(f"{len(new)} new service(s) queued" + (f": {new}" if new else ""))
     return 0
@@ -291,6 +294,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     disc = commands.add_parser("discover", help="find new recordings and queue them")
     disc.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    disc.add_argument(
+        "--since",
+        type=date.fromisoformat,
+        help="only services on or after YYYY-MM-DD; overrides [discovery] start_date",
+    )
     disc.set_defaults(handler=_discover)
 
     work = commands.add_parser("worker", help="run queued jobs")

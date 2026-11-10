@@ -3,6 +3,7 @@ import argparse
 import io
 import shutil
 import subprocess
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -56,20 +57,54 @@ def test_master_sample_writes_ab_pair(tmp_path: Path, capsys: pytest.CaptureFixt
     assert sorted(p.name for p in out.iterdir()) == ["A_unprocessed.mp3", "B_mastered.mp3"]
 
 
-def _config_file(tmp_path: Path) -> Path:
+def _config_file(tmp_path: Path, discovery: str = "") -> Path:
     path = tmp_path / "georg.toml"
     root = tmp_path / "drive"
-    root.mkdir()
+    root.mkdir(exist_ok=True)
     processors = "\n".join(
         f'[processors.{k}]\ntype = "unused"'
         for k in ("classifier", "detector", "transcriber", "formatter", "metadata")
     )
+    section = f"\n[discovery]\n{discovery}\n" if discovery else ""
     path.write_text(
-        f'instance = "test"\ndata_dir = "{tmp_path / "data"}"\n\n'
+        f'instance = "test"\ndata_dir = "{tmp_path / "data"}"\n{section}\n'
         f'[[inputs]]\nname = "drive"\ntype = "local_folder"\n'
         f'[inputs.options]\nroot = "{root}"\n\n{processors}\n'
     )
     return path
+
+
+def test_discover_since_overrides_config_start_date(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import os
+    import time
+
+    from georg.db import create_engine
+    from georg.db.engine import database_path, session_factory
+    from georg.db.repositories import ServiceRepository
+
+    root = tmp_path / "drive"
+    for name in ("SPX 10.25.26", "SPX 11.01.26"):
+        folder = root / name
+        folder.mkdir(parents=True)
+        media = folder / "a.mp4"
+        media.write_bytes(b"x")
+        old = time.time() - 3600
+        os.utime(media, (old, old))
+    config = _config_file(tmp_path, discovery="start_date = 2026-11-01")
+
+    assert main(["discover", "--config", str(config)]) == 0
+    assert "1 new service(s)" in capsys.readouterr().out
+
+    assert main(["discover", "--config", str(config), "--since", "2026-10-01"]) == 0
+    assert "1 new service(s)" in capsys.readouterr().out
+
+    engine = create_engine(database_path(tmp_path / "data"))
+    with session_factory(engine)() as s:
+        dates = sorted(svc.service_date for svc in ServiceRepository(s).newest_first())
+    engine.dispose()
+    assert dates == [date(2026, 10, 25), date(2026, 11, 1)]
 
 
 def test_user_add_stores_an_argon2_hash(
