@@ -13,6 +13,7 @@ import hashlib
 import itertools
 import json
 import logging
+import re
 import subprocess
 from collections.abc import Callable, Iterable
 from importlib import metadata
@@ -26,7 +27,7 @@ from georg.core.types import TimeRange, Transcript, TranscriptSegment, Transcrip
 from georg.media.ffmpeg import FFMPEG
 
 TYPE_NAME = "faster_whisper"
-_REVISION = 3
+_REVISION = 4
 SAMPLE_RATE = 16_000
 
 _logger = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ _REPEAT_RUN_MIN = 3
 _REPEAT_RUN_MIN_SECONDS = 20.0
 _HALLUCINATION_MIN_SECONDS = 20.0
 _HALLUCINATION_MAX_WORDS = 3
+_SENTENCE_FINAL = re.compile(r"""[.?!](?:["')\]}]*)$""")
 
 
 class WhisperWordLike(Protocol):
@@ -243,8 +245,19 @@ def split_at_word_gaps(
             out.append(seg)
             continue
         bounds = [0, *cuts, len(words)]
-        for lo, hi in itertools.pairwise(bounds):
-            piece = words[lo:hi]
+        pieces = [words[lo:hi] for lo, hi in itertools.pairwise(bounds)]
+
+        if len(pieces) > 1 and len(pieces[0]) <= 2 and not _ends_sentence(pieces[0]):
+            pieces[0] = _retime_before(pieces[0], pieces[1][0].range.start_ms)
+            pieces[1] = [*pieces[0], *pieces[1]]
+            pieces.pop(0)
+
+        if len(pieces) > 1 and len(pieces[-1]) <= 2 and not _ends_sentence(pieces[-2]):
+            pieces[-1] = _retime_after(pieces[-1], pieces[-2][-1].range.end_ms)
+            pieces[-2] = [*pieces[-2], *pieces[-1]]
+            pieces.pop()
+
+        for piece in pieces:
             out.append(
                 seg.model_copy(
                     update={
@@ -258,6 +271,40 @@ def split_at_word_gaps(
                 )
             )
     return out
+
+
+def _ends_sentence(words: list[TranscriptWord]) -> bool:
+    return bool(_SENTENCE_FINAL.search(words[-1].text.rstrip()))
+
+
+def _retime_before(words: list[TranscriptWord], end_ms: int) -> list[TranscriptWord]:
+    durations = [min(word.range.duration_ms, 1000) for word in words]
+    start_ms = end_ms - sum(durations)
+    retimed: list[TranscriptWord] = []
+    for word, duration_ms in zip(words, durations, strict=True):
+        retimed.append(
+            word.model_copy(
+                update={
+                    "range": TimeRange(
+                        start_ms=start_ms,
+                        end_ms=start_ms + duration_ms,
+                    )
+                }
+            )
+        )
+        start_ms += duration_ms
+    return retimed
+
+
+def _retime_after(words: list[TranscriptWord], start_ms: int) -> list[TranscriptWord]:
+    retimed: list[TranscriptWord] = []
+    for word in words:
+        end_ms = start_ms + min(word.range.duration_ms, 1000)
+        retimed.append(
+            word.model_copy(update={"range": TimeRange(start_ms=start_ms, end_ms=end_ms)})
+        )
+        start_ms = end_ms
+    return retimed
 
 
 def _range(start: float, end: float) -> TimeRange:

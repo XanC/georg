@@ -225,7 +225,7 @@ def test_gap_split_threshold_and_disable(tmp_path: Path) -> None:
         split_gap_seconds=1.0,
     )
     out = t.transcribe(tmp_path / "s.flac", "en")
-    assert [s.text for s in out.segments] == ["Hello", "there"]
+    assert [s.text for s in out.segments] == ["Hello there"]
 
     t, _ = make(
         FakeModel([Segment(0.0, 2.5, " Hello there", -0.1, words)]),
@@ -233,6 +233,53 @@ def test_gap_split_threshold_and_disable(tmp_path: Path) -> None:
     )
     out = t.transcribe(tmp_path / "s.flac", "en")
     assert len(out.segments) == 1  # 0 disables splitting
+
+
+def test_short_leading_fragment_merges_into_following_piece(tmp_path: Path) -> None:
+    words = [
+        Word(1478.260, 1478.860, " Dear", 0.9),
+        Word(1760.940, 1761.540, " Saints,", 0.9),
+        Word(1761.680, 1761.780, " there", 0.9),
+        Word(1761.900, 1762.000, " are", 0.9),
+    ]
+    t, _ = make(FakeModel([Segment(1478.260, 1762.000, "", -0.1, words)]))
+
+    out = t.transcribe(tmp_path / "s.flac", "en")
+
+    assert [s.text for s in out.segments] == ["Dear Saints, there are"]
+    assert out.segments[0].range.start_ms == 1760340
+    assert out.segments[0].range.end_ms == 1762000
+    assert out.segments[0].words[0].range == TimeRange(start_ms=1760340, end_ms=1760940)
+
+
+def test_short_trailing_fragment_merges_into_previous_piece(tmp_path: Path) -> None:
+    words = [
+        Word(100.000, 100.500, " In", 0.9),
+        Word(100.600, 101.000, " the", 0.9),
+        Word(101.100, 101.500, " name", 0.9),
+        Word(104.000, 104.500, " Dear", 0.9),
+    ]
+    t, _ = make(FakeModel([Segment(100.000, 104.500, "", -0.1, words)]), split_gap_seconds=1)
+
+    out = t.transcribe(tmp_path / "s.flac", "en")
+
+    assert [s.text for s in out.segments] == ["In the name Dear"]
+    assert out.segments[0].range == TimeRange(start_ms=100000, end_ms=102000)
+    assert out.segments[0].words[-1].range == TimeRange(start_ms=101500, end_ms=102000)
+
+
+def test_short_fragment_after_sentence_stays_separate(tmp_path: Path) -> None:
+    words = [
+        Word(100.000, 100.500, " In", 0.9),
+        Word(100.600, 101.000, " the", 0.9),
+        Word(101.100, 101.500, " Amen.", 0.9),
+        Word(104.000, 104.500, " Dear", 0.9),
+    ]
+    t, _ = make(FakeModel([Segment(100.000, 104.500, "", -0.1, words)]), split_gap_seconds=1)
+
+    out = t.transcribe(tmp_path / "s.flac", "en")
+
+    assert [s.text for s in out.segments] == ["In the Amen.", "Dear"]
 
 
 def test_invalid_options() -> None:
