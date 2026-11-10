@@ -131,7 +131,7 @@ def run_local(
         """Probe a remote part once, cached by its content key across attempts."""
         return cache.text(
             "probe",
-            part.key,
+            cache.key(part.key),
             lambda: json.dumps(asdict(ffmpeg.probe_media(part, retryable=True))),
         )[0]
 

@@ -15,12 +15,14 @@ from georg.core.types import (
     FormatContext,
     FormattedTranscript,
     MetadataContext,
+    RemoteMedia,
     SermonMetadata,
     ServiceBoundaries,
     TimeRange,
     Transcript,
     TranscriptSegment,
 )
+from georg.media import ffmpeg
 from georg.media.ffmpeg import FFMPEG, probe
 from georg.pipeline import Processors, StageCache, build_processor, build_processors, run_local
 
@@ -133,6 +135,60 @@ def test_run_local_caches_expensive_stages(tmp_path: Path, parts: list[Path]) ->
     assert procs.classifier.calls == procs.transcriber.calls == 1  # type: ignore[attr-defined]
     assert procs.formatter.calls == 1  # type: ignore[union-attr]
     assert (tmp_path / "two" / "transcript.md").read_text().endswith("Grace to you.\n")
+
+
+def test_remote_probe_cache_uses_hashed_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    part = RemoteMedia(
+        url="https://example.com/part.mp4",
+        name="part.mp4",
+        key="drive\0folder/file\0size\0checksum",
+        headers=lambda *, force_refresh=False: {},
+    )
+    info = ffmpeg.MediaInfo(
+        duration_ms=12_000, has_audio=True, has_video=False, sample_rate=44_100, channels=2
+    )
+    probes = 0
+    extracts = 0
+
+    def fake_probe_media(media: RemoteMedia, *, retryable: bool = False) -> ffmpeg.MediaInfo:
+        nonlocal probes
+        probes += 1
+        assert media is part
+        assert retryable
+        return info
+
+    def fake_extract_audio(parts: list[RemoteMedia], dest: Path, **kwargs: object) -> Path:
+        nonlocal extracts
+        extracts += 1
+        assert parts == [part]
+        assert kwargs["remote_probes"] == {part.key: info}
+        return dest
+
+    def stop_after_extract(path: Path) -> ffmpeg.MediaInfo:
+        raise RuntimeError("stop after extract")
+
+    monkeypatch.setattr(ffmpeg, "probe_media", fake_probe_media)
+    monkeypatch.setattr(ffmpeg, "extract_audio", fake_extract_audio)
+    monkeypatch.setattr(ffmpeg, "probe", stop_after_extract)
+
+    cache = StageCache(tmp_path / "cache")
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="stop after extract"):
+            run_local(
+                [part],
+                tmp_path / "out",
+                processors(),
+                cache=cache,
+                renditions=default_renditions()[:1],
+                documents=["x"],
+            )
+
+    assert probes == 1
+    assert extracts == 2
+    probe_files = list((cache.root / "probe").iterdir())
+    assert [path.name for path in probe_files] == [f"{StageCache.key(part.key)}.json"]
 
 
 def test_run_local_without_formatter_writes_plain_transcript(
