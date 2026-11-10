@@ -233,6 +233,92 @@ def test_render_edited_boundaries(config: GeorgConfig, engine: Engine) -> None:
         assert len(previews(s, audio.service_id)) == 1  # the preview is never re-cut
 
 
+def test_render_preserves_edited_metadata_and_replaces_unedited_transcript(
+    config: GeorgConfig, engine: Engine
+) -> None:
+    sessions = session_factory(engine)
+    sermon_id, first = processed(config, engine)
+    edited = PROPOSED.model_copy(update={"sermon_end_ms": 9_000})
+    with sessions.begin() as s:
+        repo = SermonRepository(s)
+        old = repo.revision(first)
+        metadata = repo.metadata(old).model_copy(update={"title": "Reviewed title"})
+        revision_id = repo.add_revision(
+            sermon_id,
+            author="user:1",
+            boundaries=edited,
+            metadata=metadata,
+            transcript_markdown=old.transcript_markdown,
+            field_origins={"metadata": "user"},
+        ).id
+    procs = processors()
+    render_revision(config, sessions, revision_id, procs)
+    assert procs.formatter.calls == 1  # type: ignore[union-attr]
+    assert procs.transcriber.calls == 1  # type: ignore[attr-defined]
+    with sessions() as s:
+        current = SermonRepository(s).current_revision(sermon_id)
+        assert current is not None and current.id != revision_id
+        assert SermonRepository(s).metadata(current).title == "Reviewed title"
+        assert current.field_origins["metadata"] == "user"
+        assert current.transcript_markdown != old.transcript_markdown
+
+
+def test_render_preserves_edited_transcript(config: GeorgConfig, engine: Engine) -> None:
+    sessions = session_factory(engine)
+    sermon_id, first = processed(config, engine)
+    edited = PROPOSED.model_copy(update={"sermon_end_ms": 9_000})
+    transcript = "# My wording\n\nA reviewer-edited sentence.\n"
+    with sessions.begin() as s:
+        repo = SermonRepository(s)
+        old = repo.revision(first)
+        revision_id = repo.add_revision(
+            sermon_id,
+            author="user:1",
+            boundaries=edited,
+            metadata=repo.metadata(old),
+            transcript_markdown=transcript,
+            field_origins={"transcript": "user"},
+        ).id
+    procs = processors()
+    render_revision(config, sessions, revision_id, procs)
+    assert procs.formatter.calls == 0  # type: ignore[union-attr]
+    assert procs.transcriber.calls == 0  # type: ignore[attr-defined]
+    assert procs.metadata.calls == 0  # type: ignore[attr-defined]
+    with sessions() as s:
+        current = SermonRepository(s).current_revision(sermon_id)
+        assert current is not None and current.id == revision_id
+        assert current.transcript_markdown == transcript
+        assert current.field_origins["transcript"] == "user"
+        assert current.sermon_audio_artifact_id is not None
+
+
+def test_render_service_only_boundary_change_keeps_revision(
+    config: GeorgConfig, engine: Engine
+) -> None:
+    sessions = session_factory(engine)
+    sermon_id, first = processed(config, engine)
+    edited = PROPOSED.model_copy(update={"service_end_ms": 10_000})
+    with sessions.begin() as s:
+        repo = SermonRepository(s)
+        old = repo.revision(first)
+        revision_id = repo.add_revision(
+            sermon_id,
+            author="user:1",
+            boundaries=edited,
+            metadata=repo.metadata(old),
+            transcript_markdown=old.transcript_markdown,
+        ).id
+    procs = processors()
+    render_revision(config, sessions, revision_id, procs)
+    assert procs.formatter.calls == 0  # type: ignore[union-attr]
+    assert procs.transcriber.calls == 0  # type: ignore[attr-defined]
+    assert procs.metadata.calls == 0  # type: ignore[attr-defined]
+    with sessions() as s:
+        current = SermonRepository(s).current_revision(sermon_id)
+        assert current is not None and current.id == revision_id
+        assert current.sermon_audio_artifact_id is not None
+
+
 def test_publish_requires_approval_then_publishes_once(config: GeorgConfig, engine: Engine) -> None:
     sessions = session_factory(engine)
     sermon_id, revision_id = processed(config, engine)

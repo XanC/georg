@@ -85,7 +85,8 @@ class FakeFormatter(Counting):
 
     def format(self, transcript: Transcript, ctx: FormatContext) -> FormattedTranscript:
         self.calls += 1
-        return FormattedTranscript(markdown=f"# {ctx.metadata.occasion}\n\n{transcript.text}\n",
+        heading = ctx.metadata.title or ctx.metadata.occasion
+        return FormattedTranscript(markdown=f"# {heading}\n\n{transcript.text}\n",
                                    words_preserved=True)  # fmt: skip
 
 
@@ -114,9 +115,11 @@ class FailingSermonTranscriber(FakeSermonTranscriber):
 class FakeMetadata:
     version = "fake-metadata-1"
 
+    calls = 0
     transcript: Transcript | None = None
 
     def generate(self, ctx: MetadataContext) -> SermonMetadata:
+        self.calls += 1
         self.transcript = ctx.transcript
         docs = ctx.source.hints["documents"]
         return ctx.defaults.model_copy(update={"occasion": docs[0], "preacher": "Eric"})

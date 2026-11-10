@@ -17,6 +17,7 @@ from georg.core.types import (
     ArtifactRef,
     MediaInput,
     PublicationRequest,
+    SermonMetadata,
     ServiceBoundaries,
     SourceItem,
 )
@@ -148,13 +149,26 @@ def render_revision(
     store: LocalStore | None = None,
     cache: StageCache | None = None,
 ) -> None:
-    """Render a reviewer-edited revision, including its sermon transcript pass."""
+    """Render a reviewer-edited revision while preserving editorial changes."""
     store = store or LocalStore.for_data_dir(config.data_dir)
     cache = cache or StageCache(config.data_dir / "cache")
     with sessions() as session:
         sermons = SermonRepository(session)
         revision = sermons.revision(revision_id)
         boundaries = sermons.boundaries(revision)
+        parent = (
+            sermons.revision(revision.parent_revision_id)
+            if revision.parent_revision_id is not None
+            else None
+        )
+        replace_transcript = (
+            parent is not None
+            and (
+                boundaries.sermon_start_ms != parent.sermon_start_ms
+                or boundaries.sermon_end_ms != parent.sermon_end_ms
+            )
+            and revision.transcript_markdown == parent.transcript_markdown
+        )
         service_id = sermons.get(revision.sermon_id).service_id
         if _renditions_for(session, service_id, boundaries):
             return
@@ -174,28 +188,48 @@ def render_revision(
         processors,
         cache,
         boundaries=boundaries,
+        metadata_override=sermons.metadata(revision),
+        transcribe_sermon=replace_transcript,
+        format_transcript=replace_transcript,
     )
     with sessions.begin() as session:
-        sermon_audio_id = _store_files(session, store, config, service_id, result, out_dir)
+        sermon_audio_id = _store_files(
+            session,
+            store,
+            config,
+            service_id,
+            result,
+            out_dir,
+            transcript=replace_transcript,
+        )
         sermons = SermonRepository(session)
         current = sermons.revision(revision_id)
-        transcript_markdown = result.files["transcript"].read_text(encoding="utf-8")
-        field_origins = {
-            **current.field_origins,
-            "transcript": (processors.sermon_transcriber or processors.transcriber).version,
-            "metadata": processors.metadata.version,
-        }
-        rendered = sermons.add_revision(
-            current.sermon_id,
-            author="system",
-            boundaries=result.boundaries,
-            metadata=result.metadata,
-            transcript_markdown=transcript_markdown,
-            field_origins=field_origins,
-            sermon_audio_artifact_id=sermon_audio_id,
-        )
+        if replace_transcript:
+            transcript_markdown = result.files["transcript"].read_text(encoding="utf-8")
+            field_origins = dict(current.field_origins)
+            field_origins["transcript"] = (
+                processors.sermon_transcriber or processors.transcriber
+            ).version
+            rendered = sermons.add_revision(
+                current.sermon_id,
+                author="system",
+                boundaries=result.boundaries,
+                metadata=sermons.metadata(current),
+                transcript_markdown=transcript_markdown,
+                field_origins=field_origins,
+                sermon_audio_artifact_id=sermon_audio_id,
+            )
+            log.info(
+                "revision %d: rendered as revision %d (%s)",
+                revision_id,
+                rendered.id,
+                result.timings,
+            )
+        elif sermon_audio_id:
+            sermons.attach_sermon_audio(revision_id, sermon_audio_id)
     shutil.rmtree(out_dir, ignore_errors=True)
-    log.info("revision %d: rendered as revision %d (%s)", revision_id, rendered.id, result.timings)
+    if not replace_transcript:
+        log.info("revision %d: rendered (%s)", revision_id, result.timings)
 
 
 def _run(
@@ -208,6 +242,9 @@ def _run(
     cache: StageCache,
     *,
     boundaries: ServiceBoundaries | None = None,
+    metadata_override: SermonMetadata | None = None,
+    transcribe_sermon: bool = True,
+    format_transcript: bool = True,
 ) -> tuple[LocalRunResult, Path]:
     if not included:
         raise ModuleError(f"service {service_id} has no included recording parts")
@@ -229,6 +266,9 @@ def _run(
         language=config.language,
         source=item,
         boundaries=boundaries,
+        metadata_override=metadata_override,
+        transcribe_sermon=transcribe_sermon,
+        format_transcript=format_transcript,
     )
     return result, out_dir
 

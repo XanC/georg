@@ -117,7 +117,10 @@ def run_local(
     documents: Sequence[str] = (),
     source: SourceItem | None = None,
     defaults: SermonMetadata | None = None,
+    metadata_override: SermonMetadata | None = None,
     boundaries: ServiceBoundaries | None = None,
+    transcribe_sermon: bool = True,
+    format_transcript: bool = True,
     mastering_params: mastering.MasteringParams | None = None,
 ) -> LocalRunResult:
     """Process one recording (its parts in order) into `out_dir`.
@@ -193,44 +196,47 @@ def run_local(
     proposal = p.detector.detect(segments, duration_ms, transcript)
     timings["detect"] = round(time.monotonic() - start, 1)
     chosen = boundaries or proposal.boundaries
-    sermon_processor = p.sermon_transcriber or p.transcriber
-    cut_start = max(chosen.sermon_start_ms - p.sermon_transcribe_pad_ms, 0)
-    cut_end = min(chosen.sermon_end_ms + p.sermon_transcribe_pad_ms, duration_ms)
-    cut_span = TimeRange(start_ms=cut_start, end_ms=max(cut_end, cut_start + 1))
-    sermon_key = cache.key(
-        source_key,
-        sermon_processor.version,
-        language,
-        cut_span.start_ms,
-        cut_span.end_ms,
-    )
-    sermon_audio = out_dir / ".sermon-transcribe.flac"
-
-    def sermon_transcribe() -> tuple[Transcript, bool]:
-        def compute() -> str:
-            ffmpeg.cut(audio, cut_span, sermon_audio)
-            try:
-                return sermon_processor.transcribe(sermon_audio, language).model_dump_json()
-            finally:
-                sermon_audio.unlink(missing_ok=True)
-
-        return _parse(
-            cache.text("sermon_transcribe", sermon_key, compute),
-            Transcript.model_validate_json,
+    if transcribe_sermon:
+        sermon_processor = p.sermon_transcriber or p.transcriber
+        cut_start = max(chosen.sermon_start_ms - p.sermon_transcribe_pad_ms, 0)
+        cut_end = min(chosen.sermon_end_ms + p.sermon_transcribe_pad_ms, duration_ms)
+        cut_span = TimeRange(start_ms=cut_start, end_ms=max(cut_end, cut_start + 1))
+        sermon_key = cache.key(
+            source_key,
+            sermon_processor.version,
+            language,
+            cut_span.start_ms,
+            cut_span.end_ms,
         )
+        sermon_audio = out_dir / ".sermon-transcribe.flac"
 
-    try:
-        sermon_transcript_padded = timed("sermon_transcribe", sermon_transcribe)
-        sermon_transcript = _shift_transcript(sermon_transcript_padded, cut_span.start_ms).within(
-            chosen.sermon
-        )
-    except Exception as exc:
-        log.warning(
-            "sermon transcription failed for %s-%s; using full-service transcript slice: %s",
-            chosen.sermon_start_ms,
-            chosen.sermon_end_ms,
-            exc,
-        )
+        def sermon_transcribe() -> tuple[Transcript, bool]:
+            def compute() -> str:
+                ffmpeg.cut(audio, cut_span, sermon_audio)
+                try:
+                    return sermon_processor.transcribe(sermon_audio, language).model_dump_json()
+                finally:
+                    sermon_audio.unlink(missing_ok=True)
+
+            return _parse(
+                cache.text("sermon_transcribe", sermon_key, compute),
+                Transcript.model_validate_json,
+            )
+
+        try:
+            sermon_transcript_padded = timed("sermon_transcribe", sermon_transcribe)
+            sermon_transcript = _shift_transcript(
+                sermon_transcript_padded, cut_span.start_ms
+            ).within(chosen.sermon)
+        except Exception as exc:
+            log.warning(
+                "sermon transcription failed for %s-%s; using full-service transcript slice: %s",
+                chosen.sermon_start_ms,
+                chosen.sermon_end_ms,
+                exc,
+            )
+            sermon_transcript = transcript.within(chosen.sermon)
+    else:
         sermon_transcript = transcript.within(chosen.sermon)
 
     service_date = service_date or (source.service_date if source else None)
@@ -242,12 +248,16 @@ def run_local(
         hints={"documents": list(documents)},
     )
     defaults = defaults or SermonMetadata(service_date=service_date)
-    metadata = p.metadata.generate(
-        MetadataContext(source=source, transcript=sermon_transcript, defaults=defaults)
+    metadata = (
+        metadata_override
+        if metadata_override is not None
+        else p.metadata.generate(
+            MetadataContext(source=source, transcript=sermon_transcript, defaults=defaults)
+        )
     )
 
     formatted: FormattedTranscript | None = None
-    if p.formatter is not None:
+    if format_transcript and p.formatter is not None:
         formatter = p.formatter
         ctx = FormatContext(language=language or transcript.language, metadata=metadata)
         formatted = timed(
