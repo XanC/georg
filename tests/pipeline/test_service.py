@@ -6,12 +6,14 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import Engine
+from sqlalchemy.orm import Session
 from test_local_run import PROPOSED, processors, tone
 
 from georg.core.config import GeorgConfig, OutputConfig
 from georg.core.errors import ModuleError
 from georg.core.types import ExternalRef, PublicationRequest
 from georg.db.engine import session_factory
+from georg.db.models import Artifact
 from georg.db.repositories import (
     ArtifactRepository,
     PublicationRepository,
@@ -66,8 +68,11 @@ def test_discover_then_worker_proposes_a_revision(config: GeorgConfig, engine: E
         assert revision.transcript_markdown is not None
         assert "Grace to you." in revision.transcript_markdown
         kinds = sorted(a.kind for a in ArtifactRepository(s).for_service(service_id))
-        assert kinds == ["boundary_proposal", "rendition", "rendition", "sermon_audio",
-                         "transcript_formatted"]  # fmt: skip
+        assert kinds == ["boundary_proposal", "rendition", "rendition", "rendition",
+                         "sermon_audio", "transcript_formatted"]  # fmt: skip
+        [preview] = previews(s, service_id)
+        assert preview.meta == {"name": "preview", "span": "recording"}
+        assert abs((preview.duration_ms or 0) - 12_000) < 200
         assert revision.sermon_audio_artifact_id is not None
         service = ServiceRepository(s).get(service_id)
         assert service.status_summary == "awaiting review"
@@ -181,6 +186,25 @@ def processed(config: GeorgConfig, engine: Engine) -> tuple[int, int]:
         return sermon.id, revision_id
 
 
+def previews(s: Session, service_id: int) -> list[Artifact]:
+    return [a for a in ArtifactRepository(s).for_service(service_id)
+            if a.meta.get("name") == "preview"]  # fmt: skip
+
+
+def test_reprocess_creates_a_missing_preview_once(config: GeorgConfig, engine: Engine) -> None:
+    sessions = session_factory(engine)
+    sermon_id, _ = processed(config, engine)
+    with sessions.begin() as s:
+        service_id = SermonRepository(s).get(sermon_id).service_id
+        [preview] = previews(s, service_id)
+        s.delete(preview)  # as if processed before previews existed
+    process_service(config, sessions, service_id, processors(), reprocess=True)
+    process_service(config, sessions, service_id, processors(), reprocess=True)
+    with sessions() as s:
+        [preview] = previews(s, service_id)
+        assert abs((preview.duration_ms or 0) - 12_000) < 200
+
+
 def test_render_edited_boundaries(config: GeorgConfig, engine: Engine) -> None:
     sessions = session_factory(engine)
     sermon_id, first = processed(config, engine)
@@ -203,6 +227,7 @@ def test_render_edited_boundaries(config: GeorgConfig, engine: Engine) -> None:
     render_revision(config, sessions, revision_id, procs)  # already rendered: no-op
     with sessions() as s:
         assert len(ArtifactRepository(s).for_service(audio.service_id)) == count
+        assert len(previews(s, audio.service_id)) == 1  # the preview is never re-cut
 
 
 def test_publish_requires_approval_then_publishes_once(config: GeorgConfig, engine: Engine) -> None:

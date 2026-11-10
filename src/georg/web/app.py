@@ -66,6 +66,7 @@ DISCOVER: Final = "discover"
 PROCESS: Final = "process"
 ACTIVE_STATUSES: Final = ("queued", "running")
 SEEK_RENDITION: Final = "service_hq"
+PREVIEW_RENDITION: Final = "preview"
 AUDIO_KINDS: Final = ("sermon_audio", "rendition")
 SESSION_FLASH: Final = "flash"
 _HERE = Path(__file__).parent
@@ -300,7 +301,8 @@ def create_app(
         numbers = {r.id: r.number for r in revisions}
         publications = PublicationRepository(session).for_sermon(sermon_id)
         published = {p.target_name for p in publications}
-        seek = next((a for a in audio if a.name == SEEK_RENDITION), None)
+        preview = _preview(artifacts)
+        seek = preview or next((a for a in audio if a.name == SEEK_RENDITION), None)
         return {
             "service": service,
             "sermon": sermon,
@@ -310,6 +312,7 @@ def create_app(
             ),
             "boundary_fields": BOUNDARY_FIELDS,
             "audio": audio,
+            "preview": preview,
             "seek": seek,
             "rendered": rendered,
             "rendering": bool(renders),
@@ -563,7 +566,7 @@ def _audio_files(
         report_start = value if isinstance(value, int) else None
     chosen: dict[str, AudioFile] = {}
     for a in artifacts:
-        if a.kind not in AUDIO_KINDS:
+        if a.kind not in AUDIO_KINDS or a.meta.get("name") == PREVIEW_RENDITION:
             continue
         name = str(a.meta.get("name") or a.kind)
         cut = a.meta.get("boundaries")
@@ -575,6 +578,14 @@ def _audio_files(
         if previous is None or current or not previous.current:
             chosen[name] = AudioFile(a, name, origin, current)
     return sorted(chosen.values(), key=lambda f: (f.artifact.kind != "sermon_audio", f.name))
+
+
+def _preview(artifacts: Any) -> AudioFile | None:
+    """The newest whole-recording preview; it starts at recording time 0."""
+    found = [
+        a for a in artifacts if a.kind == "rendition" and a.meta.get("name") == PREVIEW_RENDITION
+    ]
+    return AudioFile(found[-1], PREVIEW_RENDITION, 0, True) if found else None
 
 
 __all__ = ["create_app"]

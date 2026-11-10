@@ -37,7 +37,8 @@ uv run georg run part1.mp4 part2.mp4 --out out/ --date 2026-11-01 --no-format
 ```
 
 This writes the three MP3 renditions, the sermon transcript, and `report.json`
-with the detected boundaries. Classification and transcription are cached, so
+with the detected boundaries. It also encodes a low-quality `preview` of the whole
+recording (cached by source under the cache directory) for the review page's player. Classification and transcription are cached, so
 re-running with `--boundaries 0:02:10,0:31:20,0:52:05,1:14:30` only re-cuts the audio.
 
 With the database: `uv run georg discover` records new recordings from the
@@ -48,7 +49,8 @@ storing the renditions and a proposed sermon revision for review. A
 Reviewers work in the web UI: add an account with
 `uv run georg user add alice --role reviewer` (prompts for a password), then start
 it with `GEORG_SECRET_KEY=<random string> uv run georg web` and open
-<http://127.0.0.1:8000>. There a reviewer listens to the renditions, corrects the
+<http://127.0.0.1:8000>. There a reviewer listens to the whole recording (the `preview` player, in
+recording time like the boundary fields) and the cut renditions, corrects the
 boundaries, metadata, and transcript (each save is a new revision; moved boundaries
 re-render the audio), and approves a revision for publishing. `georg web --dev`
 uses a throwaway key and allows session cookies over plain HTTP; otherwise serve

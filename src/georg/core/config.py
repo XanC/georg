@@ -129,6 +129,8 @@ class GeorgConfig(_Section):
             if len(names) != len(set(names)):
                 raise ValueError(f"duplicate names: {names}")
         known = {r.name for r in self.renditions}
+        if "preview" in known:
+            raise ValueError("rendition name 'preview' is reserved for the built-in preview")
         for out in self.outputs:
             missing = set(out.renditions) - known
             if missing:

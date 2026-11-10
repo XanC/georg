@@ -47,6 +47,17 @@ def test_unknown_rendition_is_rejected(tmp_path: Path) -> None:
         load_config(bad)
 
 
+def test_preview_rendition_name_is_reserved(tmp_path: Path) -> None:
+    text = (
+        EXAMPLE.read_text()
+        + '\n[[renditions]]\nname = "preview"\nspan = "service"\nbitrate_kbps = 32\n'
+    )
+    bad = tmp_path / "georg.toml"
+    bad.write_text(text)
+    with pytest.raises(ConfigError, match="reserved"):
+        load_config(bad)
+
+
 def test_resolve_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GEORG_TEST_SECRET", "s3cret")
     assert resolve_secret("env:GEORG_TEST_SECRET") == "s3cret"
