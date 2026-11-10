@@ -217,14 +217,17 @@ def test_render_edited_boundaries(config: GeorgConfig, engine: Engine) -> None:
                                         transcript_markdown=old.transcript_markdown).id  # fmt: skip
     procs = processors()
     render_revision(config, sessions, revision_id, procs)
-    assert procs.formatter.calls == 0  # type: ignore[union-attr]
+    assert procs.formatter.calls == 1  # type: ignore[union-attr]
+    assert procs.transcriber.calls == 1  # type: ignore[attr-defined]
     with sessions() as s:
-        revision = SermonRepository(s).revision(revision_id)
+        revision = SermonRepository(s).current_revision(sermon_id)
+        assert revision is not None and revision.id != revision_id
         audio = ArtifactRepository(s).get(revision.sermon_audio_artifact_id or 0)
         assert audio.meta["boundaries"] == [1_000, 2_000, 8_000, 11_000]
         assert abs((audio.duration_ms or 0) - 6_000) < 200
         count = len(ArtifactRepository(s).for_service(audio.service_id))
     render_revision(config, sessions, revision_id, procs)  # already rendered: no-op
+    assert procs.transcriber.calls == 1  # type: ignore[attr-defined]
     with sessions() as s:
         assert len(ArtifactRepository(s).for_service(audio.service_id)) == count
         assert len(previews(s, audio.service_id)) == 1  # the preview is never re-cut

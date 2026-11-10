@@ -9,6 +9,7 @@ with different boundaries or detector parameters is cheap.
 
 import hashlib
 import json
+import logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
@@ -28,11 +29,14 @@ from georg.core.types import (
     ServiceBoundaries,
     SourceItem,
     SourcePart,
+    TimeRange,
     Transcript,
 )
 from georg.media import ffmpeg, mastering
 from georg.modules.processors.classify import segments_from_json, segments_to_json
 from georg.pipeline.registry import Processors
+
+log = logging.getLogger(__name__)
 
 EXTRACT_VERSION = "extract-1"
 PREVIEW = "preview"
@@ -83,6 +87,8 @@ class LocalRunResult:
     """Length of the joined recording."""
     timings: dict[str, float] = field(default_factory=dict)
     """Seconds per stage; 0 for cache hits."""
+    transcript: Transcript | None = None
+    """The full-service transcript used by detection and included in the report."""
 
 
 def _source_key(parts: Sequence[MediaInput]) -> str:
@@ -187,7 +193,45 @@ def run_local(
     proposal = p.detector.detect(segments, duration_ms, transcript)
     timings["detect"] = round(time.monotonic() - start, 1)
     chosen = boundaries or proposal.boundaries
-    sermon_transcript = transcript.within(chosen.sermon)
+    sermon_processor = p.sermon_transcriber or p.transcriber
+    cut_start = max(chosen.sermon_start_ms - p.sermon_transcribe_pad_ms, 0)
+    cut_end = min(chosen.sermon_end_ms + p.sermon_transcribe_pad_ms, duration_ms)
+    cut_span = TimeRange(start_ms=cut_start, end_ms=max(cut_end, cut_start + 1))
+    sermon_key = cache.key(
+        source_key,
+        sermon_processor.version,
+        language,
+        cut_span.start_ms,
+        cut_span.end_ms,
+    )
+    sermon_audio = out_dir / ".sermon-transcribe.flac"
+
+    def sermon_transcribe() -> tuple[Transcript, bool]:
+        def compute() -> str:
+            ffmpeg.cut(audio, cut_span, sermon_audio)
+            try:
+                return sermon_processor.transcribe(sermon_audio, language).model_dump_json()
+            finally:
+                sermon_audio.unlink(missing_ok=True)
+
+        return _parse(
+            cache.text("sermon_transcribe", sermon_key, compute),
+            Transcript.model_validate_json,
+        )
+
+    try:
+        sermon_transcript_padded = timed("sermon_transcribe", sermon_transcribe)
+        sermon_transcript = _shift_transcript(sermon_transcript_padded, cut_span.start_ms).within(
+            chosen.sermon
+        )
+    except Exception as exc:
+        log.warning(
+            "sermon transcription failed for %s-%s; using full-service transcript slice: %s",
+            chosen.sermon_start_ms,
+            chosen.sermon_end_ms,
+            exc,
+        )
+        sermon_transcript = transcript.within(chosen.sermon)
 
     service_date = service_date or (source.service_date if source else None)
     source = source or SourceItem(
@@ -242,9 +286,33 @@ def run_local(
 
     files = {PREVIEW: preview, **{name: ref.path for name, ref in refs.items()}}
     files["transcript"] = transcript_md
-    result = LocalRunResult(proposal, chosen, metadata, formatted, files, duration_ms, timings)
+    result = LocalRunResult(
+        proposal, chosen, metadata, formatted, files, duration_ms, timings, transcript
+    )
     _write_report(out_dir / "report.json", result)
     return result
+
+
+def _shift_transcript(transcript: Transcript, offset_ms: int) -> Transcript:
+    def shift_range(span: TimeRange) -> TimeRange:
+        return TimeRange(
+            start_ms=span.start_ms + offset_ms,
+            end_ms=span.end_ms + offset_ms,
+        )
+
+    segments = tuple(
+        segment.model_copy(
+            update={
+                "range": shift_range(segment.range),
+                "words": tuple(
+                    word.model_copy(update={"range": shift_range(word.range)})
+                    for word in segment.words
+                ),
+            }
+        )
+        for segment in transcript.segments
+    )
+    return transcript.model_copy(update={"segments": segments})
 
 
 def _preview(
@@ -284,6 +352,7 @@ def _write_report(path: Path, result: LocalRunResult) -> None:
     report = {
         "proposal": result.proposal.model_dump(mode="json"),
         "boundaries": result.boundaries.model_dump(mode="json"),
+        "transcript": result.transcript.model_dump(mode="json") if result.transcript else None,
         "metadata": result.metadata.model_dump(mode="json"),
         "words_preserved": result.formatted.words_preserved if result.formatted else None,
         "discrepancies": list(result.formatted.discrepancies) if result.formatted else [],

@@ -5,7 +5,6 @@ import logging
 import mimetypes
 import shutil
 from collections.abc import Sequence
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -149,10 +148,7 @@ def render_revision(
     store: LocalStore | None = None,
     cache: StageCache | None = None,
 ) -> None:
-    """Render a (reviewer-edited) revision's boundaries into new renditions.
-
-    Analysis comes from the stage cache; the formatter is not run again.
-    """
+    """Render a reviewer-edited revision, including its sermon transcript pass."""
     store = store or LocalStore.for_data_dir(config.data_dir)
     cache = cache or StageCache(config.data_dir / "cache")
     with sessions() as session:
@@ -175,19 +171,31 @@ def render_revision(
         item,
         included,
         input_name,
-        replace(processors, formatter=None),
+        processors,
         cache,
         boundaries=boundaries,
     )
     with sessions.begin() as session:
-        sermon_audio_id = _store_files(
-            session, store, config, service_id, result, out_dir, transcript=False
-        )
+        sermon_audio_id = _store_files(session, store, config, service_id, result, out_dir)
         sermons = SermonRepository(session)
-        if sermon_audio_id and sermons.revision(revision_id).sermon_audio_artifact_id is None:
-            sermons.attach_sermon_audio(revision_id, sermon_audio_id)
+        current = sermons.revision(revision_id)
+        transcript_markdown = result.files["transcript"].read_text(encoding="utf-8")
+        field_origins = {
+            **current.field_origins,
+            "transcript": (processors.sermon_transcriber or processors.transcriber).version,
+            "metadata": processors.metadata.version,
+        }
+        rendered = sermons.add_revision(
+            current.sermon_id,
+            author="system",
+            boundaries=result.boundaries,
+            metadata=result.metadata,
+            transcript_markdown=transcript_markdown,
+            field_origins=field_origins,
+            sermon_audio_artifact_id=sermon_audio_id,
+        )
     shutil.rmtree(out_dir, ignore_errors=True)
-    log.info("revision %d: rendered (%s)", revision_id, result.timings)
+    log.info("revision %d: rendered as revision %d (%s)", revision_id, rendered.id, result.timings)
 
 
 def _run(

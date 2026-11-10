@@ -21,6 +21,7 @@ from georg.core.types import (
     TimeRange,
     Transcript,
     TranscriptSegment,
+    TranscriptWord,
 )
 from georg.media import ffmpeg
 from georg.media.ffmpeg import FFMPEG, probe
@@ -65,10 +66,17 @@ class FakeTranscriber(Counting):
 
     def transcribe(self, audio: Path, language: str | None) -> Transcript:
         self.calls += 1
-        seg = [
-            TranscriptSegment(text=t, range=TimeRange(start_ms=s, end_ms=e))
-            for t, s, e in [("Welcome.", 1_500, 3_000), ("Grace to you.", 4_500, 7_000)]
-        ]
+        if audio.name == ".sermon-transcribe.flac":
+            seg = [
+                TranscriptSegment(
+                    text="Grace to you.", range=TimeRange(start_ms=2_500, end_ms=3_500)
+                )
+            ]
+        else:
+            seg = [
+                TranscriptSegment(text=t, range=TimeRange(start_ms=s, end_ms=e))
+                for t, s, e in [("Welcome.", 1_500, 3_000), ("Grace to you.", 4_500, 7_000)]
+            ]
         return Transcript(language=language or "en", segments=tuple(seg), provider="fake")
 
 
@@ -81,21 +89,49 @@ class FakeFormatter(Counting):
                                    words_preserved=True)  # fmt: skip
 
 
+class FakeSermonTranscriber(Counting):
+    version = "fake-sermon-transcriber-1"
+
+    def transcribe(self, audio: Path, language: str | None) -> Transcript:
+        self.calls += 1
+        word = TranscriptWord(text="Grace", range=TimeRange(start_ms=2_500, end_ms=2_900))
+        segment = TranscriptSegment(
+            text="Grace to you.",
+            range=TimeRange(start_ms=2_500, end_ms=3_500),
+            words=(word,),
+        )
+        return Transcript(language=language or "en", segments=(segment,), provider="fake-sermon")
+
+
+class FailingSermonTranscriber(FakeSermonTranscriber):
+    version = "failing-sermon-transcriber-1"
+
+    def transcribe(self, audio: Path, language: str | None) -> Transcript:
+        self.calls += 1
+        raise RuntimeError("sermon pass unavailable")
+
+
 class FakeMetadata:
     version = "fake-metadata-1"
 
+    transcript: Transcript | None = None
+
     def generate(self, ctx: MetadataContext) -> SermonMetadata:
+        self.transcript = ctx.transcript
         docs = ctx.source.hints["documents"]
         return ctx.defaults.model_copy(update={"occasion": docs[0], "preacher": "Eric"})
 
 
-def processors(formatter: bool = True) -> Processors:
+def processors(
+    formatter: bool = True, sermon_transcriber: FakeSermonTranscriber | None = None
+) -> Processors:
     return Processors(
         classifier=FakeClassifier(),
         detector=FakeDetector(),
         transcriber=FakeTranscriber(),
         formatter=FakeFormatter() if formatter else None,
         metadata=FakeMetadata(),
+        sermon_transcriber=sermon_transcriber,
     )
 
 
@@ -112,6 +148,7 @@ def test_run_local_joins_parts_and_writes_outputs(tmp_path: Path, parts: list[Pa
                        service_date=date(2026, 11, 1), documents=["All Saints"])  # fmt: skip
     assert result.boundaries == PROPOSED
     assert result.metadata.occasion == "All Saints"
+    assert procs.transcriber.calls == 2  # type: ignore[attr-defined]
     assert (out / "transcript.md").read_text() == "# All Saints\n\nGrace to you.\n"
     assert abs(probe(out / "sermon.mp3").duration_ms - 4_000) < 200
     assert abs(probe(out / "service_hq.mp3").duration_ms - 10_000) < 200
@@ -119,6 +156,7 @@ def test_run_local_joins_parts_and_writes_outputs(tmp_path: Path, parts: list[Pa
     assert not list(out.glob(".*"))
     report = json.loads((out / "report.json").read_text())
     assert report["proposal"]["confidence"] == 0.9
+    assert report["transcript"]["segments"][0]["text"] == "Welcome."
     assert report["words_preserved"] is True
 
 
@@ -132,8 +170,9 @@ def test_run_local_caches_expensive_stages(tmp_path: Path, parts: list[Path]) ->
     assert second.boundaries == override
     assert second.timings["extract"] == second.timings["classify"] == 0.0
     assert second.timings["transcribe"] == 0.0
-    assert procs.classifier.calls == procs.transcriber.calls == 1  # type: ignore[attr-defined]
-    assert procs.formatter.calls == 1  # type: ignore[union-attr]
+    assert procs.classifier.calls == 1  # type: ignore[attr-defined]
+    assert procs.transcriber.calls == 3  # type: ignore[attr-defined]
+    assert procs.formatter.calls == 2  # type: ignore[union-attr]
     assert (tmp_path / "two" / "transcript.md").read_text().endswith("Grace to you.\n")
 
 
@@ -217,17 +256,69 @@ def test_run_local_without_formatter_writes_plain_transcript(
     assert (tmp_path / "out" / "transcript.md").read_text() == "Grace to you.\n"
 
 
+def test_sermon_transcriber_shifts_and_trims_times(tmp_path: Path, parts: list[Path]) -> None:
+    sermon = FakeSermonTranscriber()
+    procs = processors(sermon_transcriber=sermon)
+    run_local(
+        parts,
+        tmp_path / "out",
+        procs,
+        cache=StageCache(tmp_path / "cache"),
+        renditions=default_renditions()[:1],
+        documents=["x"],
+    )
+    transcript = procs.metadata.transcript  # type: ignore[attr-defined]
+    assert transcript is not None
+    assert transcript.segments[0].range == TimeRange(start_ms=4_500, end_ms=4_900)
+    assert transcript.segments[0].words[0].range == TimeRange(start_ms=4_500, end_ms=4_900)
+
+
+def test_sermon_transcription_cache_uses_cut_range(tmp_path: Path, parts: list[Path]) -> None:
+    sermon = FakeSermonTranscriber()
+    procs = processors(sermon_transcriber=sermon)
+    cache = StageCache(tmp_path / "cache")
+    kwargs = {"cache": cache, "renditions": default_renditions()[:1], "documents": ["x"]}
+    run_local(parts, tmp_path / "one", procs, **kwargs)  # type: ignore[arg-type]
+    run_local(parts, tmp_path / "two", procs, **kwargs)  # type: ignore[arg-type]
+    assert sermon.calls == 1
+    changed = PROPOSED.model_copy(update={"sermon_start_ms": 3_000})
+    run_local(parts, tmp_path / "three", procs, boundaries=changed, **kwargs)  # type: ignore[arg-type]
+    assert sermon.calls == 2
+
+
+def test_sermon_transcription_failure_falls_back(
+    tmp_path: Path, parts: list[Path], caplog: pytest.LogCaptureFixture
+) -> None:
+    sermon = FailingSermonTranscriber()
+    procs = processors(sermon_transcriber=sermon)
+    run_local(
+        parts,
+        tmp_path / "out",
+        procs,
+        cache=StageCache(tmp_path / "cache"),
+        renditions=default_renditions()[:1],
+        documents=["x"],
+    )
+    transcript = procs.metadata.transcript  # type: ignore[attr-defined]
+    assert transcript is not None
+    assert transcript.text == "Grace to you."
+    assert "sermon transcription failed" in caplog.text
+
+
 def test_build_processors_from_config() -> None:
     config = ProcessorsConfig(
         classifier=ModuleConfig(type="ina_speech_segmenter"),
         detector=ModuleConfig(type="heuristic", options={"quiet_window_ms": 300_000}),
         transcriber=ModuleConfig(type="faster_whisper", options={"model": "small"}),
+        sermon_transcriber=ModuleConfig(type="faster_whisper", options={"model": "large-v3"}),
         formatter=ModuleConfig(type="openai_chat", options={"api_key": "x"}),
         metadata=ModuleConfig(type="rules"),
     )
     built = build_processors(config, formatter=False)
     assert built.formatter is None
     assert "small" in built.transcriber.version
+    assert built.sermon_transcriber is not None
+    assert "large-v3" in built.sermon_transcriber.version
     assert built.detector.params.quiet_window_ms == 300_000  # type: ignore[attr-defined]
 
 
