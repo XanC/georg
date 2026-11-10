@@ -12,11 +12,12 @@ from georg.core.errors import ModuleError
 from georg.core.types import SermonMetadata, ServiceBoundaries, SourceItem, SourcePart
 from georg.db.engine import session_factory
 from georg.db.repositories import SermonRepository, ServiceRepository
-from georg.notify import notify_review, redact
+from georg.notify import notify_review, redact, send
 
 
 class FakeSmtp:
     sent: ClassVar[list[EmailMessage]] = []
+    logins: ClassVar[list[tuple[str, str]]] = []
     fail: ClassVar[Exception | None] = None
 
     def __init__(self, host: str, port: int) -> None:
@@ -32,6 +33,7 @@ class FakeSmtp:
         pass
 
     def login(self, user: str, password: str) -> None:
+        FakeSmtp.logins.append((user, password))
         if FakeSmtp.fail:
             raise FakeSmtp.fail
 
@@ -99,6 +101,22 @@ def test_no_recipients_sends_nothing(config: GeorgConfig, engine: Engine) -> Non
     FakeSmtp.sent = []
     notify_review(_config(config, ()), session_factory(engine), _service(engine), factory=FakeSmtp)
     assert FakeSmtp.sent == []
+
+
+def test_send_resolves_env_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEORG_TEST_SMTP_USER", "smtp-user")
+    monkeypatch.setenv("GEORG_TEST_SMTP_PASSWORD", "smtp-password")
+    FakeSmtp.logins = []
+    smtp = SmtpConfig(
+        host="smtp.example.org",
+        username="env:GEORG_TEST_SMTP_USER",
+        password="env:GEORG_TEST_SMTP_PASSWORD",
+        sender="g@x.org",
+    )
+
+    send(EmailMessage(), smtp, factory=FakeSmtp)
+
+    assert FakeSmtp.logins == [("smtp-user", "smtp-password")]
 
 
 def test_smtp_errors(config: GeorgConfig, engine: Engine) -> None:

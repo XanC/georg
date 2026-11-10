@@ -78,7 +78,7 @@ def send(message: EmailMessage, smtp: SmtpConfig, factory: SmtpFactory = smtplib
             if smtp.starttls:
                 client.starttls()
             if smtp.username:
-                client.login(smtp.username, resolve_secret(smtp.password or ""))
+                client.login(resolve_secret(smtp.username), resolve_secret(smtp.password or ""))
             client.send_message(message)
     except smtplib.SMTPAuthenticationError as exc:
         raise ModuleError(f"smtp login failed: {exc}", retryable=False) from exc
