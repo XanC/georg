@@ -160,6 +160,20 @@ def _discover(args: argparse.Namespace) -> int:
     return 0
 
 
+def _reprocess(args: argparse.Namespace) -> int:
+    from georg.db.engine import session_factory
+    from georg.db.repositories import ServiceRepository
+    from georg.jobs.queue import JobQueue
+    from georg.pipeline.service import PROCESS
+
+    _, engine = _open(args)
+    with session_factory(engine)() as session:
+        ServiceRepository(session).get(args.service_id)
+    job_id = JobQueue(engine).enqueue(PROCESS, {"service_id": args.service_id, "reprocess": True})
+    print(f"queued reprocess job {job_id} for service {args.service_id}")
+    return 0
+
+
 def _worker(args: argparse.Namespace) -> int:
     from datetime import timedelta
 
@@ -300,6 +314,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="only services on or after YYYY-MM-DD; overrides [discovery] start_date",
     )
     disc.set_defaults(handler=_discover)
+
+    reprocess = commands.add_parser(
+        "reprocess",
+        help="queue a service for processing again",
+        description="Queue a process job for a service that already has a proposal, "
+        "e.g. after a processor upgrade. The new proposal is added as a new revision; "
+        "cached stages (extracted audio, classification) are reused. Refused by the "
+        "worker once the sermon has a publication record.",
+    )
+    reprocess.add_argument("service_id", type=int)
+    reprocess.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    reprocess.set_defaults(handler=_reprocess)
 
     work = commands.add_parser("worker", help="run queued jobs")
     work.add_argument("--config", type=Path, default=DEFAULT_CONFIG)

@@ -173,3 +173,37 @@ def test_drive_login_rejects_a_non_desktop_client(
     assert main(["drive-login", "--client", str(client), "--out", str(out)]) == 1
     assert "Desktop app" in capsys.readouterr().err
     assert not out.exists()
+
+
+def test_reprocess_enqueues_a_process_job(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from georg.core.types import SourceItem, SourcePart
+    from georg.db import create_engine, upgrade
+    from georg.db.engine import database_path, session_factory
+    from georg.db.repositories import ServiceRepository
+    from georg.jobs.queue import JobQueue
+
+    config = _config_file(tmp_path)
+    db_path = database_path(tmp_path / "data")
+    upgrade(db_path)
+    engine = create_engine(db_path)
+    with session_factory(engine).begin() as s:
+        service, _ = ServiceRepository(s).add_discovered(
+            SourceItem(
+                source_type="local_folder",
+                source_ref="SPX 11.01.26",
+                parts=(SourcePart(ref="1.wav", name="1.wav", size=1, checksum="x"),),
+            )
+        )
+        service_id = service.id
+
+    assert main(["reprocess", str(service_id), "--config", str(config)]) == 0
+    assert f"queued reprocess job 1 for service {service_id}" in capsys.readouterr().out
+    [job] = JobQueue(engine).list()
+    assert job.kind == "process"
+    assert job.payload == {"service_id": service_id, "reprocess": True}
+
+    assert main(["reprocess", "999", "--config", str(config)]) == 1
+    assert "not found" in capsys.readouterr().err
+    engine.dispose()

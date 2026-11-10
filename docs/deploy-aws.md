@@ -264,6 +264,16 @@ sudo systemctl restart georg
 Database migrations run when Georg starts. If boot or systemd files changed, also run
 `sudo install -m 0644 /opt/georg/deploy/aws/systemd/georg* /etc/systemd/system/ && sudo systemctl daemon-reload`.
 
+After upgrading a processor (e.g. a transcriber or boundary-detector fix), a service
+that already has a proposal can be run again with `georg reprocess SERVICE_ID` on the
+instance (inside the container: `docker compose exec georg georg reprocess SERVICE_ID`),
+or with the **Reprocess** button on the sermon's review page, which only admins see.
+Either queues a `process` job with `reprocess: true`; the stage cache reuses unchanged
+stages (extracted audio, classification), so no re-download happens, and the fresh
+proposal becomes the current revision while previous revisions — including manual
+edits — stay restorable. Reprocessing is refused once the sermon has a publication
+record.
+
 Infrastructure changes: rerun `deploy/aws/deploy.sh` with the same parameters. Changing
 `InstanceType` stops and restarts the instance. User data only runs on an instance's
 first boot. Changing `ImageId` replaces the instance; the data volume and bucket are separate resources and survive, but

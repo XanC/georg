@@ -63,6 +63,7 @@ DEFAULT_SOURCE_URL: Final = "https://github.com/XanC/georg"
 RENDER: Final = "render"
 PUBLISH: Final = "publish"
 DISCOVER: Final = "discover"
+PROCESS: Final = "process"
 ACTIVE_STATUSES: Final = ("queued", "running")
 SEEK_RENDITION: Final = "service_hq"
 AUDIO_KINDS: Final = ("sermon_audio", "rendition")
@@ -424,6 +425,18 @@ def create_app(
             return _redirect(f"/sermons/{sermon_id}")
         queue.enqueue(PUBLISH, {"sermon_id": sermon_id})
         _flash(request, f"Approved revision {number}; publishing has been queued.")
+        return _redirect(f"/sermons/{sermon_id}")
+
+    @app.post("/sermons/{sermon_id}/reprocess")
+    def reprocess(request: Request, sermon_id: int, user: User, session: DB) -> Response:
+        if user.role != "admin":
+            return PlainTextResponse("Reprocessing needs an admin.", status_code=403)
+        sermon = SermonRepository(session).get(sermon_id)
+        queue.enqueue(PROCESS, {"service_id": sermon.service_id, "reprocess": True})
+        _flash(
+            request,
+            "Reprocessing queued; the fresh proposal will become the current revision.",
+        )
         return _redirect(f"/sermons/{sermon_id}")
 
     @app.post("/sermons/{sermon_id}/publish")

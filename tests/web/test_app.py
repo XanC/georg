@@ -50,6 +50,7 @@ class Env:
     sermon_id: int
     revision_id: int
     audio_id: int
+    service_id: int
 
 
 def _key(b: ServiceBoundaries) -> list[int]:
@@ -83,6 +84,7 @@ def env(engine: Engine, tmp_path: Path) -> Iterator[Env]:
     )
     with session_factory(engine).begin() as s:
         UserRepository(s).add("rev", hash_password(PASSWORD), "reviewer")
+        UserRepository(s).add("root", hash_password(PASSWORD), "admin")
         service, _ = ServiceRepository(s).add_discovered(item)
         artifacts = ArtifactRepository(s)
         audio = artifacts.add(
@@ -109,7 +111,7 @@ def env(engine: Engine, tmp_path: Path) -> Iterator[Env]:
             transcript_markdown="# Saints\n\nBlessed are the poor in spirit.",
             field_origins={"boundaries": "detector-1"},
         )
-        ids = (sermon.id, revision.id, audio.id)
+        ids = (sermon.id, revision.id, audio.id, service.id)
     queue = JobQueue(engine)
     app = create_app(config, engine, secret_key="test-secret", store=store, queue=queue)
     with TestClient(app) as client:
@@ -122,11 +124,11 @@ def _csrf(client: TestClient, path: str) -> str:
     return match.group(1)
 
 
-def _login(env: Env) -> None:
+def _login(env: Env, username: str = "rev") -> None:
     token = _csrf(env.client, "/login")
     response = env.client.post(
         "/login",
-        data={"username": "rev", "password": PASSWORD, "csrf_token": token},
+        data={"username": username, "password": PASSWORD, "csrf_token": token},
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -334,6 +336,22 @@ def test_approving_a_stale_revision_is_refused(env: Env) -> None:
     )
     assert "A newer revision exists" in response.text
     assert _jobs(env, "publish") == []
+
+
+def test_reprocess_button_is_admin_only(env: Env) -> None:
+    _login(env)
+    assert "reprocess" not in env.client.get(f"/sermons/{env.sermon_id}").text
+    token = _csrf(env.client, f"/sermons/{env.sermon_id}")
+    response = env.client.post(f"/sermons/{env.sermon_id}/reprocess", data={"csrf_token": token})
+    assert response.status_code == 403
+    assert _jobs(env, "process") == []
+
+    _login(env, username="root")
+    assert "Reprocess this service" in env.client.get(f"/sermons/{env.sermon_id}").text
+    token = _csrf(env.client, f"/sermons/{env.sermon_id}")
+    response = env.client.post(f"/sermons/{env.sermon_id}/reprocess", data={"csrf_token": token})
+    assert "Reprocessing queued" in response.text
+    assert _jobs(env, "process") == [{"service_id": env.service_id, "reprocess": True}]
 
 
 def test_artifact_supports_range_requests(env: Env) -> None:
