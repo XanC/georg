@@ -14,7 +14,7 @@ Steps (all thresholds are fields of `HeuristicDetectorParams`):
 2. Service start: within a window around the approximate start, the earlier of the
    first sustained speech and the first sustained music.
 3. Service end: within a window around the approximate end, the last substantial
-   segment, plus a tail if it is music (to keep applause and ambience).
+   segment, chained trailing speech/music, and a label-specific tail.
 4. Sermon: probe short windows at fractions of the service until one is speech only
    (no music, more speech than silence/noise), walk outward in steps while probes have
    speech and no music, then refine both edges inside a border window. The end is
@@ -78,7 +78,7 @@ class HeuristicDetectorParams(BaseModel):
     """A speech segment longer than this confirms the speech start."""
     start_speech_reset_ms: int = Field(default=60_000, gt=0)
     """Drop a tentative speech start after this long without speech."""
-    start_music_confirm_ms: int = Field(default=90_000, ge=0)
+    start_music_confirm_ms: int = Field(default=20_000, ge=0)
     """A music segment longer than this confirms the music start."""
     start_music_reset_ms: int = Field(default=120_000, gt=0)
     """Drop a tentative music start after this long without music."""
@@ -86,11 +86,15 @@ class HeuristicDetectorParams(BaseModel):
     end_search_before_ms: int = Field(default=30 * _MIN, ge=0)
     end_search_after_ms: int = Field(default=20 * _MIN, ge=0)
     end_ignore_shorter_ms: int = Field(default=1_000, ge=0)
-    """Non-music segments shorter than this are skipped when looking for the end."""
+    """Speech or music segments shorter than this are skipped when looking for the end."""
     end_min_segment_ms: int = Field(default=5_000, ge=0)
     """Segments shorter than this (and silence/noise) do not end the service."""
     end_music_tail_ms: int = Field(default=10_000, ge=0)
     """Added after closing music to keep applause and ambience."""
+    end_speech_tail_ms: int = Field(default=2_000, ge=0)
+    """Added after closing speech to keep the end of announcements."""
+    end_trailing_gap_ms: int = Field(default=30_000, ge=0)
+    """Include later substantial speech or music within this gap of the current end."""
 
     probe_fractions: tuple[float, ...] = Field(default=(5 / 12, 6 / 12, 4 / 12), min_length=1)
     """Positions within the service probed for a speech-only region, in order."""
@@ -100,6 +104,10 @@ class HeuristicDetectorParams(BaseModel):
     """Window in which each sermon edge is refined."""
     sermon_start_offset_ms: int = Field(default=100, ge=0)
     """Added to the first speech onset; the classifier tends to start a hair early."""
+    sermon_start_pad_ms: int = Field(default=300, ge=0)
+    """Subtracted from the sermon start to avoid clipping its opening words."""
+    sermon_end_pad_ms: int = Field(default=1_000, ge=0)
+    """Added to the sermon end to avoid clipping its closing words."""
     transcript_min_probability: float = Field(default=0.75, ge=0.0, le=1.0)
     """A transcript segment is confident if exp(avg_logprob) exceeds this."""
 
@@ -170,7 +178,7 @@ class HeuristicBoundaryDetector:
     """`BoundaryDetector` (type "heuristic") porting the legacy timing script."""
 
     type_name = "heuristic"
-    version = "heuristic-2"
+    version = "heuristic-3"
 
     def __init__(self, params: HeuristicDetectorParams | None = None) -> None:
         self.params = params or HeuristicDetectorParams()
@@ -359,16 +367,39 @@ class _Run:
         p = self.p
         lo = max(approx - p.end_search_before_ms, 0)
         hi = min(approx + p.end_search_after_ms, self.duration)
-        for s in reversed(_clip(self.segs, lo, hi)):
+        candidates = _clip(self.segs, lo, hi)
+        selected: _Seg | None = None
+        for s in reversed(candidates):
             if s.label != "music" and s.duration < p.end_ignore_shorter_ms:
                 continue
             if s.label in ("noise", "silence") or s.duration < p.end_min_segment_ms:
                 continue
-            tail = p.end_music_tail_ms if s.label == "music" else 0
-            end = min(s.end + tail, self.duration)
+            selected = s
+            break
+        if selected is not None:
+            included = [selected]
+            current_end = selected.end
+            for s in candidates:
+                if (
+                    s.start < current_end
+                    or s.start > current_end + p.end_trailing_gap_ms
+                    or s.label not in ("speech", "music")
+                    or s.duration < p.end_ignore_shorter_ms
+                ):
+                    continue
+                included.append(s)
+                current_end = s.end
+            last = included[-1]
+            tail = p.end_music_tail_ms if last.label == "music" else p.end_speech_tail_ms
+            end = min(last.end + tail, self.duration)
+            inclusion_note = (
+                f"; included {len(included) - 1} trailing speech/music segment(s)"
+                if len(included) > 1
+                else ""
+            )
             self.note(
-                f"Service end {_fmt(end)}: last {s.label} segment"
-                + (" plus tail." if tail else ".")
+                f"Service end {_fmt(end)}: last {last.label} segment"
+                f" plus {tail}ms tail{inclusion_note}."
             )
             return end
         self.problem(
@@ -442,8 +473,8 @@ class _Run:
             f"in {p.step_ms // 1000}s steps."
         )
 
-        start = self.sermon_start(lower, first_good)
-        end = self.sermon_end(last_good, upper, start)
+        start = self.sermon_start(lower, first_good, service_start)
+        end = self.sermon_end(last_good, upper, start, service_end)
         length = end - start
         if length < p.min_sermon_ms:
             self.problem(
@@ -457,7 +488,7 @@ class _Run:
             )
         return start, end
 
-    def sermon_start(self, lower: int, first_good: int) -> int:
+    def sermon_start(self, lower: int, first_good: int, service_start: int) -> int:
         p = self.p
         hi = min(lower + p.border_window_ms, first_good + p.probe_ms)
         window = _clip(self.segs, lower, hi)
@@ -465,14 +496,16 @@ class _Run:
         after = music_ends[-1] if music_ends else lower
         for s in window:
             if s.label == "speech" and s.end > after:
-                start = max(s.start, after) + p.sermon_start_offset_ms
+                base = max(s.start, after) + p.sermon_start_offset_ms
                 reason = "after music" if music_ends else "in the border window"
+                start = self._pad_sermon_start(base, service_start)
                 self.note(f"Sermon start {_fmt(start)}: first speech {reason}.")
                 return start
-        self.note(f"Sermon start {_fmt(first_good)}: earliest speech-only probe.")
-        return first_good
+        start = self._pad_sermon_start(first_good, service_start)
+        self.note(f"Sermon start {_fmt(start)}: earliest speech-only probe.")
+        return start
 
-    def sermon_end(self, last_good: int, upper: int, sermon_start: int) -> int:
+    def sermon_end(self, last_good: int, upper: int, sermon_start: int, service_end: int) -> int:
         p = self.p
         lo = max(upper - p.border_window_ms, sermon_start + 1)
         music = [s for s in _clip(self.segs, last_good + p.probe_ms, upper) if s.label == "music"]
@@ -503,8 +536,11 @@ class _Run:
                 and (seg.range.end_ms <= limit or (music and seg.range.start_ms < limit))
             ]
             if confident:
-                end = max(confident)
-                self.note(f"Sermon end {_fmt(end)}: last confident transcript segment {where}.")
+                end = self._pad_sermon_end(max(confident), service_end)
+                self.note(
+                    f"Sermon end {_fmt(end)}: last confident transcript segment {where}, "
+                    f"with up to {p.sermon_end_pad_ms}ms padding."
+                )
                 return end
             self.problem(
                 f"No confident transcript segment between {_fmt(lo)} and {_fmt(limit)}; "
@@ -514,12 +550,57 @@ class _Run:
 
         speech_ends = [s.end for s in _clip(self.segs, lo, limit) if s.label == "speech"]
         if speech_ends:
-            end = speech_ends[-1]
-            self.note(f"Sermon end {_fmt(end)}: last speech segment {where}.")
+            end = self._pad_sermon_end(speech_ends[-1], service_end)
+            self.note(
+                f"Sermon end {_fmt(end)}: last speech segment {where}, "
+                f"with up to {p.sermon_end_pad_ms}ms padding."
+            )
             return end
-        end = max(min(last_good + p.probe_ms, limit), sermon_start + 1)
-        self.note(f"Sermon end {_fmt(end)}: end of the last speech-only probe.")
+        end = self._pad_sermon_end(
+            max(min(last_good + p.probe_ms, limit), sermon_start + 1), service_end
+        )
+        self.note(
+            f"Sermon end {_fmt(end)}: end of the last speech-only probe, "
+            f"with up to {p.sermon_end_pad_ms}ms padding."
+        )
         return end
+
+    def _pad_sermon_start(self, start: int, service_start: int) -> int:
+        p = self.p
+        floor = service_start
+        if self.transcript is not None:
+            previous = [
+                word.range.end_ms + 100
+                for segment in self.transcript.segments
+                for word in segment.words
+                if word.range.end_ms <= start
+            ]
+            if previous:
+                floor = max(floor, max(previous))
+        return max(floor, start - p.sermon_start_pad_ms)
+
+    def _pad_sermon_end(self, end: int, service_end: int) -> int:
+        p = self.p
+        caps = [service_end]
+        if self.transcript is not None:
+            next_words = [
+                word.range.start_ms - 100
+                for segment in self.transcript.segments
+                for word in segment.words
+                if word.range.start_ms > end
+            ]
+            if next_words:
+                caps.append(min(next_words))
+        next_audio = [
+            segment.start
+            for segment in self.segs
+            if segment.label in ("speech", "music") and segment.start > end
+        ]
+        if next_audio:
+            caps.append(min(next_audio))
+        padded = min(end + p.sermon_end_pad_ms, *caps)
+        self.note(f"Sermon end padding considered from {_fmt(end)} to {_fmt(padded)}.")
+        return max(end, padded)
 
     def sermon_without_probe(self, service_start: int, service_end: int) -> tuple[int, int]:
         """Fallback: the music-free stretch of the service with the most speech."""
