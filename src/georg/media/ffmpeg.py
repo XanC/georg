@@ -15,7 +15,10 @@ import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
+
+import httpx
 
 from georg.core.config import RenditionSpec
 from georg.core.errors import ModuleError
@@ -25,6 +28,10 @@ FFMPEG = os.environ.get("GEORG_FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("GEORG_FFPROBE", "ffprobe")
 
 _BEARER = re.compile(r"(?i)bearer\s+\S+")
+_HTTP_STATUS = re.compile(r"Server returned (\d{3})")
+_QUOTA_REASONS = frozenset({"downloadQuotaExceeded", "userRateLimitExceeded", "rateLimitExceeded"})
+DEFAULT_QUOTA_RETRY_AFTER = timedelta(hours=6)
+"""Retry delay for quota/rate-limit refusals a `RemoteMedia` does not override."""
 
 
 def _scrub(text: str) -> str:
@@ -45,23 +52,96 @@ class MediaInfo:
     channels: int | None
 
 
-def _run(args: Sequence[str], *, retryable: bool = False) -> str:
+def _run(
+    args: Sequence[str],
+    *,
+    retryable: bool = False,
+    remote: RemoteMedia | None = None,
+    force_refresh: bool = False,
+) -> str:
     try:
         proc = subprocess.run(args, capture_output=True, text=True, check=False)
     except FileNotFoundError as exc:
         raise MediaError(f"{args[0]} is not installed") from exc
     if proc.returncode != 0:
         tail = _scrub("\n".join(proc.stderr.strip().splitlines()[-5:]))
-        raise MediaError(
-            f"{Path(args[0]).name} failed ({proc.returncode}): {tail}", retryable=retryable
-        )
+        message = f"{Path(args[0]).name} failed ({proc.returncode}): {tail}"
+        retry_after = None
+        status = _http_status(proc.stderr)
+        if remote is not None and status is not None and status >= 400:
+            detail, retry_after = _remote_error(remote, force_refresh=force_refresh)
+            message += detail
+        raise MediaError(message, retryable=retryable, retry_after=retry_after)
     return proc.stdout
 
 
-def _ffmpeg(*args: str, retryable: bool = False) -> None:
+def _http_status(stderr: str) -> int | None:
+    """The HTTP status ffmpeg says the server answered with, if any."""
+    match = _HTTP_STATUS.search(stderr)
+    return int(match[1]) if match else None
+
+
+def _remote_error(
+    part: RemoteMedia, *, force_refresh: bool = False
+) -> tuple[str, timedelta | None]:
+    """Ask the server why it refused; return (extra message text, retry_after).
+
+    ffmpeg hides the response body, so a failed read only reports e.g. "Server
+    returned 403 Forbidden". One small `Range: bytes=0-0` request with the part's
+    headers reads the JSON error (Drive answers `{"error": {"message": ...,
+    "errors": [{"reason": ...}]}}`). A quota or rate-limit reason, or a bare 429,
+    asks the job queue to wait `part.quota_retry_after` before retrying.
+    """
+    try:
+        response = httpx.get(
+            part.url,
+            headers={**part.headers(force_refresh=force_refresh), "Range": "bytes=0-0"},
+            timeout=30.0,
+            follow_redirects=True,
+        )
+        if response.status_code == 401 and not force_refresh:
+            response = httpx.get(
+                part.url,
+                headers={**part.headers(force_refresh=True), "Range": "bytes=0-0"},
+                timeout=30.0,
+                follow_redirects=True,
+            )
+    except Exception:
+        return "", None
+    if response.status_code < 400:
+        return "", None
+    try:
+        data = response.json()
+        error = data.get("error") if isinstance(data, dict) else None
+    except ValueError:
+        error = None
+    if not isinstance(error, dict):
+        return "", None
+    reasons = {
+        str(e.get("reason"))
+        for e in error.get("errors", []) or []
+        if isinstance(e, dict) and e.get("reason")
+    }
+    detail = _scrub(str(error.get("message") or ""))
+    if reasons:
+        detail += f" ({', '.join(sorted(reasons))})"
+    retry_after = None
+    if response.status_code == 429 or reasons & _QUOTA_REASONS:
+        retry_after = part.quota_retry_after or DEFAULT_QUOTA_RETRY_AFTER
+    return (f"; server answered {response.status_code}: {detail}" if detail else "", retry_after)
+
+
+def _ffmpeg(
+    *args: str,
+    retryable: bool = False,
+    remote: RemoteMedia | None = None,
+    force_refresh: bool = False,
+) -> None:
     _run(
         [FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", *args],
         retryable=retryable,
+        remote=remote,
+        force_refresh=force_refresh,
     )
 
 
@@ -97,7 +177,12 @@ def probe_media(
 ) -> MediaInfo:
     """`probe` for a `MediaInput`: ffprobe a local file or a remote URL."""
     if isinstance(part, RemoteMedia):
-        out = _run(_probe_args(part, force_refresh=force_refresh), retryable=retryable)
+        out = _run(
+            _probe_args(part, force_refresh=force_refresh),
+            retryable=retryable,
+            remote=part,
+            force_refresh=force_refresh,
+        )
         return _probe_data(out, Path(part.name))
     return probe(part)
 
@@ -141,9 +226,10 @@ def _extract_once(
     channels: int,
     force_refresh: bool,
     remote: bool,
+    probe_part: Callable[[MediaInput], MediaInfo],
 ) -> None:
     for part in parts:
-        if not probe_media(part, force_refresh=force_refresh, retryable=remote).has_audio:
+        if not probe_part(part).has_audio:
             raise MediaError(f"{_name(part)}: no audio stream")
     inputs = [a for part in parts for a in _input_args(part, force_refresh=force_refresh)]
     fmt = f"aresample={sample_rate},aformat=sample_fmts=s16:channel_layouts="
@@ -161,6 +247,8 @@ def _extract_once(
         "flac",
         str(dest),
         retryable=remote,
+        remote=next((p for p in parts if isinstance(p, RemoteMedia)), None),
+        force_refresh=force_refresh,
     )
 
 
@@ -172,6 +260,7 @@ def extract_audio(
     channels: int = 2,
     attempts: int = 3,
     sleep: Callable[[float], None] = time.sleep,
+    remote_probes: Mapping[str, MediaInfo] | None = None,
 ) -> Path:
     """Join the audio of `parts`, in order, into one lossless FLAC file.
 
@@ -180,21 +269,42 @@ def extract_audio(
     run is retried `attempts` times with refreshed credentials, then raises a
     retryable error so the job queue retries the stage; the partial output is
     always removed.
+
+    `remote_probes` supplies already-known probe results keyed by
+    `RemoteMedia.key` (the pipeline stage cache fills it); otherwise each remote
+    part is probed once per call and the result is reused across the retries, so
+    a part is downloaded from at most twice per attempt (probe + extract) and
+    usually once.
     """
     if not parts:
         raise MediaError("no source parts")
     remote = any(isinstance(part, RemoteMedia) for part in parts)
     tries = attempts if remote else 1
     tmp = _tmp(dest)
+    probes: dict[str, MediaInfo] = dict(remote_probes or {})
+
+    def probe_part(part: MediaInput, *, force_refresh: bool = False) -> MediaInfo:
+        if isinstance(part, RemoteMedia):
+            if part.key not in probes:
+                probes[part.key] = probe_media(part, force_refresh=force_refresh, retryable=remote)
+            return probes[part.key]
+        return probe_media(part)
+
     for attempt in range(1, tries + 1):
+        refresh = attempt > 1
+
+        def probe_for_attempt(part: MediaInput, *, fresh: bool = refresh) -> MediaInfo:
+            return probe_part(part, force_refresh=fresh)
+
         try:
             _extract_once(
                 parts,
                 tmp,
                 sample_rate=sample_rate,
                 channels=channels,
-                force_refresh=attempt > 1,
+                force_refresh=refresh,
                 remote=remote,
+                probe_part=probe_for_attempt,
             )
         except MediaError as exc:
             tmp.unlink(missing_ok=True)

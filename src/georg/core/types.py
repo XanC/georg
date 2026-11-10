@@ -7,7 +7,7 @@ All times are integer milliseconds from the start of the service's source timeli
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol, Self
 
@@ -179,6 +179,8 @@ class RemoteMedia:
     name: str
     key: str
     headers: MediaHeaders
+    quota_retry_after: timedelta | None = None
+    """Minimum retry delay when the server reports a quota or rate limit."""
 
 
 MediaInput = Path | RemoteMedia

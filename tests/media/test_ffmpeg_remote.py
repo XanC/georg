@@ -5,10 +5,12 @@ The server requires a bearer token and honors `Range`, like Drive's `alt=media`
 endpoint; no real Google calls or credentials are involved.
 """
 
+import json
 import re
 import shutil
 import threading
 from collections.abc import Iterator, Mapping
+from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -16,7 +18,7 @@ import pytest
 from test_ffmpeg import tone_video
 
 from georg.core.types import RemoteMedia
-from georg.media import MediaError, extract_audio, probe, probe_media
+from georg.media import MediaError, MediaInfo, extract_audio, ffmpeg, probe, probe_media
 
 pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
@@ -48,6 +50,16 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if (error := self.server.errors.get(self.path.lstrip("/"))) is not None:
+            status, body = error
+            payload = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            if not head:
+                self.wfile.write(payload)
+            return
         start, end = 0, len(self.server.content) - 1
         if m := re.fullmatch(r"bytes=(\d+)-(\d*)", self.headers.get("Range", "")):
             start = int(m[1])
@@ -69,6 +81,19 @@ class _Server(ThreadingHTTPServer):
     token = "good-token"
     content: bytes
     requests: list[BaseHTTPRequestHandler]
+    errors: dict[str, tuple[int, dict[str, object]]]
+
+
+QUOTA_403 = (
+    403,
+    {
+        "error": {
+            "code": 403,
+            "message": "The download quota for this file has been exceeded.",
+            "errors": [{"domain": "usageLimits", "reason": "downloadQuotaExceeded"}],
+        }
+    },
+)
 
 
 @pytest.fixture
@@ -77,6 +102,7 @@ def server(tmp_path: Path) -> Iterator[_Server]:
     httpd = _Server(("127.0.0.1", 0), _Handler)
     httpd.content = content
     httpd.requests = []
+    httpd.errors = {}
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield httpd
     httpd.shutdown()
@@ -166,3 +192,88 @@ def test_extract_joins_remote_parts_in_order(server: _Server, tmp_path: Path) ->
     second = remote(server, "02.mp4")
     out = extract_audio([first, second], tmp_path / "s.flac", sleep=lambda _: None)
     assert abs(probe(out).duration_ms - 4000) < 400
+
+
+def test_http_error_surfaces_server_reason_and_retry_after(server: _Server, tmp_path: Path) -> None:
+    """ffmpeg hides the response body; a follow-up Range request reads it."""
+    server.errors["quota.mp4"] = QUOTA_403
+    part = remote(server, "quota.mp4")
+    part = RemoteMedia(
+        url=part.url, name=part.name, key=part.key, headers=part.headers,
+        quota_retry_after=timedelta(hours=6),
+    )  # fmt: skip
+    with pytest.raises(MediaError) as exc:
+        extract_audio([part], tmp_path / "s.flac", sleep=lambda _: None)
+    message = str(exc.value)
+    assert "Server returned 403" in message
+    assert "The download quota for this file has been exceeded." in message
+    assert "downloadQuotaExceeded" in message
+    assert server.token not in message
+    assert exc.value.retryable
+    assert exc.value.retry_after == timedelta(hours=6)
+
+
+def test_quota_error_defaults_to_six_hour_retry_after(server: _Server, tmp_path: Path) -> None:
+    server.errors["quota.mp4"] = QUOTA_403
+    with pytest.raises(MediaError) as exc:
+        probe_media(remote(server, "quota.mp4"))
+    assert "downloadQuotaExceeded" in str(exc.value)
+    assert exc.value.retry_after == ffmpeg.DEFAULT_QUOTA_RETRY_AFTER
+
+
+def test_error_without_reason_reports_status_only(server: _Server, tmp_path: Path) -> None:
+    """A 4xx whose body is not Drive-style JSON just reports the status."""
+    server.errors["gone.mp4"] = (404, {"not": "drive-json"})
+    with pytest.raises(MediaError) as exc:
+        probe_media(remote(server, "gone.mp4"))
+    assert "Server returned 404" in str(exc.value)
+    assert exc.value.retry_after is None
+
+
+def test_probe_media_remote_error_surfaces_reason(server: _Server) -> None:
+    server.errors["quota.mp4"] = QUOTA_403
+    with pytest.raises(MediaError) as exc:
+        probe_media(remote(server, "quota.mp4"))
+    assert "The download quota for this file has been exceeded." in str(exc.value)
+
+
+def test_remote_probes_skip_probing(server: _Server, tmp_path: Path) -> None:
+    """Precomputed probe results (the stage cache) mean no ffprobe call at all."""
+    part = remote(server)
+    probes = {
+        part.key: MediaInfo(
+            duration_ms=2000, has_audio=True, has_video=True, sample_rate=44100, channels=2
+        )
+    }
+
+    def fail_probe(*args: object, **kwargs: object) -> MediaInfo:
+        raise AssertionError("probe_media should not be called")
+
+    original = ffmpeg.probe_media
+    ffmpeg.probe_media = fail_probe  # type: ignore[assignment]
+    try:
+        out = extract_audio([part], tmp_path / "s.flac", sleep=lambda _: None,
+                            remote_probes=probes)  # fmt: skip
+    finally:
+        ffmpeg.probe_media = original  # type: ignore[assignment]
+    assert probe(out).has_audio
+
+
+def test_retry_refreshes_token_for_error_lookup(server: _Server, tmp_path: Path) -> None:
+    """A 401 still refreshes credentials; the failure then reports the real reason."""
+    server.errors["p.mp4"] = QUOTA_403
+    calls: list[bool] = []
+
+    def headers(*, force_refresh: bool = False) -> Mapping[str, str]:
+        calls.append(force_refresh)
+        return {"Authorization": f"Bearer {server.token}"}
+
+    part = RemoteMedia(
+        url=f"http://127.0.0.1:{server.server_port}/p.mp4",
+        name="p.mp4",
+        key="k",
+        headers=headers,
+    )
+    with pytest.raises(MediaError) as exc:
+        extract_audio([part], tmp_path / "s.flac", attempts=1, sleep=lambda _: None)
+    assert "The download quota for this file has been exceeded." in str(exc.value)

@@ -11,7 +11,7 @@ import hashlib
 import json
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
 
@@ -127,11 +127,26 @@ def run_local(
     source_key = _source_key(parts)
     audio = cache.path("audio", source_key, ".flac")
 
+    def probe_remote(part: RemoteMedia) -> str:
+        """Probe a remote part once, cached by its content key across attempts."""
+        return cache.text(
+            "probe",
+            part.key,
+            lambda: json.dumps(asdict(ffmpeg.probe_media(part, retryable=True))),
+        )[0]
+
+    def remote_probes() -> dict[str, ffmpeg.MediaInfo]:
+        return {
+            part.key: ffmpeg.MediaInfo(**json.loads(probe_remote(part)))
+            for part in parts
+            if isinstance(part, RemoteMedia)
+        }
+
     def extract() -> tuple[Path, bool]:
         if audio.exists():
             return audio, True
         audio.parent.mkdir(parents=True, exist_ok=True)
-        return ffmpeg.extract_audio(list(parts), audio), False
+        return ffmpeg.extract_audio(list(parts), audio, remote_probes=remote_probes()), False
 
     timed("extract", extract)
     duration_ms = ffmpeg.probe(audio).duration_ms
