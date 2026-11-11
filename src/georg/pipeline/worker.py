@@ -134,6 +134,9 @@ class Worker:
             if status == "failed":
                 self.notify_failures()
             return True
+        finally:
+            if self._processors is not None:
+                self._processors.release()
         try:
             self.queue.complete(job.id, self.worker_id)
         except LeaseLostError:

@@ -77,6 +77,21 @@ def test_larger_context_reserved_later_replaces_the_shared_model() -> None:
     assert second.calls == 2 and not second.closed
 
 
+def test_release_closes_the_shared_model_until_next_use() -> None:
+    load = Loader()
+    formatter = LlamaCppFormatter({"mode": "rewrite"}, model_factory=load)
+    detector = ScriptureDetector(ScriptureOptions(), model_factory=load)
+    detector.detect(SERMON, {"bulletin.docx": BULLETIN})
+    formatter.format(transcript("Amen."), CTX)
+    formatter.release()
+    detector.release()
+    [(_, first)] = load.models
+    assert first.closed
+    formatter.format(transcript("Amen."), CTX)
+    (_, _), (context, second) = load.models
+    assert context == 8192 and not second.closed
+
+
 def test_different_model_files_are_loaded_separately() -> None:
     load = Loader()
     LlamaCppFormatter({"mode": "rewrite"}, model_factory=load).format(transcript("Amen."), CTX)

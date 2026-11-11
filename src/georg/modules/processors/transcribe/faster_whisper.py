@@ -9,6 +9,7 @@ Audio is decoded with Georg's FFmpeg rather than faster-whisper's bundled PyAV d
 so any input FFmpeg reads works and PyAV version changes cannot break decoding.
 """
 
+import gc
 import hashlib
 import itertools
 import json
@@ -400,6 +401,8 @@ class FasterWhisperTranscriber:
             raise
         except Exception as exc:
             raise ModuleError(f"faster-whisper failed on {audio}: {exc}") from exc
+        finally:
+            samples = None
         segments.sort(key=lambda s: s.range.start_ms)
         return Transcript(
             language=language or o.language or info.language or "und",
@@ -407,3 +410,10 @@ class FasterWhisperTranscriber:
             provider=TYPE_NAME,
             model=o.model,
         )
+
+    def release(self) -> None:
+        """Free the loaded Whisper model; the next `transcribe` loads it again."""
+        if self._model is None:
+            return
+        self._model = None
+        gc.collect()

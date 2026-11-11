@@ -196,6 +196,11 @@ class RulesMetadataGenerator:
     def generate(self, ctx: MetadataContext) -> SermonMetadata:
         return self.propose(ctx).metadata
 
+    def release(self) -> None:
+        """Free the Scripture detector's local model, if it loaded one."""
+        if self._scripture is not None:
+            self._scripture.release()
+
     def propose(self, ctx: MetadataContext) -> MetadataProposal:
         origins: dict[str, str] = {}
         hint, hint_name = self._document_hint(ctx)

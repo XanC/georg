@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 import json
 import subprocess
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -281,6 +283,54 @@ def test_run_local_without_formatter_writes_plain_transcript(
               cache=StageCache(tmp_path / "cache"), renditions=default_renditions()[:1],
               documents=["x"])  # fmt: skip
     assert (tmp_path / "out" / "transcript.md").read_text() == "Grace to you.\n"
+
+
+def track(procs: Processors) -> list[str]:
+    """Record each step and `release()` of the model-holding modules, in order."""
+    events: list[str] = []
+
+    def logged(name: str, inner: Callable[..., Any]) -> Callable[..., Any]:
+        def call(*args: Any) -> Any:
+            events.append(name)
+            return inner(*args)
+
+        return call
+
+    for role in ("classifier", "transcriber", "sermon_transcriber", "metadata", "formatter"):
+        module = getattr(procs, role)
+        if module is None:
+            continue
+        for method in ("classify", "transcribe", "generate", "format"):
+            if hasattr(module, method):
+                setattr(module, method, logged(role, getattr(module, method)))
+        module.release = logged(f"release {role}", lambda: None)
+    return events
+
+
+def test_runner_releases_each_model_after_its_last_step(tmp_path: Path, parts: list[Path]) -> None:
+    procs = processors()
+    events = track(procs)
+    run_local(parts, tmp_path / "out", procs, cache=StageCache(tmp_path / "cache"),
+              renditions=default_renditions()[:1], documents=["x"])  # fmt: skip
+    assert events == [
+        "classifier", "release classifier",
+        "transcriber", "transcriber", "release transcriber",  # also the sermon pass
+        "metadata", "formatter", "release metadata", "release formatter",
+    ]  # fmt: skip
+
+
+def test_runner_releases_transcriber_before_sermon_transcriber(
+    tmp_path: Path, parts: list[Path]
+) -> None:
+    procs = processors(sermon_transcriber=FakeSermonTranscriber())
+    events = track(procs)
+    run_local(parts, tmp_path / "out", procs, cache=StageCache(tmp_path / "cache"),
+              renditions=default_renditions()[:1], documents=["x"])  # fmt: skip
+    assert events[:6] == [
+        "classifier", "release classifier",
+        "transcriber", "release transcriber",
+        "sermon_transcriber", "release sermon_transcriber",
+    ]  # fmt: skip
 
 
 def test_sermon_transcriber_shifts_and_trims_times(tmp_path: Path, parts: list[Path]) -> None:
