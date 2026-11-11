@@ -29,8 +29,8 @@ jobs:
         run: uv run python scripts/check_spdx.py
       - name: PHP lint
         run: find wordpress -name '*.php' -print0 | xargs -0 -n1 php -l
-      - name: georg-bridge signing tests
-        run: php wordpress/georg-bridge/tests/signing-test.php
+      - name: georg-bridge PHP tests
+        run: for t in wordpress/georg-bridge/tests/*-test.php; do php "$t" || exit 1; done
       - name: CloudFormation lint
         run: uvx cfn-lint deploy/aws/georg.yaml deploy/aws/cloudfront-certificate.yaml
       - name: Dependency licenses

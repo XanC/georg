@@ -326,12 +326,23 @@ def test_content_is_escaped_paragraphs(tmp_path: Path, monkeypatch: pytest.Monke
         "<p>We read &lt;Luke 12&gt; and pray.</p>"
     )
     assert body["audio_attachment_id"] == 5
+    assert body["full_text"] is True
+
+
+def test_full_text_only_with_a_transcript(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    out, _ = make_output(FakeBridge(), monkeypatch, content_prefix="[Machine transcription]")
+    blank = make_request(tmp_path).model_copy(update={"transcript_markdown": " \n\n "})
+    assert "full_text" not in out.sermon_body(blank, audio_id=None)
+    off, _ = make_output(FakeBridge(), monkeypatch, full_text=False)
+    assert "full_text" not in off.sermon_body(make_request(tmp_path), audio_id=None)
 
 
 def test_no_content_without_transcript(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out, _ = make_output(FakeBridge(), monkeypatch)
     request = make_request(tmp_path).model_copy(update={"transcript_markdown": None})
-    assert "content" not in out.sermon_body(request, audio_id=None)
+    body = out.sermon_body(request, audio_id=None)
+    assert "content" not in body
+    assert "full_text" not in body
 
 
 def test_title_falls_back_to_occasion_then_date(

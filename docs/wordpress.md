@@ -43,6 +43,14 @@ key cannot be used against any other endpoint.
    plugin likewise accepts plain HTTP only with `define( 'GEORG_BRIDGE_ALLOW_HTTP', true );`;
    both are for local testing only.
 
+## Post status and full text
+
+The `wordpress` output creates drafts unless `status = "publish"` (or `"private"`) is set.
+With `full_text = true` (the default), a sermon whose post content is a non-empty
+transcript also gets Church Content's "Full sermon text provided" box ticked (post meta
+`_ctc_sermon_has_full_text` = `1`, georg-bridge 0.3.0 or later). With `full_text = false`,
+Georg leaves that box alone.
+
 ## Rotating the key
 
 1. Generate a new key and add it next to the old one:
