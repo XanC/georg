@@ -8,6 +8,7 @@ endpoint; no real Google calls or credentials are involved.
 import json
 import re
 import shutil
+import subprocess
 import threading
 from collections.abc import Iterator, Mapping
 from datetime import timedelta
@@ -15,12 +16,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-from test_ffmpeg import tone_video
 
 from georg.core.types import RemoteMedia
 from georg.media import MediaError, MediaInfo, extract_audio, ffmpeg, probe, probe_media
 
 pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+
+SECONDS = 8
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -31,6 +33,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _send(self, start: int, end: int, *, head: bool = False) -> None:
         data = self.server.content
+        if self.server.truncate is not None:
+            data = data[: self.server.truncate]
         total = len(data)
         end = min(end, total - 1)
         partial = "range" in self.headers
@@ -80,6 +84,8 @@ class _Handler(BaseHTTPRequestHandler):
 class _Server(ThreadingHTTPServer):
     token = "good-token"
     content: bytes
+    truncate: int | None = None
+    """Serve only this many leading bytes, as if Drive closed the stream early."""
     requests: list[BaseHTTPRequestHandler]
     errors: dict[str, tuple[int, dict[str, object]]]
 
@@ -98,9 +104,17 @@ QUOTA_403 = (
 
 @pytest.fixture
 def server(tmp_path: Path) -> Iterator[_Server]:
-    content = tone_video(tmp_path / "part.mp4", 2).read_bytes()
+    video = tmp_path / "part.mp4"
+    subprocess.run(
+        ["ffmpeg", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", f"sine=frequency=440:sample_rate=48000:duration={SECONDS}",
+         "-f", "lavfi", "-i", f"color=size=64x64:rate=10:duration={SECONDS}",
+         "-shortest", "-c:v", "libx264", "-c:a", "aac",
+         "-movflags", "+faststart", str(video)],
+        check=True,
+    )  # fmt: skip
     httpd = _Server(("127.0.0.1", 0), _Handler)
-    httpd.content = content
+    httpd.content = video.read_bytes()
     httpd.requests = []
     httpd.errors = {}
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -125,7 +139,7 @@ def test_extract_streams_remote_part(server: _Server, tmp_path: Path) -> None:
     out = extract_audio([part], tmp_path / "service.flac", sleep=lambda _: None)
     info = probe(out)
     assert not info.has_video
-    assert abs(info.duration_ms - 2000) < 300
+    assert abs(info.duration_ms - SECONDS * 1000) < 500
     assert server.requests
     assert all(r.headers.get("Authorization") == f"Bearer {server.token}" for r in server.requests)
 
@@ -191,7 +205,35 @@ def test_extract_joins_remote_parts_in_order(server: _Server, tmp_path: Path) ->
     first = remote(server, "01.mp4")
     second = remote(server, "02.mp4")
     out = extract_audio([first, second], tmp_path / "s.flac", sleep=lambda _: None)
-    assert abs(probe(out).duration_ms - 4000) < 400
+    assert abs(probe(out).duration_ms - 2 * SECONDS * 1000) < 600
+
+
+def test_truncated_stream_fails_retryable(server: _Server, tmp_path: Path) -> None:
+    """A stream the server ends early produces short audio: retried, then raised."""
+    server.truncate = len(server.content) // 3
+    with pytest.raises(MediaError, match=r"extracted \d+\.\d s of expected") as exc:
+        extract_audio([remote(server)], tmp_path / "s.flac", attempts=2, sleep=lambda _: None)
+    assert exc.value.retryable
+    assert not list(tmp_path.glob("*.flac")) and not list(tmp_path.glob(".*partial*"))
+
+
+def test_retry_recovers_when_stream_restored(server: _Server, tmp_path: Path) -> None:
+    """A short first attempt retries with refreshed credentials and succeeds."""
+    server.truncate = len(server.content) // 3
+
+    def headers(*, force_refresh: bool = False) -> Mapping[str, str]:
+        if force_refresh:
+            server.truncate = None  # Drive serves the whole file again
+        return {"Authorization": f"Bearer {server.token}"}
+
+    part = RemoteMedia(
+        url=f"http://127.0.0.1:{server.server_port}/p.mp4",
+        name="p.mp4",
+        key="k",
+        headers=headers,
+    )
+    out = extract_audio([part], tmp_path / "s.flac", sleep=lambda _: None)
+    assert abs(probe(out).duration_ms - SECONDS * 1000) < 500
 
 
 def test_http_error_surfaces_server_reason_and_retry_after(server: _Server, tmp_path: Path) -> None:

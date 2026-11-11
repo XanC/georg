@@ -112,6 +112,16 @@ class LocalRunResult:
     """Where derived metadata fields came from (`MetadataProposal.origins`)."""
 
 
+def _expected_ms(parts: Sequence[MediaInput], probes: Mapping[str, ffmpeg.MediaInfo]) -> int:
+    """The probed total duration of all parts (remote probes from the cache)."""
+    return sum(
+        probes[part.key].duration_ms
+        if isinstance(part, RemoteMedia)
+        else ffmpeg.probe_media(part).duration_ms
+        for part in parts
+    )
+
+
 def _source_key(parts: Sequence[MediaInput]) -> str:
     stats = [
         p.key
@@ -184,20 +194,32 @@ def run_local(
 
     def extract() -> tuple[Path, bool]:
         if audio.exists():
-            return audio, True
+            expected = _expected_ms(parts, remote_probes())
+            actual = ffmpeg.probe(audio).duration_ms
+            if actual >= expected - ffmpeg.duration_tolerance_ms(expected):
+                return audio, True
+            log.warning(
+                "cached audio %s is %d ms of expected %d ms; re-extracting",
+                audio,
+                actual,
+                expected,
+            )
+            audio.unlink()
         audio.parent.mkdir(parents=True, exist_ok=True)
         return ffmpeg.extract_audio(list(parts), audio, remote_probes=remote_probes()), False
 
     timed("extract", extract)
     duration_ms = ffmpeg.probe(audio).duration_ms
-    preview = timed("preview", lambda: _preview(cache, source_key, audio, duration_ms))
+    audio_key = cache.key(source_key, ffmpeg.sha256_file(audio))
+    """Stages keyed on the produced audio, so a re-extraction recomputes them."""
+    preview = timed("preview", lambda: _preview(cache, audio_key, audio, duration_ms))
 
     segments: list[AudioSegment] = timed(
         "classify",
         lambda: _parse(
             cache.text(
                 "classify",
-                cache.key(source_key, p.classifier.version),
+                cache.key(audio_key, p.classifier.version),
                 lambda: segments_to_json(p.classifier.classify(audio)),
             ),
             segments_from_json,
@@ -208,7 +230,7 @@ def run_local(
         lambda: _parse(
             cache.text(
                 "transcribe",
-                cache.key(source_key, p.transcriber.version, language),
+                cache.key(audio_key, p.transcriber.version, language),
                 lambda: p.transcriber.transcribe(audio, language).model_dump_json(),
             ),
             Transcript.model_validate_json,
@@ -225,7 +247,7 @@ def run_local(
         cut_end = min(chosen.sermon_end_ms + p.sermon_transcribe_pad_ms, duration_ms)
         cut_span = TimeRange(start_ms=cut_start, end_ms=max(cut_end, cut_start + 1))
         sermon_key = cache.key(
-            source_key,
+            audio_key,
             sermon_processor.version,
             language,
             cut_span.start_ms,
