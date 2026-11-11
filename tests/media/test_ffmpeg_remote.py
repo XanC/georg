@@ -15,10 +15,12 @@ from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import httpx
 import pytest
 
 from georg.core.types import RemoteMedia
 from georg.media import MediaError, MediaInfo, extract_audio, ffmpeg, probe, probe_media
+from georg.media.range_proxy import serve_remote
 
 pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
@@ -55,7 +57,9 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
         self.end_headers()
         if not head:
-            self.wfile.write(data[start : end + 1])
+            body = data[start : end + 1]
+            self.server.bytes_sent += len(body)
+            self.wfile.write(body)
 
     def _handle(self, head: bool) -> None:
         self.server.requests.append(self)
@@ -107,6 +111,8 @@ class _Server(ThreadingHTTPServer):
     """Serve only this many leading bytes, as if Drive closed the stream early."""
     require_closed: int | None = None
     """When set, only closed `Range`s no longer than this get a 206; else 403."""
+    bytes_sent: int
+    """Payload bytes actually written to clients (what upstream 'downloaded')."""
     requests: list[BaseHTTPRequestHandler]
     errors: dict[str, tuple[int, dict[str, object]]]
 
@@ -139,9 +145,22 @@ def server(tmp_path: Path) -> Iterator[_Server]:
         ["ffmpeg", "-loglevel", "error", "-y", "-i", str(video), "-c", "copy", str(tail)],
         check=True,
     )
+    # High-bitrate video + sparse audio, moov atom at the end.
+    interleaved = tmp_path / "interleaved.mp4"
+    subprocess.run(
+        ["ffmpeg", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", f"testsrc2=size=640x480:rate=30:duration={SECONDS}",
+         "-f", "lavfi", "-i", f"sine=frequency=660:sample_rate=48000:duration={SECONDS}",
+         "-t", str(SECONDS), "-c:v", "libx264",
+         "-x264-params", "keyint=30:min-keyint=30:scenecut=0",
+         "-b:v", "8M", "-minrate", "8M", "-maxrate", "8M", "-bufsize", "8M",
+         "-c:a", "aac", "-b:a", "128k", str(interleaved)],
+        check=True,
+    )  # fmt: skip
     httpd = _Server(("127.0.0.1", 0), _Handler)
     httpd.content = video.read_bytes()
-    httpd.contents = {"tail.mp4": tail.read_bytes()}
+    httpd.contents = {"tail.mp4": tail.read_bytes(), "interleaved.mp4": interleaved.read_bytes()}
+    httpd.bytes_sent = 0
     httpd.requests = []
     httpd.errors = {}
     httpd.require_closed = None
@@ -275,6 +294,52 @@ def test_quota_on_closed_range_is_retryable(server: _Server, tmp_path: Path) -> 
     assert exc.value.retryable
     assert "downloadQuotaExceeded" in str(exc.value)
     assert exc.value.retry_after == ffmpeg.DEFAULT_QUOTA_RETRY_AFTER
+
+
+def test_rereads_come_from_the_block_cache(server: _Server) -> None:
+    """A second read of the same range is served without touching upstream."""
+    before = len(server.requests)
+    with serve_remote(remote(server), chunk_bytes=64 << 10) as url:
+        for _ in range(2):
+            r = httpx.get(url, headers={"Range": "bytes=0-65535"})
+            assert r.status_code == 206
+            assert r.content == server.content[:65536]
+    data_requests = [r for r in server.requests[before:] if r.headers.get("Range") != "bytes=0-0"]
+    assert len(data_requests) == 1
+
+
+def test_audio_extract_keeps_upstream_bytes_close_to_consumed(
+    server: _Server, tmp_path: Path
+) -> None:
+    """Upstream traffic tracks what ffmpeg reads, not oversized fixed ranges.
+
+    The source interleaves a high-bitrate video track with the audio; every
+    upstream request is a closed range no larger than `chunk_bytes`, and the
+    total fetched stays near the consumed bytes rather than ballooning past
+    the file.
+    """
+    chunk = 256 << 10
+    server.require_closed = chunk
+    part = remote(server, "interleaved.mp4")
+    out = extract_audio([part], tmp_path / "s.flac", sleep=lambda _: None, chunk_bytes=chunk)
+    assert abs(probe(out).duration_ms - SECONDS * 1000) < 500
+    size = len(server.contents["interleaved.mp4"])
+    assert server.bytes_sent < size * 2, f"upstream sent {server.bytes_sent} for a {size}-byte file"
+
+
+def test_quota_latch_stops_upstream_traffic(server: _Server, tmp_path: Path) -> None:
+    """After the first quota 403 the proxy latches: no more upstream requests,
+    and the attempt fails fast (no in-call retry) with the quota retry_after."""
+    server.errors["tail.mp4"] = QUOTA_403
+    sleeps: list[float] = []
+    with pytest.raises(MediaError) as exc:
+        extract_audio([remote(server, "tail.mp4")], tmp_path / "s.flac",
+                      attempts=3, sleep=sleeps.append)  # fmt: skip
+    assert exc.value.retryable
+    assert exc.value.retry_after == ffmpeg.DEFAULT_QUOTA_RETRY_AFTER
+    assert not sleeps, "quota errors fail fast, not through the backoff retry"
+    # Upstream saw the size probe and the error-lookup probe, nothing more.
+    assert len(server.requests) <= 3
 
 
 def test_retry_recovers_when_stream_restored(server: _Server, tmp_path: Path) -> None:
