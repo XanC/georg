@@ -70,7 +70,9 @@ def _run(
         message = f"{Path(args[0]).name} failed ({proc.returncode}): {tail}"
         retry_after = None
         status = _http_status(proc.stderr)
-        if remote is not None and status is not None and status >= 400:
+        # A mid-stream cut on a remote input reports no status at all; ask the
+        # upstream error probe anyway so a latched quota still gets retry_after.
+        if remote is not None and (status is None or status >= 400):
             detail, retry_after = _remote_error(remote, force_refresh=force_refresh)
             message += detail
         raise MediaError(message, retryable=retryable, retry_after=retry_after)
@@ -171,6 +173,7 @@ def probe_media(
     force_refresh: bool = False,
     retryable: bool = False,
     chunk_bytes: int = range_proxy.DEFAULT_CHUNK_BYTES,
+    prefetch: int = range_proxy.DEFAULT_PREFETCH,
 ) -> MediaInfo:
     """`probe` for a `MediaInput`: ffprobe a local file or a remote URL.
 
@@ -179,7 +182,7 @@ def probe_media(
     """
     if isinstance(part, RemoteMedia):
         with range_proxy.serve_remote(
-            part, chunk_bytes=chunk_bytes, force_refresh=force_refresh
+            part, chunk_bytes=chunk_bytes, prefetch=prefetch, force_refresh=force_refresh
         ) as url:
             out = _run(
                 _probe_args(part, url=url),
@@ -237,6 +240,7 @@ def _extract_once(
     remote: bool,
     probe_part: Callable[[MediaInput], MediaInfo],
     chunk_bytes: int,
+    prefetch: int,
 ) -> None:
     expected_ms = 0
     for part in parts:
@@ -250,7 +254,7 @@ def _extract_once(
     joined = "".join(f"[a{i}]" for i in range(len(parts)))
     graph = f"{chains}{joined}concat=n={len(parts)}:v=0:a=1[out]"
     with range_proxy.serve_all(
-        list(parts), chunk_bytes=chunk_bytes, force_refresh=force_refresh
+        list(parts), chunk_bytes=chunk_bytes, prefetch=prefetch, force_refresh=force_refresh
     ) as urls:
         inputs = [a for part in parts for a in _input_args(part, url=urls.get(id(part)))]
         _ffmpeg(
@@ -284,6 +288,7 @@ def extract_audio(
     sleep: Callable[[float], None] = time.sleep,
     remote_probes: Mapping[str, MediaInfo] | None = None,
     chunk_bytes: int = range_proxy.DEFAULT_CHUNK_BYTES,
+    prefetch: int = range_proxy.DEFAULT_PREFETCH,
 ) -> Path:
     """Join the audio of `parts`, in order, into one lossless FLAC file.
 
@@ -316,6 +321,7 @@ def extract_audio(
                     force_refresh=force_refresh,
                     retryable=remote,
                     chunk_bytes=chunk_bytes,
+                    prefetch=prefetch,
                 )
             return probes[part.key]
         return probe_media(part)
@@ -336,6 +342,7 @@ def extract_audio(
                 remote=remote,
                 probe_part=probe_for_attempt,
                 chunk_bytes=chunk_bytes,
+                prefetch=prefetch,
             )
         except MediaError as exc:
             tmp.unlink(missing_ok=True)
