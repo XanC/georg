@@ -44,6 +44,8 @@ metadata = { type = "rules" }
 
 # Needs the georg-bridge plugin (wordpress/georg-bridge) with the same key id and key in the
 # site's wp-config.php (docs/wordpress.md). Posts are drafts unless status = "publish".
+# To put all scripture references into one ctc_sermon_book term ("Isaiah 6:1-7, John 3:1-17"),
+# add to options: join_terms = { scripture = ", " }
 [[outputs]]
 name = "website"
 type = "wordpress"
