@@ -11,13 +11,25 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        timeout-minutes: 8
+        run: |
+          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          if timeout 300 sh -c "sudo apt-get $apt_opts update && sudo apt-get $apt_opts install -y --no-install-recommends ffmpeg"; then
+            exit 0
+          fi
+          echo "apt unavailable; using static FFmpeg build"
+          curl -fsSL --retry 3 -o /tmp/ffmpeg.tar.xz \
+            https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz
+          sudo tar -xJf /tmp/ffmpeg.tar.xz -C /opt
+          sudo ln -sf /opt/ffmpeg-n8.1-latest-linux64-gpl-8.1/bin/ffmpeg /opt/ffmpeg-n8.1-latest-linux64-gpl-8.1/bin/ffprobe /usr/local/bin/
+          ffmpeg -version | head -n 1
       - run: uv sync --locked
       - name: Lint
         run: uv run ruff check . && uv run ruff format --check .
