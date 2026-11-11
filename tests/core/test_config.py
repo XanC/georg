@@ -72,6 +72,23 @@ def test_review_hidden_fields(tmp_path: Path) -> None:
         load_config(bad)
 
 
+def test_review_preacher_suggestion_settings(tmp_path: Path) -> None:
+    review = load_config(EXAMPLE).review
+    assert review.preachers == () and review.preacher_recent_days == 90
+    text = EXAMPLE.read_text().replace(
+        "require_approval = true",
+        'require_approval = true\npreachers = ["Jane Example"]\npreacher_recent_days = 30',
+    )
+    good = tmp_path / "good.toml"
+    good.write_text(text)
+    review = load_config(good).review
+    assert review.preachers == ("Jane Example",) and review.preacher_recent_days == 30
+    bad = tmp_path / "bad.toml"
+    bad.write_text(text.replace("= 30", "= -1"))
+    with pytest.raises(ConfigError, match="preacher_recent_days"):
+        load_config(bad)
+
+
 def test_resolve_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GEORG_TEST_SECRET", "s3cret")
     assert resolve_secret("env:GEORG_TEST_SECRET") == "s3cret"

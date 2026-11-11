@@ -64,6 +64,7 @@ build-backend = "hatchling.build"
 
 [tool.ruff]
 line-length = 100
+src = ["src", "contrib/wp-authority"]
 target-version = "py312"
 extend-exclude = ["docs"]
 
@@ -74,14 +75,15 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
 plugins = ["pydantic.mypy"]
 python_version = "3.12"
 strict = true
-packages = ["georg"]
-mypy_path = "src"
+packages = ["georg", "wp_authority"]
+mypy_path = "src:contrib/wp-authority"
 
 [[tool.mypy.overrides]]
 module = ["inaSpeechSegmenter", "inaSpeechSegmenter.*", "faster_whisper", "faster_whisper.*", "numpy", "numpy.*", "google", "google.*", "llama_cpp", "llama_cpp.*", "huggingface_hub", "huggingface_hub.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "contrib/wp-authority/tests"]
+pythonpath = ["contrib/wp-authority"]
 addopts = "-ra -m 'not slow'"
 markers = ["slow: needs optional heavy extras or model downloads; run with `-m slow`"]

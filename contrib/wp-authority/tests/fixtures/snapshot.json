@@ -1,0 +1,64 @@
+{
+ "terms": {
+  "ctc_sermon_book": [
+   {"id": 10, "name": "Luke 12:13-21, Ecclesiastes 1:2, 12-14, 2:18-26", "slug": "luke-12", "parent": 0, "description": ""},
+   {"id": 11, "name": "Luke 12:13-21", "slug": "luke-12-13-21", "parent": 0, "description": ""},
+   {"id": 12, "name": "James 2:1-10, 14-18; Mark 7:24-37", "slug": "james-2", "parent": 0, "description": ""},
+   {"id": 13, "name": "Mark 10: 2-16", "slug": "mark-10-2-16", "parent": 0, "description": ""},
+   {"id": 14, "name": "Isaiah 61:1-4,8-11", "slug": "isaiah-61", "parent": 0, "description": ""},
+   {"id": 15, "name": "Isaiah 61:1-4, 8-11", "slug": "isaiah-61-2", "parent": 0, "description": ""},
+   {"id": 16, "name": "?", "slug": "q", "parent": 0, "description": ""},
+   {"id": 17, "name": "Third Sunday of Easter", "slug": "third-sunday-of-easter", "parent": 0, "description": ""},
+   {"id": 18, "name": "Romans 3:19-28", "slug": "romans-3-19-28", "parent": 0, "description": ""},
+   {"id": 19, "name": "Psalm 23", "slug": "psalm-23", "parent": 0, "description": ""},
+   {"id": 20, "name": "John 2:1-11", "slug": "john-2-1-11", "parent": 0, "description": ""},
+   {"id": 21, "name": "Matthew 5:1-12", "slug": "matthew-5-1-12", "parent": 0, "description": ""}
+  ],
+  "ctc_sermon_series": [
+   {"id": 30, "name": "Fourth Sunday in Advent", "slug": "fourth-sunday-in-advent", "parent": 0, "description": ""},
+   {"id": 31, "name": "Fourth Sunday of Advent", "slug": "fourth-sunday-of-advent", "parent": 0, "description": ""},
+   {"id": 32, "name": "3rd Sunday after Pentecost", "slug": "3rd-sunday-after-pentecost", "parent": 0, "description": ""},
+   {"id": 33, "name": "All Saints Sunday", "slug": "all-saints-sunday", "parent": 0, "description": ""},
+   {"id": 34, "name": "All Saints", "slug": "all-saints", "parent": 0, "description": ""},
+   {"id": 35, "name": "Reformation Day", "slug": "reformation-day", "parent": 0, "description": ""},
+   {"id": 36, "name": "Reformation Sunday", "slug": "reformation-sunday", "parent": 0, "description": ""},
+   {"id": 37, "name": "Tenth Sunday after Trinity", "slug": "tenth-sunday-after-trinity", "parent": 0, "description": ""},
+   {"id": 38, "name": "Unused Day", "slug": "unused-day", "parent": 0, "description": ""},
+   {"id": 39, "name": "Holy Trinity", "slug": "holy-trinity", "parent": 0, "description": ""},
+   {"id": 40, "name": "The Holy Trinity", "slug": "the-holy-trinity", "parent": 0, "description": ""}
+  ],
+  "ctc_sermon_speaker": [
+   {"id": 50, "name": "Vicar Ross Davis", "slug": "vicar-ross-davis", "parent": 0, "description": ""},
+   {"id": 51, "name": "Rev. Ross Davis", "slug": "rev-ross-davis", "parent": 0, "description": ""},
+   {"id": 52, "name": "Seminarian Mark De Young", "slug": "mark-de-young", "parent": 0, "description": ""},
+   {"id": 53, "name": "Seminarian Mark DeYoung", "slug": "mark-deyoung", "parent": 0, "description": ""},
+   {"id": 54, "name": "Nobody", "slug": "nobody", "parent": 0, "description": ""}
+  ]
+ },
+ "sermons": [
+  {"id": 100, "date": "2025-08-03 10:00:00", "title": "Rich Toward God", "status": "publish",
+   "terms": {"ctc_sermon_book": [10], "ctc_sermon_series": [], "ctc_sermon_speaker": [50]}},
+  {"id": 101, "date": "2025-09-07 10:00:00", "title": "Opened", "status": "publish",
+   "terms": {"ctc_sermon_book": [12], "ctc_sermon_series": [], "ctc_sermon_speaker": [51]}},
+  {"id": 102, "date": "2024-10-06 10:00:00", "title": "Let the Children Come", "status": "publish",
+   "terms": {"ctc_sermon_book": [13], "ctc_sermon_series": [32], "ctc_sermon_speaker": [52]}},
+  {"id": 103, "date": "2023-12-17 10:00:00", "title": "Good News", "status": "draft",
+   "terms": {"ctc_sermon_book": [14], "ctc_sermon_series": [30], "ctc_sermon_speaker": [53]}},
+  {"id": 104, "date": "2023-12-24 10:00:00", "title": "Good News Again", "status": "publish",
+   "terms": {"ctc_sermon_book": [15], "ctc_sermon_series": [31], "ctc_sermon_speaker": [53]}},
+  {"id": 105, "date": "2024-11-03 10:00:00", "title": "Blessed", "status": "publish",
+   "terms": {"ctc_sermon_book": [21], "ctc_sermon_series": [33], "ctc_sermon_speaker": [51]}},
+  {"id": 106, "date": "2023-11-05 10:00:00", "title": "Saints", "status": "publish",
+   "terms": {"ctc_sermon_book": [16], "ctc_sermon_series": [34], "ctc_sermon_speaker": [51]}},
+  {"id": 107, "date": "2024-10-27 10:00:00", "title": "Sermon for Reformation Sunday", "status": "publish",
+   "terms": {"ctc_sermon_book": [19], "ctc_sermon_series": [], "ctc_sermon_speaker": [51]}},
+  {"id": 108, "date": "2026-08-09 10:00:00", "title": "Tears", "status": "publish",
+   "terms": {"ctc_sermon_book": [17], "ctc_sermon_series": [37], "ctc_sermon_speaker": [51]}},
+  {"id": 109, "date": "2024-01-14 10:00:00", "title": "A Wedding", "status": "publish",
+   "terms": {"ctc_sermon_book": [19], "ctc_sermon_series": [], "ctc_sermon_speaker": [51]}},
+  {"id": 110, "date": "2024-05-26 10:00:00", "title": "Three", "status": "publish",
+   "terms": {"ctc_sermon_book": [], "ctc_sermon_series": [39], "ctc_sermon_speaker": [51]}},
+  {"id": 111, "date": "2025-06-15 10:00:00", "title": "Three Again", "status": "publish",
+   "terms": {"ctc_sermon_book": [], "ctc_sermon_series": [40], "ctc_sermon_speaker": [51]}}
+ ]
+}
