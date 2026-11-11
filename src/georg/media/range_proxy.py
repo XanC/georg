@@ -1,31 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Loopback range proxy: ffmpeg reads `RemoteMedia` through closed ranges only.
+"""Serve remote media through one sequential upstream stream.
 
-Drive's per-file download quota refuses open-ended requests (no `Range`, or
-`Range: bytes=N-`) with 403 `downloadQuotaExceeded`, while closed ranges are
-served fine — and ffmpeg's http protocol only ever sends open-ended ranges. Each
-`RemoteMedia` is therefore served to ffmpeg by a short-lived local HTTP server:
-ffmpeg reads `http://127.0.0.1:<port>/<token>` and the proxy translates every
-request into consecutive closed upstream ranges, attaching the part's auth
-headers (and refreshing them once on 401).
-
-Quota costs Drive-side bytes, not just consumed ones, so upstream reads are
-kept close to what ffmpeg actually consumes: a bounded prefetch window keeps
-up to `prefetch` small closed ranges in flight for the next sequential chunks
-(sequential reads are latency-bound, not bandwidth-bound), and an LRU cache of
-aligned blocks serves re-reads across seeks without refetching. A
-non-sequential read cancels the outstanding prefetches — the fetched-but-unread
-bytes are counted and logged as discarded — so the window never runs ahead of
-what the client asked for by more than `prefetch` x `PREFETCH_CHUNK_BYTES`. The
-first upstream quota refusal latches: every later request gets 403 without
-touching upstream.
+The local HTTP endpoint accepts ffmpeg's range requests, but the upstream
+side reads the file front to back. Forward seeks discard bytes from that
+stream; backward seeks reopen at the requested offset and are logged. The
+MP4 tail is fetched once as a small closed range and served from memory.
 """
 
 import json
 import logging
 import secrets
 import threading
-from collections import OrderedDict
+import time
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,128 +22,26 @@ from georg.core.types import MediaInput, RemoteMedia
 
 log = logging.getLogger(__name__)
 
-DEFAULT_CHUNK_BYTES = 64 << 20
-"""Cap on the closed range a single upstream request may cover (64 MiB)."""
-
-PREFETCH_CHUNK_BYTES = 8 << 20
-"""Closed range each in-flight prefetch covers (8 MiB)."""
-
-DEFAULT_PREFETCH = 4
-"""Upstream range requests kept in flight per remote part."""
-
-_BLOCK_BYTES = 4 << 20
-"""Alignment of cached blocks."""
-
-_CACHE_BYTES = 64 << 20
-"""Total bytes the block cache holds."""
-
+TAIL_BYTES = 8 << 20
+RECENT_BYTES = 16 << 20
+RESUME_ATTEMPTS = 5
 _COPY_BYTES = 1 << 20
-
 _QUOTA_REASONS = frozenset({"downloadQuotaExceeded", "userRateLimitExceeded", "rateLimitExceeded"})
 
 
-class _BlockCache:
-    """LRU cache of fetched upstream bytes, keyed by aligned block.
-
-    Each entry holds one contiguous fetched interval inside its block; a read
-    that needs more of the block fetches only the missing tail and extends it.
-    """
-
-    def __init__(self, block_bytes: int = _BLOCK_BYTES, total_bytes: int = _CACHE_BYTES) -> None:
-        self._block = block_bytes
-        self._limit = total_bytes
-        self._entries: OrderedDict[int, tuple[int, bytes]] = OrderedDict()
-        self._bytes = 0
-
-    def get(self, start: int, end: int) -> bytes:
-        """The cached bytes covering `start..end`; call only inside coverage."""
-        block = start // self._block
-        entry_start, data = self._entries[block]
-        self._entries.move_to_end(block)
-        return data[start - entry_start : end - entry_start + 1]
-
-    def covered_until(self, start: int) -> int | None:
-        """Last cached offset contiguous with `start` in its block, or None."""
-        entry = self._entries.get(start // self._block)
-        if entry is None:
-            return None
-        entry_start, data = entry
-        if not entry_start <= start < entry_start + len(data):
-            return None
-        self._entries.move_to_end(start // self._block)
-        return entry_start + len(data) - 1
-
-    def put(self, start: int, data: bytes) -> None:
-        """Store fetched `data` at `start`, merging with an adjacent interval."""
-        block = start // self._block
-        entry = self._entries.get(block)
-        if entry is not None and entry[0] + len(entry[1]) == start:
-            data = entry[1] + data
-            start = entry[0]
-        if entry is not None:
-            self._bytes -= len(entry[1])
-        self._entries[block] = (start, data)
-        self._entries.move_to_end(block)
-        self._bytes += len(data)
-        while self._bytes > self._limit and self._entries:
-            _, (_, evicted) = self._entries.popitem(last=False)
-            self._bytes -= len(evicted)
-
-
-class _Fetch:
-    """One in-flight upstream closed range, filled by a daemon thread.
-
-    `data` grows as upstream bytes arrive; a consumer streams from it without
-    waiting for the whole range. Bounded by the prefetcher's depth x chunk.
-    """
-
-    def __init__(self, start: int, end: int) -> None:
-        self.start = start
-        self.end = end
-        self.status: int | None = None
-        self.error: httpx.HTTPError | None = None
-        self.data = bytearray()
-        self.read = 0  # bytes handed to a client so far
-        self.done = threading.Event()
-        self.cancelled = False
-        self.wake = threading.Condition()
-        self.response: httpx.Response | None = None
-
-    def wait_status(self) -> int | None:
-        """The upstream status once response headers (or an error) arrive."""
-        with self.wake:
-            while self.status is None and self.error is None and not self.done.is_set():
-                self.wake.wait()
-            return self.status
-
-    def stream_from(self, pos: int, end: int) -> Iterator[bytes]:
-        """Yield the bytes of `pos..end` (inside `start..end`) as they arrive."""
-        idx = pos - self.start
-        last = min(end, self.end) - self.start + 1
-        while idx < last:
-            with self.wake:
-                while len(self.data) <= idx and not self.done.is_set():
-                    self.wake.wait()
-                avail = min(len(self.data), last)
-                if avail <= idx:
-                    break
-                out = bytes(self.data[idx:avail])
-                self.read = max(self.read, avail)
-                idx = avail
-            yield out
-        if self.error is not None:
-            raise self.error
+class _Forwarded(Exception):
+    def __init__(self, status: int | None = None) -> None:
+        self.status = status
 
 
 def _latch_if_quota(server: "_Proxy", response: httpx.Response) -> None:
-    """Latch the proxy once upstream answers quota/rate-limit 403."""
     try:
         data = json.loads(response.read()[: 1 << 16])
         error = data.get("error") if isinstance(data, dict) else None
         reasons = {
-            str(e.get("reason"))
-            for e in (error or {}).get("errors", []) or []
-            if isinstance(e, dict) and e.get("reason")
+            str(item.get("reason"))
+            for item in (error or {}).get("errors", []) or []
+            if isinstance(item, dict) and item.get("reason")
         }
     except (ValueError, AttributeError):
         reasons = set()
@@ -165,29 +49,11 @@ def _latch_if_quota(server: "_Proxy", response: httpx.Response) -> None:
         server.quota_latched = True
 
 
-class _Prefetcher:
-    """Bounded read-ahead: contiguous windows of closed upstream ranges.
-
-    Each consumer gets a window of `depth` contiguous fetches starting at its
-    read offset, so sequential readers overlap upstream latency instead of
-    paying it per request. A read outside every in-flight range (ffmpeg
-    seeking, or a second concurrent client request) opens a new window without
-    disturbing the old one — windows a client abandons keep completing in the
-    background and are adopted by whichever read covers them next, or evicted
-    by a cap of `2 * depth` in-flight fetches, counting fetched-but-unread
-    bytes as discarded.
-    """
-
-    def __init__(self, server: "_Proxy", *, depth: int, chunk: int) -> None:
-        self._server = server
-        self._depth = max(1, depth)
-        self._chunk = chunk
-        self._cap = 2 * self._depth
-        self._lock = threading.Lock()
-        self._fetches: OrderedDict[int, _Fetch] = OrderedDict()
+class _Upstream:
+    def __init__(self, server: "_Proxy") -> None:
+        self.server = server
 
     def open(self, start: int, end: int) -> httpx.Response:
-        """One closed upstream range outside the prefetch window (size probes)."""
         response = self._send(start, end)
         if response.status_code == 401:
             response.close()
@@ -195,119 +61,161 @@ class _Prefetcher:
         return response
 
     def _send(self, start: int, end: int, *, force_refresh: bool = False) -> httpx.Response:
-        refresh = force_refresh or self._server.force_refresh
-        with self._lock:
-            self._server.upstream_requests += 1
-        request = self._server.client.build_request(
-            "GET",
-            self._server.part.url,
-            headers={
-                **self._server.part.headers(force_refresh=refresh),
-                "Range": f"bytes={start}-{end}",
-            },
-        )
-        return self._server.client.send(request, stream=True)
+        self.server.upstream_requests += 1
+        headers = {
+            **self.server.part.headers(force_refresh=force_refresh or self.server.force_refresh),
+            "Range": f"bytes={start}-{end}",
+        }
+        request = self.server.client.build_request("GET", self.server.part.url, headers=headers)
+        return self.server.client.send(request, stream=True)
 
-    def at(self, pos: int, limit: int) -> _Fetch | None:
-        """The in-flight fetch covering `pos`, opening a window if none does.
 
-        `limit` is the last byte the client asked for; fetches never pass EOF.
+class _SequentialBody:
+    """A resumable, front-to-back stream shared by all local requests."""
+
+    def __init__(self, server: "_Proxy", end: int) -> None:
+        self.server = server
+        self.end = end
+        self.lock = threading.RLock()
+        self.upstream = _Upstream(server)
+        self.response: httpx.Response | None = None
+        self.chunks: Iterator[bytes] | None = None
+        self.pos = 0
+        self.recent = bytearray()
+        self.recent_start = 0
+
+    def close(self) -> None:
+        with self.lock:
+            self._close()
+
+    def read(self, start: int, end: int, *, head: bool) -> Iterator[bytes]:
+        """Yield `start..end` of the body, seeking inside the stream as needed.
+
+        `self.pos` is the next byte upstream will deliver; `_pushback` holds
+        fetched-ahead bytes not yet handed out, so the byte a sequential
+        consumer wants next is `self.pos - len(_pushback)`, and `recent`
+        covers `[recent_start, self.pos)` for backward replay.
         """
-        with self._lock:
-            for start, fetch in list(self._fetches.items()):
-                if fetch.done.is_set() and pos > fetch.end:
-                    del self._fetches[start]
-            covering = next(
-                (f for f in self._fetches.values() if not f.cancelled and f.start <= pos <= f.end),
-                None,
-            )
-            if covering is None and not self._server.quota_latched:
-                start = pos
-                for _ in range(self._depth):
-                    if start > limit or start in self._fetches:
-                        break
-                    fetch = _Fetch(start, min(start + self._chunk - 1, limit))
-                    self._fetches[start] = fetch
-                    threading.Thread(target=self._run, args=(fetch,), daemon=True).start()
-                    start = fetch.end + 1
-                covering = self._fetches.get(pos)
-            while len(self._fetches) > self._cap:
-                evict = next((f for f in self._fetches.values() if f is not covering), None)
-                if evict is None:
+        with self.lock:
+            self._pushback = getattr(self, "_pushback", b"")
+            if start < self.pos - len(self._pushback):
+                if start < self.recent_start:
+                    self.server.backward_seeks += 1
+                    log.info(
+                        "%s: backward seek to byte %d (stream at %d)",
+                        self.server.part.name,
+                        start,
+                        self.pos,
+                    )
+                    self._close()
+                    self.pos = start
+                    self._pushback = b""
+                    self.recent.clear()
+                    self.recent_start = start
+                else:
+                    replay_end = min(end + 1, self.pos)
+                    yield bytes(
+                        self.recent[start - self.recent_start : replay_end - self.recent_start]
+                    )
+                    self._pushback = b""
+                    start = replay_end
+                    if start > end:
+                        return
+            while self.pos - len(self._pushback) < start:
+                frontier = self.pos - len(self._pushback)
+                piece = self._next(head=head)
+                skip = min(len(piece), start - frontier)
+                if skip < len(piece):
+                    self._pushback = piece[skip:]
+            while self.pos - len(self._pushback) <= end:
+                frontier = self.pos - len(self._pushback)
+                piece = self._next(head=head)
+                take = min(len(piece), end - frontier + 1)
+                if take:
+                    yield piece[:take]
+                if take < len(piece):
+                    self._pushback = piece[take:]
                     break
-                self._discard(evict)
-            return covering
 
-    def _discard(self, fetch: _Fetch) -> None:
-        """Cancel a fetch and count its fetched-but-unread bytes."""
-        fetch.cancelled = True
-        if fetch.response is not None:
-            fetch.response.close()
-        self._server.discarded_bytes += max(0, len(fetch.data) - fetch.read)
-        self._fetches.pop(fetch.start, None)
+    def _next(self, *, head: bool) -> bytes:
+        pushback = getattr(self, "_pushback", b"")
+        if pushback:
+            self._pushback = b""
+            return pushback
+        attempts = 0
+        last_error: httpx.HTTPError | None = None
+        while True:
+            self._ensure(head=head)
+            assert self.chunks is not None
+            try:
+                piece = next(self.chunks)
+            except StopIteration:
+                self._close()
+                if self.pos > self.end:
+                    raise _Forwarded() from None
+                piece = b""
+            except httpx.HTTPError as exc:
+                last_error = exc
+                piece = b""
+                self._close()
+            if piece:
+                self._record(piece)
+                return piece
+            attempts += 1
+            if attempts > RESUME_ATTEMPTS:
+                raise _Forwarded() from last_error
+            self.server.resumes += 1
+            time.sleep(min(0.5 * 2 ** (attempts - 1), 8))
 
-    def drain(self) -> None:
-        """Cancel everything still in flight (server shutdown)."""
-        with self._lock:
-            for fetch in list(self._fetches.values()):
-                self._discard(fetch)
+    def _ensure(self, *, head: bool) -> None:
+        if self.response is not None:
+            return
+        if self.server.quota_latched:
+            raise _Forwarded(403 if head else None)
+        response = self.upstream.open(self.pos, self.end)
+        if response.status_code == 403:
+            _latch_if_quota(self.server, response)
+        if response.status_code != 206:
+            status = response.status_code
+            response.close()
+            raise _Forwarded(status if head else None)
+        self.response = response
+        self.chunks = response.iter_bytes(_COPY_BYTES)
 
-    def _run(self, fetch: _Fetch) -> None:
-        try:
-            response = self.open(fetch.start, fetch.end)
-            fetch.response = response
-            fetch.status = response.status_code
-            with fetch.wake:
-                fetch.wake.notify_all()
-            if response.status_code == 403:
-                _latch_if_quota(self._server, response)
-            if response.status_code != 206:
-                return
-            for block in response.iter_bytes(_COPY_BYTES):
-                if fetch.cancelled or self._server.quota_latched:
-                    break
-                with fetch.wake:
-                    fetch.data += block
-                    fetch.wake.notify_all()
-                with self._lock:
-                    self._server.upstream_bytes += len(block)
-        except httpx.HTTPError as exc:
-            fetch.error = exc
-        finally:
-            if fetch.response is not None:
-                fetch.response.close()
-            fetch.done.set()
-            with fetch.wake:
-                fetch.wake.notify_all()
+    def _record(self, piece: bytes) -> None:
+        self.server.upstream_bytes += len(piece)
+        self.pos += len(piece)
+        self.recent.extend(piece)
+        if len(self.recent) > RECENT_BYTES:
+            drop = len(self.recent) - RECENT_BYTES
+            del self.recent[:drop]
+            self.recent_start += drop
+
+    def _close(self) -> None:
+        if self.response is not None:
+            self.response.close()
+        self.response = None
+        self.chunks = None
 
 
 class _Proxy(ThreadingHTTPServer):
     daemon_threads = True
     part: RemoteMedia
-    chunk_bytes: int
     token: str
     client: httpx.Client
     size: int | None
     force_refresh: bool
     quota_latched: bool
-    cache: _BlockCache
-    prefetcher: _Prefetcher
     upstream_requests: int
     upstream_bytes: int
     served_bytes: int
-    discarded_bytes: int
-
-
-class _Forwarded(Exception):
-    """An upstream failure ends the client request.
-
-    `status` is relayed to the client while no body bytes have gone out yet;
-    a mid-stream failure just closes the connection (ffmpeg's reconnect then
-    hits the latch and receives the 403 cleanly).
-    """
-
-    def __init__(self, status: int | None = None) -> None:
-        self.status = status
+    resumes: int
+    backward_seeks: int
+    tail_start: int
+    tail: bytes
+    upstream: _Upstream
+    body: _SequentialBody
+    initialized: bool
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -327,133 +235,76 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path != f"/{self.server.token}":
             self.send_error(404)
             return
-        if self.server.quota_latched:
-            self._send_status(403)
-            return
         try:
             total = self._size()
-        except httpx.HTTPError:
-            self.send_error(502, "upstream request failed")
-            return
-        except _Forwarded:
-            return  # upstream error already relayed
-        if total is None:
-            self.send_error(502, "upstream size unknown")
-            return
-        start, end = self._client_range(total)
-        if start >= total or start > end:
-            self.send_response(416)
-            self.send_header("Content-Range", f"bytes */{total}")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-            return
-        if head:
-            self._send_data_headers(start, end)
-            return
-        # A client disconnect (ffmpeg seeking) or a mid-stream upstream failure
-        # just ends this request; an error before the body still relays its
-        # status. Upstream streams are closed in `finally`.
-        try:
-            self._stream(start, end)
+            self._ensure_streams()
+            start, end = self._client_range(total)
+            if start >= total or start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{total}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if head:
+                self._send_headers(start, end)
+                return
+            sent = False
+            for data in self._read(start, end):
+                if not sent:
+                    self._send_headers(start, end)
+                    sent = True
+                self.wfile.write(data)
+                self.server.served_bytes += len(data)
         except _Forwarded as exc:
             if exc.status is not None:
                 self._send_status(exc.status)
         except (BrokenPipeError, ConnectionResetError):
             pass
+        except httpx.HTTPError:
+            if not self.server.quota_latched:
+                self._send_status(502)
+
+    def _size(self) -> int:
+        if self.server.size is not None:
+            return self.server.size
+        response = self.server.upstream.open(0, 0)
+        try:
+            if response.status_code == 403:
+                _latch_if_quota(self.server, response)
+            if response.status_code >= 400:
+                raise _Forwarded(response.status_code)
+            value = response.headers.get("Content-Range", "").rpartition("/")[2]
+            if not value.isdigit():
+                raise _Forwarded(502)
+            self.server.size = int(value)
+            return self.server.size
+        finally:
+            response.close()
+
+    def _ensure_streams(self) -> None:
+        if not self.server.initialized:
+            _init_streams(self.server)
+            self.server.initialized = True
 
     def _client_range(self, total: int) -> tuple[int, int]:
-        """The byte span ffmpeg asked for: open-ended `bytes=N-` or a plain GET."""
-        header = self.headers.get("Range", "")
-        spec = header.partition("=")[2]
+        spec = self.headers.get("Range", "").partition("=")[2]
         first, _, last = spec.partition("-")
         start = int(first) if first.isdigit() else 0
         end = int(last) if last.isdigit() else total - 1
         return start, min(end, total - 1)
 
-    def _size(self) -> int | None:
-        """Total source bytes: `RemoteMedia.size`, else a closed 1-byte probe."""
-        if self.server.size is not None:
-            return self.server.size
-        response = self.server.prefetcher.open(0, 0)
-        try:
-            if response.status_code >= 400:
-                if response.status_code == 403:
-                    _latch_if_quota(self.server, response)
-                self._send_status(response.status_code)
-                raise _Forwarded
-            tail = response.headers.get("Content-Range", "").partition("/")[2].strip()
-            self.server.size = int(tail) if tail.isdigit() else None
-            return self.server.size
-        finally:
-            response.close()
+    def _read(self, start: int, end: int) -> Iterator[bytes]:
+        tail_start = self.server.tail_start
+        if start < tail_start:
+            body_end = min(end, tail_start - 1)
+            yield from self.server.body.read(start, body_end, head=True)
+        if end >= tail_start:
+            assert self.server.size is not None
+            tail_begin = max(start, tail_start)
+            tail_end = min(end, self.server.size - 1)
+            yield self.server.tail[tail_begin - tail_start : tail_end - tail_start + 1]
 
-    def _piece(self, start: int, end: int, limit: int, *, head: bool) -> Iterator[bytes]:
-        """Yield `start..end` of the source, from the block cache or prefetch.
-
-        Cached prefixes are served without touching upstream; a miss consumes
-        the prefetch window — contiguous closed ranges fetched `depth`-deep —
-        and caches bytes as they pass through, so a client that disconnects
-        early (ffmpeg seeking away) leaves bounded waste. `head` is true while
-        no body bytes have been sent: a failure can still relay its status.
-        """
-        pos = start
-        while pos <= end:
-            if self.server.quota_latched:
-                raise _Forwarded(403 if head else None)
-            hit_end = self.server.cache.covered_until(pos)
-            if hit_end is not None:
-                take = min(hit_end, end)
-                yield self.server.cache.get(pos, take)
-                pos = take + 1
-                continue
-            fetch = self.server.prefetcher.at(pos, limit)
-            if fetch is None:
-                break
-            status = fetch.wait_status()
-            if self.server.quota_latched:
-                raise _Forwarded(403 if head else None)
-            if fetch.error is not None:
-                raise fetch.error
-            if status != 206:
-                raise _Forwarded(status if head else None)
-            got = 0
-            try:
-                for data in fetch.stream_from(pos, end):
-                    self.server.cache.put(pos, data)
-                    pos += len(data)
-                    got += len(data)
-                    yield data
-            except httpx.HTTPError:
-                if self.server.quota_latched:
-                    raise _Forwarded(403 if head else None) from None
-                raise
-            if got == 0:
-                break  # upstream ended early; stop rather than refetch
-
-    def _stream(self, start: int, end: int) -> None:
-        """Copy `start..end` to the client, prefetching upstream sequentially.
-
-        Pieces stay inside one aligned block so cache entries merge; the
-        prefetcher keeps `depth` closed ranges in flight behind the read
-        position, and a seek discards the window instead of over-fetching.
-        The 206 headers go out with the first body bytes, so a failure on the
-        first piece can still relay its upstream status.
-        """
-        sent = False
-        pos = start
-        while pos <= end:
-            block_end = (pos // _BLOCK_BYTES + 1) * _BLOCK_BYTES - 1
-            piece_end = min(block_end, end)
-            for data in self._piece(pos, piece_end, end, head=not sent):
-                if not sent:
-                    self._send_data_headers(start, end)
-                    sent = True
-                self.wfile.write(data)
-                self.server.served_bytes += len(data)
-            pos = piece_end + 1
-
-    def _send_data_headers(self, start: int, end: int) -> None:
-        """The 200/206 response headers, sent with the first body bytes."""
+    def _send_headers(self, start: int, end: int) -> None:
         self.send_response(206 if "Range" in self.headers else 200)
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(end - start + 1))
@@ -471,76 +322,69 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def serve_remote(
-    part: RemoteMedia,
-    *,
-    chunk_bytes: int = DEFAULT_CHUNK_BYTES,
-    prefetch: int = DEFAULT_PREFETCH,
-    force_refresh: bool = False,
-) -> Iterator[str]:
-    """Serve `part` to ffmpeg on loopback for the duration of the block.
-
-    Yields the local URL. The server only answers an unguessable path, fetches
-    upstream in closed ranges of at most `min(chunk_bytes,
-    PREFETCH_CHUNK_BYTES)` kept `prefetch`-deep, and logs its upstream traffic
-    when it stops.
-    """
+def serve_remote(part: RemoteMedia, *, force_refresh: bool = False) -> Iterator[str]:
+    """Serve one remote file through a single resumable upstream stream."""
     server = _Proxy(("127.0.0.1", 0), _Handler)
     server.part = part
-    server.chunk_bytes = chunk_bytes
     server.token = secrets.token_hex(16)
     server.size = part.size
     server.force_refresh = force_refresh
     server.quota_latched = False
-    server.cache = _BlockCache()
     server.upstream_requests = 0
     server.upstream_bytes = 0
     server.served_bytes = 0
-    server.discarded_bytes = 0
+    server.resumes = 0
+    server.backward_seeks = 0
     server.client = httpx.Client(timeout=httpx.Timeout(None, connect=30.0), follow_redirects=True)
-    server.prefetcher = _Prefetcher(
-        server, depth=prefetch, chunk=min(PREFETCH_CHUNK_BYTES, chunk_bytes)
-    )
+    server.upstream = _Upstream(server)
+    server.tail = b""
+    server.tail_start = 0
+    server.body = _SequentialBody(server, 0)
+    server.initialized = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         yield f"http://127.0.0.1:{server.server_port}/{server.token}"
     finally:
-        server.prefetcher.drain()
+        server.body.close()
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
         server.client.close()
         log.info(
-            "%s: %d upstream requests, %d upstream bytes, %d bytes served"
-            ", %d prefetched bytes discarded",
+            "%s: %d upstream requests, %d upstream bytes, %d bytes served, "
+            "%d resumes, %d backward seeks",
             part.name,
             server.upstream_requests,
             server.upstream_bytes,
             server.served_bytes,
-            server.discarded_bytes,
+            server.resumes,
+            server.backward_seeks,
         )
 
 
+def _init_streams(server: _Proxy) -> None:
+    assert server.size is not None
+    server.tail_start = max(0, server.size - TAIL_BYTES)
+    server.body = _SequentialBody(server, server.tail_start - 1)
+    response = server.upstream.open(server.tail_start, server.size - 1)
+    try:
+        if response.status_code == 403:
+            _latch_if_quota(server, response)
+        if response.status_code != 206:
+            raise _Forwarded(response.status_code)
+        server.tail = response.read()
+        server.upstream_bytes += len(server.tail)
+    finally:
+        response.close()
+
+
 @contextmanager
-def serve_all(
-    parts: list[MediaInput],
-    *,
-    chunk_bytes: int = DEFAULT_CHUNK_BYTES,
-    prefetch: int = DEFAULT_PREFETCH,
-    force_refresh: bool = False,
-) -> Iterator[dict[int, str]]:
+def serve_all(parts: list[MediaInput], *, force_refresh: bool = False) -> Iterator[dict[int, str]]:
     """Serve every `RemoteMedia` in `parts`; yields `{id(part): local url}`."""
     with ExitStack() as stack:
         urls = {
-            id(part): stack.enter_context(
-                serve_remote(
-                    part,
-                    chunk_bytes=chunk_bytes,
-                    prefetch=prefetch,
-                    force_refresh=force_refresh,
-                )
-            )
+            id(part): stack.enter_context(serve_remote(part, force_refresh=force_refresh))
             for part in parts
             if isinstance(part, RemoteMedia)
         }

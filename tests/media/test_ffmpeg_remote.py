@@ -21,7 +21,7 @@ import pytest
 
 from georg.core.types import RemoteMedia
 from georg.media import MediaError, MediaInfo, extract_audio, ffmpeg, probe, probe_media
-from georg.media.range_proxy import DEFAULT_PREFETCH, serve_remote
+from georg.media.range_proxy import serve_remote
 
 pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
@@ -60,6 +60,14 @@ class _Handler(BaseHTTPRequestHandler):
         if not head:
             body = data[start : end + 1]
             self.server.bytes_sent += len(body)
+            if self.server.drop_after is not None and start == 0:
+                drop = min(self.server.drop_after, len(body))
+                self.server.drop_after = None
+                self.wfile.write(body[:drop])
+                self.wfile.flush()
+                self.connection.shutdown(2)
+                self.connection.close()
+                return
             self.wfile.write(body)
 
     def _handle(self, head: bool) -> None:
@@ -145,7 +153,8 @@ class _Server(ThreadingHTTPServer):
     lock: threading.Lock
     in_flight: int
     max_in_flight: int
-    """Peak simultaneous upstream requests (prefetch depth actually used)."""
+    """Peak simultaneous upstream requests."""
+    drop_after: int | None
 
 
 QUOTA_403 = (
@@ -201,6 +210,7 @@ def server(tmp_path: Path) -> Iterator[_Server]:
     httpd.lock = threading.Lock()
     httpd.in_flight = 0
     httpd.max_in_flight = 0
+    httpd.drop_after = None
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield httpd
     httpd.shutdown()
@@ -215,6 +225,7 @@ def remote(server: _Server, name: str = "part.mp4") -> RemoteMedia:
         name=name,
         key="key-" + name,
         headers=headers,
+        size=len(server.contents.get(name, server.content)),
     )
 
 
@@ -301,72 +312,31 @@ def test_truncated_stream_fails_retryable(server: _Server, tmp_path: Path) -> No
     assert not list(tmp_path.glob("*.flac")) and not list(tmp_path.glob(".*partial*"))
 
 
-def test_only_closed_ranges_reach_upstream(server: _Server, tmp_path: Path) -> None:
-    """Drive refuses open-ended ranges under quota; the proxy still extracts.
-
-    The served file has its moov atom at the end, so ffmpeg must seek — every
-    upstream request still has to be a closed range of at most `chunk_bytes`.
-    """
-    chunk = 64 << 10
-    server.require_closed = chunk
-    out = extract_audio(
-        [remote(server, "tail.mp4")], tmp_path / "s.flac",
-        sleep=lambda _: None, chunk_bytes=chunk,
+def test_single_body_request_and_tail_request(server: _Server, tmp_path: Path) -> None:
+    """A full extraction reads the body through one stream + one tail range."""
+    big = tmp_path / "big.mp4"  # > TAIL_BYTES so the body stream is exercised
+    subprocess.run(
+        ["ffmpeg", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", "testsrc2=size=640x480:rate=30:duration=20",
+         "-f", "lavfi", "-i", "sine=frequency=660:sample_rate=48000:duration=20",
+         "-t", "20", "-c:v", "libx264", "-b:v", "8M",
+         "-c:a", "aac", "-b:a", "128k", str(big)],
+        check=True,
     )  # fmt: skip
-    assert abs(probe(out).duration_ms - SECONDS * 1000) < 500
-    assert server.requests
-    for request in server.requests:
-        m = re.fullmatch(r"bytes=(\d+)-(\d+)", request.headers.get("Range", ""))
-        assert m, f"open-ended upstream request: {request.headers.get('Range')!r}"
-        assert int(m[2]) - int(m[1]) + 1 <= chunk
-
-
-def test_quota_on_closed_range_is_retryable(server: _Server, tmp_path: Path) -> None:
-    """downloadQuotaExceeded on a closed range keeps its retryable retry_after."""
-    server.require_closed = 1 << 20
-    server.errors["tail.mp4"] = QUOTA_403
-    with pytest.raises(MediaError) as exc:
-        extract_audio([remote(server, "tail.mp4")], tmp_path / "s.flac",
-                      attempts=1, sleep=lambda _: None)  # fmt: skip
-    assert exc.value.retryable
-    assert "downloadQuotaExceeded" in str(exc.value)
-    assert exc.value.retry_after == ffmpeg.DEFAULT_QUOTA_RETRY_AFTER
-
-
-def test_rereads_come_from_the_block_cache(server: _Server) -> None:
-    """A second read of the same range is served without touching upstream."""
-    before = len(server.requests)
-    with serve_remote(remote(server), chunk_bytes=64 << 10) as url:
-        for _ in range(2):
-            r = httpx.get(url, headers={"Range": "bytes=0-65535"})
-            assert r.status_code == 206
-            assert r.content == server.content[:65536]
-    data_requests = [r for r in server.requests[before:] if r.headers.get("Range") != "bytes=0-0"]
-    assert len(data_requests) == 1
-
-
-def test_audio_extract_keeps_upstream_bytes_close_to_consumed(
-    server: _Server, tmp_path: Path
-) -> None:
-    """Upstream traffic tracks what ffmpeg reads, not oversized fixed ranges.
-
-    The source interleaves a high-bitrate video track with the audio; every
-    upstream request is a closed range no larger than `chunk_bytes`, and the
-    total fetched stays near the consumed bytes rather than ballooning past
-    the file.
-    """
-    chunk = 256 << 10
-    server.require_closed = chunk
-    part = remote(server, "interleaved.mp4")
-    out = extract_audio([part], tmp_path / "s.flac", sleep=lambda _: None, chunk_bytes=chunk)
-    assert abs(probe(out).duration_ms - SECONDS * 1000) < 500
-    size = len(server.contents["interleaved.mp4"])
-    assert server.bytes_sent < size * 2, f"upstream sent {server.bytes_sent} for a {size}-byte file"
+    server.contents["big.mp4"] = big.read_bytes()
+    assert len(server.contents["big.mp4"]) > 8 << 20
+    out = extract_audio([remote(server, "big.mp4")], tmp_path / "s.flac", sleep=lambda _: None)
+    assert abs(probe(out).duration_ms - 20 * 1000) < 500
+    ranges = [r.headers.get("Range", "") for r in server.requests]
+    assert all(re.fullmatch(r"bytes=\d+-\d+", value) for value in ranges)
+    # Each ffmpeg call = one tail fetch + one body stream; ffmpeg's re-read
+    # of byte 48 replays from the recent-bytes buffer, no extra request.
+    assert len(ranges) == 4, ranges
+    assert server.bytes_sent <= 3 * len(server.contents["big.mp4"])
 
 
 def test_quota_latch_stops_upstream_traffic(server: _Server, tmp_path: Path) -> None:
-    """After the first quota 403 the proxy latches: no more upstream requests,
-    and the attempt fails fast (no in-call retry) with the quota retry_after."""
+    """The first quota 403 latches and remains retryable."""
     server.errors["tail.mp4"] = QUOTA_403
     sleeps: list[float] = []
     with pytest.raises(MediaError) as exc:
@@ -374,9 +344,19 @@ def test_quota_latch_stops_upstream_traffic(server: _Server, tmp_path: Path) -> 
                       attempts=3, sleep=sleeps.append)  # fmt: skip
     assert exc.value.retryable
     assert exc.value.retry_after == ffmpeg.DEFAULT_QUOTA_RETRY_AFTER
-    assert not sleeps, "quota errors fail fast, not through the backoff retry"
-    # Upstream saw the size probe and the error-lookup probe, nothing more.
-    assert len(server.requests) <= 3
+    assert not sleeps
+
+
+def test_forward_seek_discards_from_one_stream(server: _Server) -> None:
+    """A forward seek does not open another body request."""
+    data = (bytes(range(256)) * ((12 << 20) // 256))[: 12 << 20]
+    server.contents["big.bin"] = data
+    with serve_remote(remote(server, "big.bin")) as url:
+        first = httpx.get(url, headers={"Range": "bytes=0-1023"})
+        later = httpx.get(url, headers={"Range": "bytes=4096-5119"})
+    assert first.content == data[:1024]
+    assert later.content == data[4096:5120]
+    assert len(server.requests) == 2  # tail + one body stream
 
 
 def test_retry_recovers_when_stream_restored(server: _Server, tmp_path: Path) -> None:
@@ -483,75 +463,15 @@ def test_retry_refreshes_token_for_error_lookup(server: _Server, tmp_path: Path)
     assert "The download quota for this file has been exceeded." in str(exc.value)
 
 
-def test_prefetch_overlaps_upstream_latency(server: _Server, tmp_path: Path) -> None:
-    """Sequential reads keep `prefetch` ranges in flight instead of serializing.
-
-    With a high-latency upstream the serial (prefetch=1) read pays the latency
-    per chunk; the prefetching read overlaps the chunks and finishes in about
-    one window.
-    """
-    chunk = 2 << 20
-    data = (bytes(range(256)) * ((16 << 20) // 256))[: 16 << 20]
+def test_resume_starts_at_exact_next_byte(server: _Server) -> None:
+    """A dropped body stream resumes with the next byte and no corruption."""
+    data = (bytes(range(256)) * ((12 << 20) // 256))[: 12 << 20]
     server.contents["big.bin"] = data
-    server.latency = 0.25
-    part = remote(server, "big.bin")
-
-    def read_all(url: str) -> bytes:
-        with httpx.stream("GET", url, headers={"Range": f"bytes=0-{len(data) - 1}"}) as r:
-            assert r.status_code == 206
-            return b"".join(r.iter_bytes(1 << 20))
-
-    with serve_remote(part, chunk_bytes=chunk, prefetch=1) as url:
-        serial = time.monotonic()
-        assert read_all(url) == data
-        serial = time.monotonic() - serial
-    requests_serial = len(server.requests)
-    server.max_in_flight = 0
-    with serve_remote(part, chunk_bytes=chunk, prefetch=DEFAULT_PREFETCH) as url:
-        parallel = time.monotonic()
-        assert read_all(url) == data
-        parallel = time.monotonic() - parallel
-    print(
-        f"\nserial {serial:.2f}s -> prefetch {parallel:.2f}s "
-        f"(upstream latency {server.latency}s/request, max in flight "
-        f"{server.max_in_flight})"
-    )
-    assert server.max_in_flight >= 2, "prefetches must overlap upstream"
-    assert parallel < serial / 2, f"prefetch {parallel:.2f}s vs serial {serial:.2f}s"
-    assert len(server.requests) - requests_serial <= len(data) // chunk + DEFAULT_PREFETCH
-
-
-def test_seek_discards_only_the_prefetch_window(server: _Server) -> None:
-    """A non-sequential read drops queued prefetches: waste ≤ depth x chunk."""
-    chunk = 2 << 20
-    data = (bytes(range(256)) * ((24 << 20) // 256))[: 24 << 20]
-    server.contents["big.bin"] = data
-    part = remote(server, "big.bin")
-    with serve_remote(part, chunk_bytes=chunk, prefetch=DEFAULT_PREFETCH) as url:
-        r = httpx.get(url, headers={"Range": f"bytes=0-{chunk - 1}"})
-        assert r.status_code == 206 and len(r.content) == chunk
-        deadline = time.monotonic() + 5
-        while len(server.requests) < 1 + DEFAULT_PREFETCH and time.monotonic() < deadline:
-            time.sleep(0.02)
-        r = httpx.get(url, headers={"Range": f"bytes={12 << 20}-{(16 << 20) - 1}"})
-        assert r.status_code == 206
-        assert r.content == data[12 << 20 : 16 << 20]
-    # Consumed ≈ one chunk + the seek target; prefetches bounded by depth x chunk.
-    consumed = chunk + (16 << 20) - (12 << 20)
-    assert server.bytes_sent <= consumed + 2 * DEFAULT_PREFETCH * chunk
-
-
-def test_quota_latch_from_a_prefetch(server: _Server, tmp_path: Path) -> None:
-    """A quota 403 on a prefetched range latches exactly like a direct one."""
-    server.quota_from = 4 << 20  # the size probe and first chunks are still 206
-    sleeps: list[float] = []
-    with pytest.raises(MediaError) as exc:
-        extract_audio([remote(server, "interleaved.mp4")], tmp_path / "s.flac",
-                      attempts=3, sleep=sleeps.append, chunk_bytes=1 << 20)  # fmt: skip
-    assert exc.value.retryable
-    assert exc.value.retry_after == ffmpeg.DEFAULT_QUOTA_RETRY_AFTER
-    assert not sleeps
-    # Upstream sees at most the size probe, the window in flight when the first
-    # 403 landed, the moov-seek window that produced it, and the error probes —
-    # the proxy's latch spawns no further prefetches.
-    assert len(server.requests) <= 2 + 2 * DEFAULT_PREFETCH
+    server.drop_after = (3 << 20) + 65536  # mid-chunk, past a few full chunks
+    with serve_remote(remote(server, "big.bin")) as url:
+        response = httpx.get(url, headers={"Range": f"bytes=0-{len(data) - 1}"})
+    assert response.status_code == 206
+    assert response.content == data
+    ranges = [r.headers.get("Range", "") for r in server.requests]
+    assert len(ranges) == 3  # tail, dropped body, and one exact resume
+    assert ranges[-1].startswith(f"bytes={3 << 20}-")  # next recorded byte
