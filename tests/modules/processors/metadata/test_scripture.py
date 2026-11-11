@@ -158,7 +158,7 @@ def test_method_1_stated_text(sermon: str) -> None:
     assert found is not None
     assert found.references == ("Ephesians 6:1-4",)
     assert found.method == "text"
-    assert found.origin.startswith('scripture-1/text: sermon says "')
+    assert found.origin.startswith('scripture-2/text: sermon says "')
 
 
 @pytest.mark.parametrize(
@@ -200,7 +200,7 @@ def test_method_3_scenario_1108(bulletin: str, tmp_path: Path) -> None:
     assert found is not None
     assert found.references == ("Matthew 22:15-22", "Philippians 3:17-21")
     assert found.method == "llm"
-    assert found.origin.startswith("scripture-1/llm: local model picked Gospel, Epistle")
+    assert found.origin.startswith("scripture-2/llm: local model picked Gospel, Epistle")
     [call] = fake.calls
     prompt = call["messages"][-1]["content"]
     assert call["messages"][0]["content"] == "/no_think"
@@ -255,7 +255,27 @@ def test_long_transcripts_are_cut(bulletin: str) -> None:
 
 
 def test_version_tracks_model_and_prompt() -> None:
-    assert detector().version.startswith("scripture-1-Qwen3-4B-Instruct-2507-Q4_K_M.gguf-prompt-v1")
-    assert detector(llm_enabled=False).version == "scripture-1-nollm"
+    assert detector().version.startswith("scripture-2-Qwen3-4B-Instruct-2507-Q4_K_M.gguf-prompt-v1")
+    assert detector(llm_enabled=False).version == "scripture-2-nollm"
     with pytest.raises(ValueError, match="context_size"):
         ScriptureOptions.model_validate({"llm": {"context_size": 2048}})
+
+
+@pytest.mark.parametrize(
+    ("bulletin_text", "label", "reference"),
+    [
+        ("First ReadingActs 2:1\u201321\n1When the day of Pentecost arrived", "First Reading",
+         "Acts 2:1-21"),
+        ("First ReadingIsaiah 55:1\u20135\n1Come, everyone who thirsts", "Old Testament",
+         "Isaiah 55:1-5"),
+    ],
+)  # fmt: skip
+def test_first_reading_is_labelled_by_its_book(
+    bulletin_text: str, label: str, reference: str
+) -> None:
+    [reading] = parse_readings(bulletin_text)
+    assert (reading.label, reading.reference) == (label, reference)
+    for sermon in ("Our text this morning is the first reading.",
+                   "The text for today comes from our first lesson."):  # fmt: skip
+        found = detector().detect(sermon, {"b.docx": bulletin_text})
+        assert found is not None and found.references == (reference,)

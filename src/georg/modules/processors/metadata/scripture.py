@@ -9,7 +9,8 @@ Three methods, tried in order:
    comes from the Gospel reading", "...from the book of Isaiah"); the bulletin gives
    the reference.
 3. `llm`: a local llama.cpp model reads the labelled readings and the transcript and
-   picks the readings the sermon is about (possibly several, possibly none).
+   picks the readings the sermon is about (possibly several, possibly none). It shares
+   the formatter's loaded model (`llama_cpp.shared_model`), so one copy is in memory.
 
 Methods 1 and 2 fire only on statements about *the sermon's text*; passing mentions
 ("as St. Paul says in Philippians", "Genesis chapter 1") are left to method 3.
@@ -28,7 +29,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from georg.modules.processors.format.llama_cpp import LlamaLike, LlamaModelOptions, load_model
+from georg.modules.processors.format.llama_cpp import (
+    LlamaLike,
+    LlamaModelOptions,
+    reserve_context,
+    shared_model,
+)
 from georg.modules.processors.format.prompt import clean_output
 from georg.modules.processors.metadata.readings import (
     DEFAULT_HEADINGS,
@@ -39,7 +45,7 @@ from georg.modules.processors.metadata.references import find_books, find_refere
 
 log = logging.getLogger(__name__)
 
-NAME = "scripture-1"
+NAME = "scripture-2"
 _NO_THINK = "/no_think"
 _TEXT_STATEMENT = re.compile(
     r"""\b(?:the|our|today'?s|this\s+(?:morning|evening)'?s|my)\s+
@@ -163,8 +169,9 @@ class ScriptureDetector:
         model_factory: Callable[[LlamaModelOptions], LlamaLike] | None = None,
     ) -> None:
         self.options = options
-        self._factory = model_factory or load_model
-        self._model: LlamaLike | None = None
+        self._factory = model_factory
+        if options.llm_enabled:
+            reserve_context(options.llm, model_factory)
         self._template = Template(
             resources.files(__package__)
             .joinpath("prompts", f"scripture_{options.prompt_version}.txt")
@@ -271,8 +278,7 @@ class ScriptureDetector:
 
     def _complete(self, prompt: str, labels: list[str]) -> str:
         llm = self.options.llm
-        if self._model is None:
-            self._model = self._factory(llm)
+        model = shared_model(llm, self._factory)
         messages: list[dict[str, str]] = []
         if llm.disable_thinking:
             messages.append({"role": "system", "content": _NO_THINK})
@@ -284,7 +290,7 @@ class ScriptureDetector:
             },
             "required": ["readings"],
         }
-        result: Any = self._model.create_chat_completion(
+        result: Any = model.create_chat_completion(
             messages,
             temperature=llm.temperature,
             seed=llm.seed,

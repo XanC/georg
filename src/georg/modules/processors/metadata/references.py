@@ -23,6 +23,7 @@ _BOOKS = (
     " Philemon Hebrews James 1_Peter 2_Peter 1_John 2_John 3_John Jude Revelation"
 )
 BOOKS: tuple[str, ...] = tuple(name.replace("_", " ") for name in _BOOKS.split())
+OLD_TESTAMENT: frozenset[str] = frozenset(BOOKS[: BOOKS.index("Malachi") + 1])
 _EXTRA_ALIASES = {
     "Psalm": ("psalms",),
     "Song of Solomon": ("song of songs", "canticles"),
