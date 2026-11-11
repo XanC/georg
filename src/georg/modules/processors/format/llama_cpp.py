@@ -21,6 +21,7 @@ warning is added to `discrepancies`.
 
 import os
 import re
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
@@ -152,6 +153,68 @@ def load_model(options: LlamaModelOptions) -> LlamaLike:
     return model
 
 
+_shared_lock = threading.Lock()
+_reserved: dict[tuple[object, ...], int] = {}
+_loaded: dict[tuple[object, ...], tuple[int, LlamaLike]] = {}
+
+
+def _shared_key(options: LlamaModelOptions, load: object) -> tuple[object, ...]:
+    if options.model_path is not None:
+        return (load, "path", str(options.model_path))
+    return (load, "hf", options.model_repo, options.model_file)
+
+
+def reserve_context[O: LlamaModelOptions](
+    options: O, factory: Callable[[O], LlamaLike] | None = None
+) -> None:
+    """Declare that a module will use this model with `options.context_size`.
+
+    Modules call this when constructed, so the first `shared_model` load already has
+    the largest context any of them needs and the model is loaded only once.
+    """
+    key = _shared_key(options, factory or load_model)
+    with _shared_lock:
+        _reserved[key] = max(_reserved.get(key, 0), options.context_size)
+
+
+def shared_model[O: LlamaModelOptions](
+    options: O, factory: Callable[[O], LlamaLike] | None = None
+) -> LlamaLike:
+    """The process's one loaded copy of this GGUF model (per factory).
+
+    It has the largest context reserved for it; a copy too small for `options` is
+    released and replaced. Callers must not keep the returned model between calls.
+    """
+    load = factory or load_model
+    key = _shared_key(options, load)
+    with _shared_lock:
+        need = max(_reserved.get(key, 0), options.context_size)
+        current = _loaded.get(key)
+        if current is not None and current[0] >= need:
+            return current[1]
+        if current is not None:
+            del _loaded[key]
+            _close(current[1])
+        model = load(options.model_copy(update={"context_size": need}))
+        _loaded[key] = (need, model)
+        return model
+
+
+def release_shared_models() -> None:
+    """Drop every shared model and reservation (e.g. between tests)."""
+    with _shared_lock:
+        for _, model in _loaded.values():
+            _close(model)
+        _loaded.clear()
+        _reserved.clear()
+
+
+def _close(model: LlamaLike) -> None:
+    close = getattr(model, "close", None)
+    if callable(close):
+        close()
+
+
 def _sentences(text: str) -> list[list[str]]:
     sentences: list[list[str]] = [[]]
     for word in text.split():
@@ -204,7 +267,7 @@ class LlamaCppFormatter:
         stem = "breaks" if o.mode == "breaks" else "format"
         self._template, prompt_id = load_template(o.prompt_version, o.prompt_file, stem)
         self._factory = model_factory
-        self._model: LlamaLike | None = None
+        reserve_context(o, model_factory)
         self.version = (
             f"{TYPE_NAME}-r{_REVISION}-{o.mode}-{o.model_name}-prompt-{prompt_id}-t{o.temperature:g}"
             f"-rt{o.retry_temperature:g}-s{o.seed}-w{o.min_chunk_words}-{o.max_chunk_words}"
@@ -318,10 +381,9 @@ class LlamaCppFormatter:
     def _complete(
         self, messages: Sequence[dict[str, str]], temperature: float, seed: int, max_tokens: int
     ) -> str:
-        if self._model is None:
-            self._model = (self._factory or load_model)(self.options)
+        model = shared_model(self.options, self._factory)
         try:
-            result = self._model.create_chat_completion(
+            result = model.create_chat_completion(
                 list(messages), temperature=temperature, seed=seed, max_tokens=max_tokens
             )
             content = result["choices"][0]["message"]["content"]

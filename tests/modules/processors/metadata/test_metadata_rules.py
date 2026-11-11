@@ -297,14 +297,14 @@ def scripture_gen(fake: FakeLlama, **options: Any) -> RulesMetadataGenerator:
 def test_scripture_detected_with_origin(tmp_path: Path) -> None:
     fake = FakeLlama('{"readings": ["Gospel", "Epistle", "Genesis"]}')
     gen = scripture_gen(fake, title="Sermon for {occasion}", preacher_from_documents=False)
-    assert gen.version.startswith("rules-3+scripture-1-")
+    assert gen.version.startswith("rules-3+scripture-2-")
     proposal = gen.propose(
         doc_ctx(date(2026, 11, 8), {DOC_1108: bulletin(tmp_path)}, transcript=SERMON)
     )
     meta = proposal.metadata
     assert meta.scripture == ("Matthew 22:15-22", "Philippians 3:17-21")
     assert meta.preacher == "Pastor Default"
-    assert proposal.origins["scripture"].startswith("scripture-1/llm: local model picked")
+    assert proposal.origins["scripture"].startswith("scripture-2/llm: local model picked")
     assert proposal.origins["occasion"] == f"rules-3/document text: {DOC_1108}"
 
 

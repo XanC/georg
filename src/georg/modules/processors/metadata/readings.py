@@ -12,22 +12,31 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 
-from georg.modules.processors.metadata.references import canonical_book, parse_reference
+from georg.modules.processors.metadata.references import (
+    OLD_TESTAMENT,
+    canonical_book,
+    parse_reference,
+)
 
 DEFAULT_HEADINGS: dict[str, str] = {
     "Old Testament Reading": "Old Testament",
     "Old Testament Lesson": "Old Testament",
-    "First Reading": "Old Testament",
+    "First Reading": "First Reading",
     "Psalm": "Psalm",
     "Epistle": "Epistle",
     "Second Reading": "Epistle",
     "Holy Gospel": "Gospel",
     "Gospel": "Gospel",
 }
-"""Bulletin heading -> reading label (what the sermon and the review page call it)."""
+"""Bulletin heading -> reading label (what the sermon and the review page call it).
+
+A "First Reading" label becomes "Old Testament" when the reading is from an Old
+Testament book; otherwise (e.g. Acts in Easter) it stays "First Reading"."""
+FIRST_READING = "First Reading"
 
 _LABEL_ALIASES: dict[str, tuple[str, ...]] = {
     "Old Testament": ("old testament", "first reading", "first lesson"),
+    FIRST_READING: ("first reading", "first lesson"),
     "Epistle": ("epistle", "second reading", "second lesson"),
     "Gospel": ("gospel", "holy gospel"),
     "Psalm": ("psalm",),
@@ -113,6 +122,9 @@ def _reading_start(line: str, table: list[tuple[str, str]]) -> tuple[str, str, s
         if parsed is None and canonical_book(heading) is not None:
             parsed = parse_reference(line)
         if parsed is not None:
+            book = parsed[0].rsplit(" ", 1)[0]
+            if label == FIRST_READING and book in OLD_TESTAMENT:
+                label = "Old Testament"
             return label, heading, parsed[0]
     return None
 
