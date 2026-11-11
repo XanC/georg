@@ -6,8 +6,8 @@ from pathlib import Path
 
 HEADER = "# SPDX-License-Identifier: AGPL-3.0-only"
 PHP_HEADER = "// SPDX-License-Identifier: AGPL-3.0-only"
-ROOTS = ("src", "tests", "scripts", "deploy")
-PHP_ROOTS = ("wordpress",)
+ROOTS = ("src", "tests", "scripts", "deploy", "contrib")
+PHP_ROOTS = ("wordpress", "contrib")
 
 
 def missing_header(root: Path) -> list[Path]:

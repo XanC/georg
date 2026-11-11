@@ -1,0 +1,1364 @@
+{
+ "source": "https://wartburgproject.org/resources/lectionaries/lsb (Lutheran Service Book lectionaries, references only)",
+ "tables": {
+  "lsb-3a": {
+   "First Sunday in Advent": [
+    "Isaiah 2:1-5",
+    "Romans 13:8-10, 11-14",
+    "Matthew 21:1-11"
+   ],
+   "Second Sunday in Advent": [
+    "Isaiah 11:1-10",
+    "Romans 15:4-13",
+    "Matthew 3:1-12"
+   ],
+   "Third Sunday in Advent": [
+    "Isaiah 35:1-10",
+    "James 5:7-11",
+    "Matthew 11:2-15"
+   ],
+   "Fourth Sunday in Advent": [
+    "Isaiah 7:10-17",
+    "Romans 1:1-7",
+    "Matthew 1:18-25"
+   ],
+   "Christmas Eve": [
+    "Isaiah 7:10-14",
+    "1 John 4:7-16",
+    "Matthew 1:18-25"
+   ],
+   "Christmas Day": [
+    "Isaiah 9:2-7",
+    "Titus 2:11-14",
+    "Luke 2:1-14, 15-20",
+    "Isaiah 62:10-12",
+    "Titus 3:4-7",
+    "Isaiah 52:7-10",
+    "Hebrews 1:1-6, 7-12",
+    "John 1:1-14, 15-18"
+   ],
+   "First Sunday after Christmas": [
+    "Isaiah 63:7-14",
+    "Galatians 4:4-7",
+    "Matthew 2:13-23"
+   ],
+   "Second Sunday after Christmas": [
+    "1 Kings 3:4-15",
+    "Ephesians 1:3-14",
+    "Luke 2:40-52"
+   ],
+   "The Epiphany of Our Lord": [
+    "Isaiah 60:1-6",
+    "Ephesians 3:1-12",
+    "Matthew 2:1-12"
+   ],
+   "The Baptism of Our Lord": [
+    "Isaiah 42:1-9",
+    "Romans 6:1-11",
+    "Matthew 3:13-17"
+   ],
+   "Second Sunday after the Epiphany": [
+    "Isaiah 49:1-7",
+    "1 Corinthians 1:1-9",
+    "John 1:29-42a"
+   ],
+   "Third Sunday after the Epiphany": [
+    "Isaiah 9:1-4",
+    "1 Corinthians 1:10-18",
+    "Matthew 4:12-25"
+   ],
+   "Fourth Sunday after the Epiphany": [
+    "Micah 6:1-8",
+    "1 Corinthians 1:18-31",
+    "Matthew 5:1-12"
+   ],
+   "Fifth Sunday after the Epiphany": [
+    "Isaiah 58:3-9a",
+    "1 Corinthians 2:1-12, 13-16",
+    "Matthew 5:13-20"
+   ],
+   "Sixth Sunday after the Epiphany": [
+    "Deuteronomy 30:15-20",
+    "1 Corinthians 3:1-9",
+    "Matthew 5:21-37"
+   ],
+   "Seventh Sunday after the Epiphany": [
+    "Leviticus 19:1-2, 9-18",
+    "1 Corinthians 3:10-23",
+    "Matthew 5:38-48"
+   ],
+   "Eighth Sunday after the Epiphany": [
+    "Isaiah 49:8-16a",
+    "1 Corinthians 4:1-13",
+    "Matthew 6:24-34"
+   ],
+   "The Transfiguration of Our Lord": [
+    "Exodus 24:8-18",
+    "2 Peter 1:16-21",
+    "Matthew 17:1-9"
+   ],
+   "Ash Wednesday": [
+    "Joel 2:12-19",
+    "2 Corinthians 5:20b-6:10",
+    "Matthew 6:1-6, 16-21"
+   ],
+   "First Sunday in Lent": [
+    "Genesis 3:1-21",
+    "Romans 5:12-19",
+    "Matthew 4:1-11"
+   ],
+   "Second Sunday in Lent": [
+    "Genesis 12:1-9",
+    "Romans 4:1-8, 13-17",
+    "John 3:1-17"
+   ],
+   "Third Sunday in Lent": [
+    "Exodus 17:1-7",
+    "Romans 5:1-8",
+    "John 4:5-26, 27-30, 39-42"
+   ],
+   "Fourth Sunday in Lent": [
+    "Isaiah 42:14-21",
+    "Ephesians 5:8-14",
+    "John 9:1-41"
+   ],
+   "Fifth Sunday in Lent": [
+    "Ezekiel 37:1-14",
+    "Romans 8:1-11",
+    "John 11:1-45, 46-53"
+   ],
+   "Palm Sunday": [
+    "Isaiah 50:4-9a",
+    "Philippians 2:5-11",
+    "John 12:12-19"
+   ],
+   "Holy Thursday": [
+    "Exodus 24:3-11",
+    "Hebrews 9:11-22",
+    "Matthew 26:17-30"
+   ],
+   "Good Friday": [
+    "Isaiah 52:13-53:12",
+    "Hebrews 4:14-16, 5:7-9",
+    "John 18:1-19:42"
+   ],
+   "The Resurrection of Our Lord": [
+    "Exodus 14:10-15:1",
+    "1 Corinthians 15:1-11",
+    "John 20:1-18",
+    "Acts 10:34-43",
+    "Colossians 3:1-4",
+    "Matthew 28:1-10"
+   ],
+   "Second Sunday of Easter": [
+    "Acts 5:29-42",
+    "1 Peter 1:3-9",
+    "John 20:19-31"
+   ],
+   "Third Sunday of Easter": [
+    "Acts 2:14a, 36-41",
+    "1 Peter 1:17-25",
+    "Luke 24:13-35"
+   ],
+   "Fourth Sunday of Easter": [
+    "Acts 2:42-47",
+    "1 Peter 2:19-25",
+    "John 10:1-10"
+   ],
+   "Fifth Sunday of Easter": [
+    "Acts 6:1-9, 7:2a, 51-60",
+    "1 Peter 2:2-10",
+    "John 14:1-14"
+   ],
+   "Sixth Sunday of Easter": [
+    "Acts 17:16-31",
+    "1 Peter 3:13-22",
+    "John 14:15-21"
+   ],
+   "The Ascension of Our Lord": [
+    "Acts 1:1-11",
+    "Ephesians 1:15-23",
+    "Luke 24:44-53"
+   ],
+   "Seventh Sunday of Easter": [
+    "Acts 1:12-26",
+    "1 Peter 4:12-19, 5:6-11",
+    "John 17:1-11"
+   ],
+   "The Day of Pentecost": [
+    "Numbers 11:24-30",
+    "Acts 2:1-21",
+    "John 7:37-39"
+   ],
+   "The Holy Trinity": [
+    "Genesis 1:1-2:4a",
+    "Acts 2:14a, 22-36",
+    "Matthew 28:16-20"
+   ],
+   "Proper 3": [
+    "Isaiah 49:8-16a",
+    "Romans 1:8-17",
+    "Matthew 6:24-34"
+   ],
+   "Proper 4": [
+    "Deuteronomy 11:18-21, 26-28",
+    "Romans 3:21-28",
+    "Matthew 7:15-29"
+   ],
+   "Proper 5": [
+    "Hosea 5:15-6:6",
+    "Romans 4:13-25",
+    "Matthew 9:9-13"
+   ],
+   "Proper 6": [
+    "Exodus 19:2-8",
+    "Romans 5:6-15",
+    "Matthew 9:35-10:8, 9-20"
+   ],
+   "Proper 7": [
+    "Jeremiah 20:7-13",
+    "Romans 6:12-23",
+    "Matthew 10:5a, 21-33"
+   ],
+   "Proper 8": [
+    "Jeremiah 28:5-9",
+    "Romans 7:1-13",
+    "Matthew 10:34-42"
+   ],
+   "Proper 9": [
+    "Zechariah 9:9-12",
+    "Romans 7:14-25a",
+    "Matthew 11:25-30"
+   ],
+   "Proper 10": [
+    "Isaiah 55:10-13",
+    "Romans 8:12-17",
+    "Matthew 13:1-9, 18-23"
+   ],
+   "Proper 11": [
+    "Isaiah 44:6-8",
+    "Romans 8:18-27",
+    "Matthew 13:24-30, 36-43"
+   ],
+   "Proper 12": [
+    "Deuteronomy 7:6-9",
+    "Romans 8:28-39",
+    "Matthew 13:44-52"
+   ],
+   "Proper 13": [
+    "Isaiah 55:1-5",
+    "Romans 9:1-5, 6-13",
+    "Matthew 14:13-21"
+   ],
+   "Proper 14": [
+    "Job 38:4-18",
+    "Romans 10:5-17",
+    "Matthew 14:22-33"
+   ],
+   "Proper 15": [
+    "Isaiah 56:1, 6-8",
+    "Romans 11:1-2, 13-15, 28-32",
+    "Matthew 15:21-28"
+   ],
+   "Proper 16": [
+    "Isaiah 51:1-6",
+    "Romans 11:33-12:8",
+    "Matthew 16:13-20"
+   ],
+   "Proper 17": [
+    "Jeremiah 15:15-21",
+    "Romans 12:9-21",
+    "Matthew 16:21-28"
+   ],
+   "Proper 18": [
+    "Ezekiel 33:7-9",
+    "Romans 13:1-10",
+    "Matthew 18:1-20"
+   ],
+   "Proper 19": [
+    "Genesis 50:15-21",
+    "Romans 14:1-12",
+    "Matthew 18:21-35"
+   ],
+   "Proper 20": [
+    "Isaiah 55:6-9",
+    "Philippians 1:12-14, 19-30",
+    "Matthew 20:1-16"
+   ],
+   "Proper 21": [
+    "Ezekiel 18:1-4, 25-32",
+    "Philippians 2:1-4, 5-13, 14-18",
+    "Matthew 21:23-27, 28-32"
+   ],
+   "Proper 22": [
+    "Isaiah 5:1-7",
+    "Philippians 3:4b-14",
+    "Matthew 21:33-46"
+   ],
+   "Proper 23": [
+    "Isaiah 25:6-9",
+    "Philippians 4:4-13",
+    "Matthew 22:1-14"
+   ],
+   "Proper 24": [
+    "Isaiah 45:1-7",
+    "1 Thessalonians 1:1-10",
+    "Matthew 22:15-22"
+   ],
+   "Proper 25": [
+    "Leviticus 19:1-2, 15-18",
+    "1 Thessalonians 2:1-13",
+    "Matthew 22:34-46"
+   ],
+   "Proper 26": [
+    "Micah 3:5-12",
+    "1 Thessalonians 4:1-12",
+    "Matthew 23:1-12"
+   ],
+   "Proper 27": [
+    "Amos 5:18-24",
+    "1 Thessalonians 4:13-18",
+    "Matthew 25:1-13"
+   ],
+   "Proper 28": [
+    "Zephaniah 1:7-16",
+    "1 Thessalonians 5:1-11",
+    "Matthew 25:14-30"
+   ],
+   "Proper 29": [
+    "Ezekiel 34:11-16, 20-24",
+    "1 Corinthians 15:20-28",
+    "Matthew 25:31-46"
+   ]
+  },
+  "lsb-3b": {
+   "First Sunday in Advent": [
+    "Isaiah 64:1-9",
+    "1 Corinthians 1:3-9",
+    "Mark 11:1-10"
+   ],
+   "Second Sunday in Advent": [
+    "Isaiah 40:1-11",
+    "2 Peter 3:8-14",
+    "Mark 1:1-8"
+   ],
+   "Third Sunday in Advent": [
+    "Isaiah 61:1-4, 8-11",
+    "1 Thessalonians 5:16-24",
+    "John 1:6-8, 19-28"
+   ],
+   "Fourth Sunday in Advent": [
+    "2 Samuel 7:1-11, 16",
+    "Romans 16:25-27",
+    "Luke 1:26-38"
+   ],
+   "Christmas Eve": [
+    "Isaiah 7:10-14",
+    "1 John 4:7-16",
+    "Matthew 1:18-25"
+   ],
+   "Christmas Day": [
+    "Isaiah 9:2-7",
+    "Titus 2:11-14",
+    "Luke 2:1-20",
+    "Isaiah 62:10-12",
+    "Titus 3:4-7",
+    "Luke 2:1-14, 15-20",
+    "Isaiah 52:7-10",
+    "Hebrews 1:1-6, 7-12",
+    "John 1:1-14, 15-18"
+   ],
+   "First Sunday after Christmas": [
+    "Isaiah 61:10-62:3",
+    "Galatians 4:4-7",
+    "Luke 2:22-40"
+   ],
+   "Second Sunday after Christmas": [
+    "1 Kings 3:4-15",
+    "Ephesians 1:3-14",
+    "Luke 2:40-52"
+   ],
+   "The Epiphany of Our Lord": [
+    "Isaiah 60:1-6",
+    "Ephesians 3:1-12",
+    "Matthew 2:1-12"
+   ],
+   "The Baptism of Our Lord": [
+    "Genesis 1:1-5",
+    "Romans 6:1-11",
+    "Mark 1:4-11"
+   ],
+   "Second Sunday after the Epiphany": [
+    "1 Samuel 3:1-10, 11-20",
+    "1 Corinthians 6:12-20",
+    "John 1:43-51"
+   ],
+   "Third Sunday after the Epiphany": [
+    "Jonah 3:1-5, 10",
+    "1 Corinthians 7:29-31, 32-35",
+    "Mark 1:14-20"
+   ],
+   "Fourth Sunday after the Epiphany": [
+    "Deuteronomy 18:15-20",
+    "1 Corinthians 8:1-13",
+    "Mark 1:21-28"
+   ],
+   "Fifth Sunday after the Epiphany": [
+    "Isaiah 40:21-31",
+    "1 Corinthians 9:16-27",
+    "Mark 1:29-39"
+   ],
+   "Sixth Sunday after the Epiphany": [
+    "2 Kings 5:1-14",
+    "1 Corinthians 10:19-30, 10:31-11:1",
+    "Mark 1:40-45"
+   ],
+   "Seventh Sunday after the Epiphany": [
+    "Isaiah 43:18-25",
+    "2 Corinthians 1:18-22",
+    "Mark 2:1-12"
+   ],
+   "Eighth Sunday after the Epiphany": [
+    "Hosea 2:14-20",
+    "2 Corinthians 2:12-3:6",
+    "Mark 2:13-17, 18-22"
+   ],
+   "The Transfiguration of Our Lord": [
+    "2 Kings 2:1-12",
+    "2 Corinthians 3:12-13, 14-18, 4:1-6",
+    "Mark 9:2-9"
+   ],
+   "Ash Wednesday": [
+    "Joel 2:12-19",
+    "2 Corinthians 5:20b-6:10",
+    "Matthew 6:1-6, 16-21"
+   ],
+   "First Sunday in Lent": [
+    "Genesis 22:1-18",
+    "James 1:12-18",
+    "Mark 1:9-15"
+   ],
+   "Second Sunday in Lent": [
+    "Genesis 17:1-7, 15-16",
+    "Romans 5:1-11",
+    "Mark 8:27-38"
+   ],
+   "Third Sunday in Lent": [
+    "Exodus 20:1-17",
+    "1 Corinthians 1:18-31",
+    "John 2:13-22, 23-25"
+   ],
+   "Fourth Sunday in Lent": [
+    "Numbers 21:4-9",
+    "Ephesians 2:1-10",
+    "John 3:14-21"
+   ],
+   "Fifth Sunday in Lent": [
+    "Jeremiah 31:31-34",
+    "Hebrews 5:1-10",
+    "Mark 10:32-34, 35-45"
+   ],
+   "Palm Sunday": [
+    "Zechariah 9:9-12",
+    "Philippians 2:5-11",
+    "John 12:12-19"
+   ],
+   "Holy Thursday": [
+    "Exodus 24:3-11",
+    "1 Corinthians 10:16-17",
+    "Mark 14:12-26"
+   ],
+   "Good Friday": [
+    "Isaiah 52:13-53:12",
+    "Hebrews 4:14-16, 5:7-9",
+    "John 18:1-19:42"
+   ],
+   "The Resurrection of Our Lord": [
+    "Exodus 15:1-11",
+    "1 Corinthians 5:6b-8",
+    "John 20:1-18",
+    "Isaiah 25:6-9",
+    "1 Corinthians 15:1-11",
+    "Mark 16:1-8"
+   ],
+   "Second Sunday of Easter": [
+    "Acts 4:32-35",
+    "1 John 1:1-2:2",
+    "John 20:19-31"
+   ],
+   "Third Sunday of Easter": [
+    "Acts 3:11-21",
+    "1 John 3:1-7",
+    "Luke 24:36-49"
+   ],
+   "Fourth Sunday of Easter": [
+    "Acts 4:1-12",
+    "1 John 3:16-24",
+    "John 10:11-18"
+   ],
+   "Fifth Sunday of Easter": [
+    "Acts 8:26-40",
+    "1 John 4:1-11, 12-21",
+    "John 15:1-8"
+   ],
+   "Sixth Sunday of Easter": [
+    "Acts 10:34-48",
+    "1 John 5:1-8",
+    "John 15:9-17"
+   ],
+   "The Ascension of Our Lord": [
+    "Acts 1:1-11",
+    "Ephesians 1:15-23",
+    "Luke 24:44-53"
+   ],
+   "Seventh Sunday of Easter": [
+    "Acts 1:12-26",
+    "1 John 5:9-15",
+    "John 17:11b-19"
+   ],
+   "The Day of Pentecost": [
+    "Ezekiel 37:1-14",
+    "Acts 2:1-21",
+    "John 15:26-27, 16:4b-15"
+   ],
+   "The Holy Trinity": [
+    "Isaiah 6:1-8",
+    "Acts 2:14a, 22-36",
+    "John 3:1-17"
+   ],
+   "Proper 3": [
+    "Hosea 2:14-20",
+    "Acts 2:14a, 36-47",
+    "Mark 2:13-17, 18-22"
+   ],
+   "Proper 4": [
+    "Deuteronomy 5:12-15",
+    "2 Corinthians 4:5-12",
+    "Mark 2:23-28, 3:1-6"
+   ],
+   "Proper 5": [
+    "Genesis 3:8-15",
+    "2 Corinthians 4:13-5:1",
+    "Mark 3:20-35"
+   ],
+   "Proper 6": [
+    "Ezekiel 17:22-24",
+    "2 Corinthians 5:1-10, 11-17",
+    "Mark 4:26-34"
+   ],
+   "Proper 7": [
+    "Job 38:1-11",
+    "2 Corinthians 6:1-13",
+    "Mark 4:35-41"
+   ],
+   "Proper 8": [
+    "Lamentations 3:22-33",
+    "2 Corinthians 8:1-9, 13-15",
+    "Mark 5:21-43"
+   ],
+   "Proper 9": [
+    "Ezekiel 2:1-5",
+    "2 Corinthians 12:1-10",
+    "Mark 6:1-13"
+   ],
+   "Proper 10": [
+    "Amos 7:7-15",
+    "Ephesians 1:3-14",
+    "Mark 6:14-29"
+   ],
+   "Proper 11": [
+    "Jeremiah 23:1-6",
+    "Ephesians 2:11-22",
+    "Mark 6:30-44"
+   ],
+   "Proper 12": [
+    "Genesis 9:8-17",
+    "Ephesians 3:14-21",
+    "Mark 6:45-56"
+   ],
+   "Proper 13": [
+    "Exodus 16:2-15",
+    "Ephesians 4:1-16",
+    "John 6:22-35"
+   ],
+   "Proper 14": [
+    "1 Kings 19:1-8",
+    "Ephesians 4:17-5:2",
+    "John 6:35-51"
+   ],
+   "Proper 15": [
+    "Proverbs 9:1-10",
+    "Joshua 24:1-2a, 14-18",
+    "Ephesians 5:6-20",
+    "John 6:51-69"
+   ],
+   "Proper 16": [
+    "Isaiah 29:11-19",
+    "Ephesians 5:22-33",
+    "Mark 7:1-13"
+   ],
+   "Proper 17": [
+    "Deuteronomy 4:1-2, 6-9",
+    "Ephesians 6:10-20",
+    "Mark 7:14-23"
+   ],
+   "Proper 18": [
+    "Isaiah 35:4-7a",
+    "James 2:1-10, 14-18",
+    "Mark 7:24-30, 31-37"
+   ],
+   "Proper 19": [
+    "Isaiah 50:4-10",
+    "James 3:1-12",
+    "Mark 9:14-29"
+   ],
+   "Proper 20": [
+    "Jeremiah 11:18-20",
+    "James 3:13-4:10",
+    "Mark 9:30-37"
+   ],
+   "Proper 21": [
+    "Numbers 11:4-6, 10-16, 24-29",
+    "James 5:1-12, 13-20",
+    "Mark 9:38-50"
+   ],
+   "Proper 22": [
+    "Genesis 2:18-25",
+    "Hebrews 2:1-13, 14-18",
+    "Mark 10:2-16"
+   ],
+   "Proper 23": [
+    "Amos 5:6-7, 10-15",
+    "Hebrews 3:12-19",
+    "Mark 10:17-27"
+   ],
+   "Proper 24": [
+    "Ecclesiastes 5:10-20",
+    "Hebrews 4:1-13, 14-16",
+    "Mark 10:23-31"
+   ],
+   "Proper 25": [
+    "Jeremiah 31:7-9",
+    "Hebrews 7:23-28",
+    "Mark 10:46-52"
+   ],
+   "Proper 26": [
+    "Deuteronomy 6:1-9",
+    "Hebrews 9:11-14, 15-22",
+    "Mark 12:28-37"
+   ],
+   "Proper 27": [
+    "1 Kings 17:8-16",
+    "Hebrews 9:24-28",
+    "Mark 12:38-44"
+   ],
+   "Proper 28": [
+    "Daniel 12:1-3",
+    "Hebrews 10:11-25",
+    "Mark 13:1-13"
+   ],
+   "Proper 29": [
+    "Isaiah 51:4-6",
+    "Daniel 7:9-10, 13-14",
+    "Jude 20-25",
+    "Revelation 1:4b-8",
+    "Mark 13:24-37",
+    "John 18:33-37"
+   ]
+  },
+  "lsb-3c": {
+   "First Sunday in Advent": [
+    "Jeremiah 33:14-16",
+    "1 Thessalonians 3:9-13",
+    "Luke 19:28-40"
+   ],
+   "Second Sunday in Advent": [
+    "Malachi 3:1-7b",
+    "Philippians 1:2-11",
+    "Luke 3:1-14, 15-20"
+   ],
+   "Third Sunday in Advent": [
+    "Zephaniah 3:14-20",
+    "Philippians 4:4-7",
+    "Luke 7:18-28, 29-35"
+   ],
+   "Fourth Sunday in Advent": [
+    "Micah 5:2-5a",
+    "Hebrews 10:5-10",
+    "Luke 1:39-45, 46-56"
+   ],
+   "Christmas Eve": [
+    "Isaiah 7:10-14",
+    "1 John 4:7-16",
+    "Matthew 1:18-25"
+   ],
+   "Christmas Day": [
+    "Isaiah 9:2-7",
+    "Titus 2:11-14",
+    "Luke 2:1-14, 15-20",
+    "Isaiah 62:10-12",
+    "Titus 3:4-7",
+    "Isaiah 52:7-10",
+    "Hebrews 1:1-6, 7-12",
+    "John 1:1-14, 15-18"
+   ],
+   "First Sunday after Christmas": [
+    "Exodus 13:1-3, 11-15",
+    "Colossians 3:12-17",
+    "Luke 2:22-40"
+   ],
+   "Second Sunday after Christmas": [
+    "1 Kings 3:4-15",
+    "Ephesians 1:3-14",
+    "Luke 2:40-52"
+   ],
+   "The Epiphany of Our Lord": [
+    "Isaiah 60:1-6",
+    "Ephesians 3:1-12",
+    "Matthew 2:1-12"
+   ],
+   "The Baptism of Our Lord": [
+    "Isaiah 43:1-7",
+    "Romans 6:1-11",
+    "Luke 3:15-22"
+   ],
+   "Second Sunday after the Epiphany": [
+    "Isaiah 62:1-5",
+    "1 Corinthians 12:1-11",
+    "John 2:1-11"
+   ],
+   "Third Sunday after the Epiphany": [
+    "Nehemiah 8:1-3, 5-6, 8-10",
+    "1 Corinthians 12:12-31a",
+    "Luke 4:16-30"
+   ],
+   "Fourth Sunday after the Epiphany": [
+    "Jeremiah 1:4-10, 17-19",
+    "1 Corinthians 12:31b-13:13",
+    "Luke 4:31-40"
+   ],
+   "Fifth Sunday after the Epiphany": [
+    "Isaiah 6:1-8, 9-13",
+    "1 Corinthians 14:12b-20",
+    "Luke 5:1-11"
+   ],
+   "Sixth Sunday after the Epiphany": [
+    "Jeremiah 17:5-8",
+    "1 Corinthians 15:1-11, 12-20",
+    "Luke 6:17-26"
+   ],
+   "Seventh Sunday after the Epiphany": [
+    "Genesis 45:3-15",
+    "1 Corinthians 15:21-26, 30-42",
+    "Luke 6:27-38"
+   ],
+   "Eighth Sunday after the Epiphany": [
+    "Jeremiah 7:1-7, 8-15",
+    "1 Corinthians 15:42-52, 53-58",
+    "Luke 6:39-49"
+   ],
+   "The Transfiguration of Our Lord": [
+    "Deuteronomy 34:1-12",
+    "Hebrews 3:1-6",
+    "Luke 9:28-36"
+   ],
+   "Ash Wednesday": [
+    "Joel 2:12-19",
+    "2 Corinthians 5:20b-6:10",
+    "Matthew 6:1-6, 16-21"
+   ],
+   "First Sunday in Lent": [
+    "Deuteronomy 26:1-11",
+    "Romans 10:8b-13",
+    "Luke 4:1-13"
+   ],
+   "Second Sunday in Lent": [
+    "Jeremiah 26:8-15",
+    "Philippians 3:17-4:1",
+    "Luke 13:31-35"
+   ],
+   "Third Sunday in Lent": [
+    "Ezekiel 33:7-20",
+    "1 Corinthians 10:1-13",
+    "Luke 13:1-9"
+   ],
+   "Fourth Sunday in Lent": [
+    "Isaiah 12:1-6",
+    "2 Corinthians 5:16-21",
+    "Luke 15:1-3, 11-32"
+   ],
+   "Fifth Sunday in Lent": [
+    "Isaiah 43:16-21",
+    "Philippians 3:4b-7, 8-14",
+    "Luke 20:9-19"
+   ],
+   "Palm Sunday": [
+    "Deuteronomy 32:36-39",
+    "Philippians 2:5-11",
+    "John 12:12-19"
+   ],
+   "Holy Thursday": [
+    "Jeremiah 31:31-34",
+    "Hebrews 10:15-25",
+    "Luke 22:7-20"
+   ],
+   "Good Friday": [
+    "Isaiah 52:13-53:12",
+    "Hebrews 4:14-16, 5:7-9",
+    "John 18:1-19:42"
+   ],
+   "The Resurrection of Our Lord": [
+    "Job 19:23-27",
+    "1 Corinthians 15:51-57",
+    "John 20:1-18",
+    "Isaiah 65:17-25",
+    "1 Corinthians 15:19-26",
+    "Luke 24:1-12"
+   ],
+   "Second Sunday of Easter": [
+    "Acts 15:12-20, 21-32",
+    "Revelation 1:4-18",
+    "John 20:19-31"
+   ],
+   "Third Sunday of Easter": [
+    "Acts 9:1-22",
+    "Revelation 5:1-7, 8-14",
+    "John 21:1-14, 15-19"
+   ],
+   "Fourth Sunday of Easter": [
+    "Acts 20:17-35",
+    "Revelation 7:9-17",
+    "John 10:22-30"
+   ],
+   "Fifth Sunday of Easter": [
+    "Acts 11:1-18",
+    "Revelation 21:1-6",
+    "John 16:12-22"
+   ],
+   "Sixth Sunday of Easter": [
+    "Acts 16:9-15",
+    "Revelation 21:9-14, 21-27",
+    "John 16:23-33"
+   ],
+   "The Ascension of Our Lord": [
+    "Acts 1:1-11",
+    "Ephesians 1:15-23",
+    "Luke 24:44-53"
+   ],
+   "Seventh Sunday of Easter": [
+    "Acts 1:12-26",
+    "Revelation 22:1-6, 7-11, 12-20",
+    "John 17:20-26"
+   ],
+   "The Day of Pentecost": [
+    "Genesis 11:1-9",
+    "Acts 2:1-21",
+    "John 14:23-31"
+   ],
+   "The Holy Trinity": [
+    "Proverbs 8:1-4, 22-31",
+    "Acts 2:14a, 22-36",
+    "John 8:48-59"
+   ],
+   "Proper 3": [
+    "Genesis 50:15-21",
+    "Acts 2:14a, 36-47",
+    "Luke 6:20-26, 27-42"
+   ],
+   "Proper 4": [
+    "1 Kings 8:22-24, 27-29, 41-43",
+    "Galatians 1:1-12",
+    "Luke 7:1-10"
+   ],
+   "Proper 5": [
+    "1 Kings 17:17-24",
+    "Galatians 1:11-24",
+    "Luke 7:11-17"
+   ],
+   "Proper 6": [
+    "2 Samuel 11:26-12:10, 13-14",
+    "Galatians 2:15-21, 3:10-14",
+    "Luke 7:36-8:3"
+   ],
+   "Proper 7": [
+    "Isaiah 65:1-9",
+    "Galatians 3:23-4:7",
+    "Luke 8:26-39"
+   ],
+   "Proper 8": [
+    "1 Kings 19:9b-21",
+    "Galatians 5:1, 13-25",
+    "Luke 9:51-62"
+   ],
+   "Proper 9": [
+    "Isaiah 66:10-14",
+    "Galatians 6:1-10, 14-18",
+    "Luke 10:1-20"
+   ],
+   "Proper 10": [
+    "Leviticus 18:1-5, 19:9-18",
+    "Colossians 1:1-14",
+    "Luke 10:25-37"
+   ],
+   "Proper 11": [
+    "Genesis 18:1-10a, 10b-14",
+    "Colossians 1:21-29",
+    "Luke 10:38-42"
+   ],
+   "Proper 12": [
+    "Genesis 18:17-19, 20-33",
+    "Colossians 2:6-15, 16-19",
+    "Luke 11:1-13"
+   ],
+   "Proper 13": [
+    "Ecclesiastes 1:2, 12-14, 2:18-26",
+    "Colossians 3:1-11",
+    "Luke 12:13-21"
+   ],
+   "Proper 14": [
+    "Genesis 15:1-6",
+    "Hebrews 11:1-16",
+    "Luke 12:22-34, 35-40"
+   ],
+   "Proper 15": [
+    "Jeremiah 23:16-29",
+    "Hebrews 11:17-31, 32-40, 12:1-3",
+    "Luke 12:49-53, 54-56"
+   ],
+   "Proper 16": [
+    "Isaiah 66:18-23",
+    "Hebrews 12:4-24, 25-29",
+    "Luke 13:22-30"
+   ],
+   "Proper 17": [
+    "Proverbs 25:2-10",
+    "Hebrews 3:1-17",
+    "Luke 14:1-14"
+   ],
+   "Proper 18": [
+    "Deuteronomy 30:15-20",
+    "Philemon 1-21",
+    "Luke 14:25-35"
+   ],
+   "Proper 19": [
+    "Ezekiel 34:11-24",
+    "1 Timothy 1:5-11, 12-17",
+    "Luke 15:1-10"
+   ],
+   "Proper 20": [
+    "Amos 8:4-7",
+    "2 Timothy 2:1-15",
+    "Luke 16:1-15"
+   ],
+   "Proper 21": [
+    "Amos 6:1-7",
+    "1 Timothy 3:1-13",
+    "Luke 16:19-31"
+   ],
+   "Proper 22": [
+    "Habakkuk 1:1-4, 2:1-4",
+    "2 Timothy 1:1-14",
+    "Luke 17:1-10"
+   ],
+   "Proper 23": [
+    "Ruth 1:1-19a",
+    "2 Timothy 2:1-13",
+    "Luke 17:11-19"
+   ],
+   "Proper 24": [
+    "Genesis 32:22-30",
+    "2 Timothy 3:14-4:5",
+    "Luke 18:1-8"
+   ],
+   "Proper 25": [
+    "Genesis 4:1-15",
+    "2 Timothy 4:6-8, 16-18",
+    "Luke 18:9-17"
+   ],
+   "Proper 26": [
+    "Isaiah 1:10-18",
+    "2 Thessalonians 1:1-5, 6-10, 11-12",
+    "Luke 19:1-10"
+   ],
+   "Proper 27": [
+    "Exodus 3:1-15",
+    "2 Thessalonians 2:1-8, 13-17",
+    "Luke 20:27-40"
+   ],
+   "Proper 28": [
+    "Malachi 4:1-6",
+    "2 Thessalonians 3:1-5, 6-13",
+    "Luke 21:5-28, 29-36"
+   ],
+   "Proper 29": [
+    "Malachi 3:13-18",
+    "Colossians 1:13-20",
+    "Luke 23:27-43"
+   ]
+  },
+  "lsb-feasts": {
+   "St. Andrew": {
+    "readings": [
+     "Ezekiel 3:16-21",
+     "Romans 10:8b-18",
+     "John 1:35-42a"
+    ],
+    "month": 11,
+    "day": 30
+   },
+   "St. Thomas": {
+    "readings": [
+     "Judges 6:36-40",
+     "Ephesians 4:7, 11-16",
+     "John 20:24-29"
+    ],
+    "month": 12,
+    "day": 21
+   },
+   "St. Stephen": {
+    "readings": [
+     "2 Chronicles 24:17-22",
+     "Acts 6:8-7:2a, 51-60",
+     "Matthew 23:34-39"
+    ],
+    "month": 12,
+    "day": 26
+   },
+   "St. John, Apostle and Evangelist": {
+    "readings": [
+     "Revelation 1:1-6",
+     "1 John 1:1-2:2",
+     "John 21:20-25"
+    ],
+    "month": 12,
+    "day": 27
+   },
+   "Holy Innocents": {
+    "readings": [
+     "Jeremiah 31:15-17",
+     "Revelation 14:1-5",
+     "Matthew 2:13-18"
+    ],
+    "month": 12,
+    "day": 28
+   },
+   "New Year's Eve": {
+    "readings": [
+     "Isaiah 30:8-14, 15-17",
+     "Romans 8:31b-39",
+     "Luke 12:35-40"
+    ],
+    "month": 12,
+    "day": 31
+   },
+   "Circumcision and Name of Jesus": {
+    "readings": [
+     "Numbers 6:22-27",
+     "Galatians 3:23-29",
+     "Luke 2:21"
+    ],
+    "month": 1,
+    "day": 1
+   },
+   "Confession of St. Peter": {
+    "readings": [
+     "Acts 4:8-13",
+     "2 Peter 1:1-15",
+     "Mark 8:27-35, 36-9:1"
+    ],
+    "month": 1,
+    "day": 18
+   },
+   "St. Timothy": {
+    "readings": [
+     "Acts 16:1-5",
+     "1 Timothy 6:11-16",
+     "Matthew 24:42-47"
+    ],
+    "month": 1,
+    "day": 24
+   },
+   "Conversion of St. Paul": {
+    "readings": [
+     "Acts 9:1-22",
+     "Galatians 1:11-24",
+     "Matthew 19:27-30"
+    ],
+    "month": 1,
+    "day": 25
+   },
+   "St. Titus": {
+    "readings": [
+     "Acts 20:28-35",
+     "Titus 1:1-9",
+     "Luke 10:1-9"
+    ],
+    "month": 1,
+    "day": 26
+   },
+   "Purification of Mary and Presentation of Our Lord": {
+    "readings": [
+     "1 Samuel 1:21-28",
+     "Hebrews 2:14-18",
+     "Luke 2:22-32, 33-40"
+    ],
+    "month": 2,
+    "day": 2
+   },
+   "St. Matthias": {
+    "readings": [
+     "Isaiah 66:1-2",
+     "Acts 1:15-26",
+     "Matthew 11:25-30"
+    ],
+    "month": 2,
+    "day": 24
+   },
+   "St. Joseph": {
+    "readings": [
+     "2 Samuel 7:4-16",
+     "Romans 4:13-18",
+     "Matthew 2:13-15, 19-23"
+    ],
+    "month": 3,
+    "day": 19
+   },
+   "Annunciation of Our Lord": {
+    "readings": [
+     "Isaiah 7:10-14",
+     "Hebrews 10:4-10",
+     "Luke 1:26-38"
+    ],
+    "month": 3,
+    "day": 25
+   },
+   "St. Mark": {
+    "readings": [
+     "Isaiah 52:7-10",
+     "2 Timothy 4:5-18",
+     "Mark 16:14-20"
+    ],
+    "month": 4,
+    "day": 25
+   },
+   "St. Philip and St. James": {
+    "readings": [
+     "Isaiah 30:18-21",
+     "Ephesians 2:19-22",
+     "John 14:1-14"
+    ],
+    "month": 5,
+    "day": 1
+   },
+   "Visitation": {
+    "readings": [
+     "Isaiah 11:1-5",
+     "Romans 12:9-16",
+     "Luke 1:39-45, 46-56"
+    ],
+    "month": 5,
+    "day": 31
+   },
+   "St. Barnabas": {
+    "readings": [
+     "Isaiah 42:5-12",
+     "Acts 11:19-30, 13:1-3",
+     "Mark 6:7-13"
+    ],
+    "month": 6,
+    "day": 11
+   },
+   "Nativity of St. John the Baptist": {
+    "readings": [
+     "Isaiah 40:1-5",
+     "Acts 13:13-26",
+     "Luke 1:57-80"
+    ],
+    "month": 6,
+    "day": 24
+   },
+   "St. Peter and St. Paul": {
+    "readings": [
+     "Acts 15:1-12, 13-21",
+     "Galatians 2:1-10",
+     "Matthew 16:13-19"
+    ],
+    "month": 6,
+    "day": 29
+   },
+   "St. Mary Magdalene": {
+    "readings": [
+     "Proverbs 31:10-31",
+     "Acts 13:26-31",
+     "John 20:1-2, 10-18"
+    ],
+    "month": 7,
+    "day": 22
+   },
+   "St. James the Elder": {
+    "readings": [
+     "Acts 11:27-12:5",
+     "Romans 8:28-39",
+     "Mark 10:35-45"
+    ],
+    "month": 7,
+    "day": 25
+   },
+   "St. Mary, Mother of Our Lord": {
+    "readings": [
+     "Isaiah 61:7-11",
+     "Galatians 4:4-7",
+     "Luke 1:39-45, 46-55"
+    ],
+    "month": 8,
+    "day": 15
+   },
+   "St. Bartholomew": {
+    "readings": [
+     "Proverbs 3:1-8",
+     "2 Corinthians 4:7-10",
+     "Luke 22:24-30",
+     "John 1:43-51"
+    ],
+    "month": 8,
+    "day": 24
+   },
+   "Martyrdom of St. John the Baptist": {
+    "readings": [
+     "Revelation 6:9-11",
+     "Romans 6:1-5",
+     "Mark 6:14-29"
+    ],
+    "month": 8,
+    "day": 29
+   },
+   "Holy Cross Day": {
+    "readings": [
+     "Numbers 21:4-9",
+     "1 Corinthians 1:18-25",
+     "John 12:20-33"
+    ],
+    "month": 9,
+    "day": 14
+   },
+   "St. Matthew": {
+    "readings": [
+     "Ezekiel 2:8-3:11",
+     "Ephesians 4:7-16",
+     "Matthew 9:9-13"
+    ],
+    "month": 9,
+    "day": 21
+   },
+   "St. Michael and All Angels": {
+    "readings": [
+     "Daniel 10:10-14, 12:1-3",
+     "Revelation 12:7-12",
+     "Matthew 18:1-11",
+     "Luke 10:17-20"
+    ],
+    "month": 9,
+    "day": 29
+   },
+   "St. Luke": {
+    "readings": [
+     "Isaiah 35:5-8",
+     "2 Timothy 4:5-18",
+     "Luke 10:1-9"
+    ],
+    "month": 10,
+    "day": 18
+   },
+   "St. James of Jerusalem": {
+    "readings": [
+     "Acts 15:12-22a",
+     "James 1:1-12",
+     "Matthew 13:54-58"
+    ],
+    "month": 10,
+    "day": 23
+   },
+   "St. Simon and St. Jude": {
+    "readings": [
+     "Jeremiah 26:1-16",
+     "1 Peter 1:3-9",
+     "John 15:12-16, 17-21"
+    ],
+    "month": 10,
+    "day": 28
+   },
+   "Reformation Day": {
+    "readings": [
+     "Revelation 14:6-7",
+     "Romans 3:19-28",
+     "John 8:31-36",
+     "Matthew 11:12-19"
+    ],
+    "month": 10,
+    "day": 31
+   },
+   "All Saints' Day": {
+    "readings": [
+     "Revelation 7:2-8, 9-17",
+     "1 John 3:1-3",
+     "Matthew 5:1-12"
+    ],
+    "month": 11,
+    "day": 1
+   },
+   "Anniversary of a Congregation": {
+    "readings": [
+     "1 Kings 8:22-30",
+     "Revelation 21:1-5",
+     "Luke 19:1-10"
+    ]
+   },
+   "Mission Observance": {
+    "readings": [
+     "Isaiah 62:1-7",
+     "Romans 10:11-17",
+     "Luke 24:44-53"
+    ]
+   },
+   "Christian Education": {
+    "readings": [
+     "Deuteronomy 6:4-15",
+     "Acts 2:37-41",
+     "Luke 18:15-17"
+    ]
+   },
+   "Harvest Observance": {
+    "readings": [
+     "Deuteronomy 26:1-11",
+     "2 Corinthians 9:6-15",
+     "Luke 12:13-21"
+    ]
+   },
+   "Day of Thanksgiving": {
+    "readings": [
+     "Deuteronomy 8:1-10",
+     "Philippians 4:6-20",
+     "1 Timothy 2:1-14",
+     "Luke 17:11-19"
+    ]
+   },
+   "Day of Supplication and Prayer": {
+    "readings": [
+     "Joel 2:12-19",
+     "1 John 1:5-2:2",
+     "Matthew 6:16-21"
+    ]
+   },
+   "Day of National or Local Tragedy": {
+    "readings": [
+     "Job 30:16-24",
+     "Revelation 7:13-17",
+     "Romans 8:31-39",
+     "Hebrews 12:4-13",
+     "Luke 13:1-9",
+     "Matthew 24:32-35"
+    ]
+   }
+  }
+ }
+}
