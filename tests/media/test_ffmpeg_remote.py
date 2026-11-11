@@ -511,9 +511,11 @@ def test_prefetch_overlaps_upstream_latency(server: _Server, tmp_path: Path) -> 
         parallel = time.monotonic()
         assert read_all(url) == data
         parallel = time.monotonic() - parallel
-    print(f"\nserial {serial:.2f}s -> prefetch {parallel:.2f}s "
-          f"(upstream latency {server.latency}s/request, max in flight "
-          f"{server.max_in_flight})")
+    print(
+        f"\nserial {serial:.2f}s -> prefetch {parallel:.2f}s "
+        f"(upstream latency {server.latency}s/request, max in flight "
+        f"{server.max_in_flight})"
+    )
     assert server.max_in_flight >= 2, "prefetches must overlap upstream"
     assert parallel < serial / 2, f"prefetch {parallel:.2f}s vs serial {serial:.2f}s"
     assert len(server.requests) - requests_serial <= len(data) // chunk + DEFAULT_PREFETCH
