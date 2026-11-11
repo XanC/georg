@@ -58,8 +58,9 @@ def _key(b: ServiceBoundaries) -> list[int]:
     return [b.service_start_ms, b.sermon_start_ms, b.sermon_end_ms, b.service_end_ms]
 
 
-def _config(tmp_path: Path) -> GeorgConfig:
+def _config(tmp_path: Path, review: dict[str, object] | None = None) -> GeorgConfig:
     return GeorgConfig.model_validate({
+        "review": review or {},
         "instance": "test",
         "data_dir": tmp_path / "data",
         "inputs": [{"name": "drive", "type": "local_folder", "options": {"root": tmp_path}}],
@@ -69,8 +70,8 @@ def _config(tmp_path: Path) -> GeorgConfig:
 
 
 @pytest.fixture
-def env(engine: Engine, tmp_path: Path) -> Iterator[Env]:
-    config = _config(tmp_path)
+def env(engine: Engine, tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Env]:
+    config = _config(tmp_path, getattr(request, "param", None))
     store = LocalStore.for_data_dir(config.data_dir)
     (tmp_path / "service_hq.mp3").write_bytes(AUDIO)
     (tmp_path / "report.json").write_text(json.dumps(REPORT))
@@ -140,8 +141,8 @@ def _form(env: Env, **changes: str) -> dict[str, str]:
     form = dict(re.findall(r'<input[^>]*name="([^"]+)"[^>]*value="([^"]*)"', html))
     for name in ("scripture", "summary", "transcript"):
         match = re.search(rf'<textarea[^>]*name="{name}"[^>]*>(.*?)</textarea>', html, re.S)
-        assert match
-        form[name] = match.group(1)
+        if match:  # absent when hidden
+            form[name] = match.group(1)
     form.pop("revision_id", None)
     form.pop("note", None)
     return {**form, **changes}
@@ -262,6 +263,72 @@ def test_review_page_with_preview_uses_recording_time(env: Env, tmp_path: Path) 
     for name in ("service_start", "sermon_start", "sermon_end", "service_end"):
         assert f'class="play-from" data-field="f-{name}"' in html
         assert f'class="set-from" data-field="f-{name}"' in html
+
+
+def _add_cut_preview(env: Env, tmp_path: Path, name: str, span: str) -> int:
+    path = tmp_path / f"{name}.mp3"
+    path.write_bytes(AUDIO + name.encode())
+    ref = LocalStore.for_data_dir(tmp_path / "data").put(path, mime="audio/mpeg")
+    with session_factory(env.engine).begin() as s:
+        meta = {"name": name, "span": span, "preview": True, "boundaries": _key(BOUNDS)}
+        return (
+            ArtifactRepository(s)
+            .add(env.service_id, "rendition", ref, storage_key=ref.sha256, meta=meta)
+            .id
+        )
+
+
+def test_review_page_shows_cut_previews_and_downloads(env: Env, tmp_path: Path) -> None:
+    _add_preview(env, tmp_path)
+    service_id = _add_cut_preview(env, tmp_path, "service_preview", "service")
+    sermon_id = _add_cut_preview(env, tmp_path, "sermon_preview", "sermon")
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    sermon_label = "Sermon (as cut, 0:20:00.5\N{EN DASH}0:40:00.0)"
+    service_label = "Service (as cut, 0:01:00.0\N{EN DASH}1:00:00.0)"
+    assert html.index(sermon_label) < html.index(service_label)
+    for artifact_id in (sermon_id, service_id):
+        assert f'<audio controls preload="auto" src="/artifacts/{artifact_id}"' in html
+    assert f'<a href="/artifacts/{env.audio_id}" download>service_hq</a>' in html
+    assert f'src="/artifacts/{env.audio_id}"' not in html  # no full-quality player
+
+
+def test_review_page_without_cut_previews_keeps_full_quality_players(env: Env) -> None:
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert f'src="/artifacts/{env.audio_id}"' in html
+    assert "(as cut," not in html
+    assert "Full quality:" not in html
+
+
+@pytest.mark.parametrize("env", [{"hidden_fields": ["series", "summary"]}], indirect=True)
+def test_hidden_fields_are_left_off_and_kept(env: Env) -> None:
+    with session_factory(env.engine).begin() as s:
+        sermons = SermonRepository(s)
+        sermons.add_revision(
+            env.sermon_id,
+            author="system",
+            boundaries=BOUNDS,
+            metadata=META.model_copy(update={"series": "Beatitudes", "summary": "Blessed."}),
+            transcript_markdown="# Saints",
+        )
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert 'name="series"' not in html
+    assert 'name="summary"' not in html
+    assert 'name="occasion"' in html
+    response = env.client.post(
+        f"/sermons/{env.sermon_id}/revisions", data=_form(env, title="All Saints")
+    )
+    assert "Saved revision 3." in response.text
+    with session_factory(env.engine)() as s:
+        sermons = SermonRepository(s)
+        revision = sermons.current_revision(env.sermon_id)
+        assert revision is not None
+        metadata = sermons.metadata(revision)
+    assert (metadata.title, metadata.series, metadata.summary) == (
+        "All Saints", "Beatitudes", "Blessed."
+    )  # fmt: skip
 
 
 def test_preview_supports_range_requests(env: Env, tmp_path: Path) -> None:

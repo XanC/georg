@@ -58,6 +58,20 @@ def test_preview_rendition_name_is_reserved(tmp_path: Path) -> None:
         load_config(bad)
 
 
+def test_review_hidden_fields(tmp_path: Path) -> None:
+    assert load_config(EXAMPLE).review.hidden_fields == ()
+    text = EXAMPLE.read_text().replace(
+        "require_approval = true", 'require_approval = true\nhidden_fields = ["series", "summary"]'
+    )
+    good = tmp_path / "good.toml"
+    good.write_text(text)
+    assert load_config(good).review.hidden_fields == ("series", "summary")
+    bad = tmp_path / "bad.toml"
+    bad.write_text(text.replace('"summary"]', '"title"]'))
+    with pytest.raises(ConfigError, match="hidden_fields"):
+        load_config(bad)
+
+
 def test_resolve_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GEORG_TEST_SECRET", "s3cret")
     assert resolve_secret("env:GEORG_TEST_SECRET") == "s3cret"

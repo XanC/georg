@@ -50,7 +50,8 @@ Reviewers work in the web UI: add an account with
 `uv run georg user add alice --role reviewer` (prompts for a password), then start
 it with `GEORG_SECRET_KEY=<random string> uv run georg web` and open
 <http://127.0.0.1:8000>. There a reviewer listens to the whole recording (the `preview` player, in
-recording time like the boundary fields) and the cut renditions, corrects the
+recording time like the boundary fields) and low-quality previews of the sermon and
+service as cut (with download links for the full-quality renditions), corrects the
 boundaries, metadata, and transcript (each save is a new revision; moved boundaries
 re-render the audio), and approves a revision for publishing. `georg web --dev`
 uses a throwaway key and allows session cookies over plain HTTP; otherwise serve

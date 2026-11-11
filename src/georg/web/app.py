@@ -54,6 +54,7 @@ from georg.web.forms import (
     ReviewEdit,
     form_values,
     format_hms,
+    format_tenths,
     parse_edit,
 )
 
@@ -67,6 +68,8 @@ PROCESS: Final = "process"
 ACTIVE_STATUSES: Final = ("queued", "running")
 SEEK_RENDITION: Final = "service_hq"
 PREVIEW_RENDITION: Final = "preview"
+CUT_PREVIEW_LABELS: Final = {"sermon_preview": "Sermon", "service_preview": "Service"}
+"""Built-in low-quality copies of the cuts (`georg.pipeline.local.CUT_PREVIEWS`)."""
 AUDIO_KINDS: Final = ("sermon_audio", "rendition")
 SESSION_FLASH: Final = "flash"
 _HERE = Path(__file__).parent
@@ -88,6 +91,7 @@ class AudioFile:
     """Source-timeline position of the file's first sample, when known."""
     current: bool
     """Cut at the current revision's boundaries."""
+    label: str = ""
 
 
 def _bounds_key(b: ServiceBoundaries) -> list[int]:
@@ -144,6 +148,7 @@ def create_app(
     templates = Jinja2Templates(directory=_HERE / "templates")
     templates.env.globals.update(version=__version__, source_url=source_url)
     templates.env.filters["hms"] = format_hms
+    templates.env.filters["tenths"] = format_tenths
 
     @app.middleware("http")
     async def security_headers(
@@ -302,7 +307,11 @@ def create_app(
         publications = PublicationRepository(session).for_sermon(sermon_id)
         published = {p.target_name for p in publications}
         preview = _preview(artifacts)
-        seek = preview or next((a for a in audio if a.name == SEEK_RENDITION), None)
+        cut_previews = _cut_previews(artifacts, boundaries)
+        seek = preview or next(
+            (a for a in [*cut_previews, *audio] if a.name in ("service_preview", SEEK_RENDITION)),
+            None,
+        )
         return {
             "service": service,
             "sermon": sermon,
@@ -313,6 +322,8 @@ def create_app(
             "boundary_fields": BOUNDARY_FIELDS,
             "audio": audio,
             "preview": preview,
+            "cut_previews": cut_previews,
+            "hidden": set(config.review.hidden_fields),
             "seek": seek,
             "rendered": rendered,
             "rendering": bool(renders),
@@ -368,6 +379,7 @@ def create_app(
                         sermons.boundaries(current),
                         sermons.metadata(current),
                         current.transcript_markdown,
+                        hidden=config.review.hidden_fields,
                     )
                 except FormError as exc:
                     errors = exc.errors
@@ -568,6 +580,8 @@ def _audio_files(
     for a in artifacts:
         if a.kind not in AUDIO_KINDS or a.meta.get("name") == PREVIEW_RENDITION:
             continue
+        if a.meta.get("name") in CUT_PREVIEW_LABELS:
+            continue
         name = str(a.meta.get("name") or a.kind)
         cut = a.meta.get("boundaries")
         current = cut == key
@@ -586,6 +600,24 @@ def _preview(artifacts: Any) -> AudioFile | None:
         a for a in artifacts if a.kind == "rendition" and a.meta.get("name") == PREVIEW_RENDITION
     ]
     return AudioFile(found[-1], PREVIEW_RENDITION, 0, True) if found else None
+
+
+def _cut_previews(artifacts: Any, boundaries: ServiceBoundaries) -> list[AudioFile]:
+    """The low-quality copy of each cut: at the current boundaries if any, else the newest."""
+    key = _bounds_key(boundaries)
+    chosen: dict[str, AudioFile] = {}
+    for a in artifacts:
+        name = a.meta.get("name")
+        cut = a.meta.get("boundaries")
+        if a.kind != "rendition" or name not in CUT_PREVIEW_LABELS or not isinstance(cut, list):
+            continue
+        start, end = (cut[1], cut[2]) if name == "sermon_preview" else (cut[0], cut[3])
+        times = f"{format_tenths(start)}\N{EN DASH}{format_tenths(end)}"
+        label = f"{CUT_PREVIEW_LABELS[name]} (as cut, {times})"
+        previous = chosen.get(name)
+        if previous is None or cut == key or not previous.current:
+            chosen[name] = AudioFile(a, name, start, cut == key, label)
+    return sorted(chosen.values(), key=lambda f: f.name != "sermon_preview")
 
 
 __all__ = ["create_app"]

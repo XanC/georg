@@ -37,6 +37,20 @@
 
 <section aria-labelledby="audio-h">
   <h2 id="audio-h">Rendered audio (cut at the boundaries)</h2>
+  {% if cut_previews %}
+  {% for f in cut_previews %}
+  <figure class="player">
+    <figcaption>{{ f.label }}{% if not f.current %} (earlier boundaries){% endif %}</figcaption>
+    <audio controls preload="auto" src="/artifacts/{{ f.artifact.id }}"
+      {% if not preview and seek and f.artifact.id == seek.artifact.id %}id="seek-audio" data-origin-ms="{{ f.origin_ms or 0 }}"{% endif %}></audio>
+  </figure>
+  {% endfor %}
+  {% if audio %}
+  <p class="downloads">Full quality:
+    {% for f in audio %}<a href="/artifacts/{{ f.artifact.id }}" download>{{ f.name }}</a>{% if not f.current and f.artifact.meta.get("boundaries") %} (earlier boundaries){% endif %}{{ " · " if not loop.last }}{% endfor %}
+  </p>
+  {% endif %}
+  {% else %}
   {% for f in audio %}
   <figure class="player">
     <figcaption>{{ f.name }}{% if not f.current and f.artifact.meta.get("boundaries") %} (earlier boundaries){% endif %}</figcaption>
@@ -46,6 +60,7 @@
   {% else %}
   <p>No audio has been rendered yet.</p>
   {% endfor %}
+  {% endif %}
 </section>
 
 {% if report %}
@@ -73,18 +88,16 @@
   <input type="hidden" name="base_revision_id" value="{{ revision.id }}">
   <fieldset>
     <legend>Boundaries (H:MM:SS on the recording)</legend>
-    <div class="grid">
+    <div class="boundaries">
     {% for name, label in boundary_fields %}
-      <div class="field">
+      <div class="boundary">
         <label for="f-{{ name }}">{{ label }}</label>
-        <div class="row">
-          <input id="f-{{ name }}" name="{{ name }}" value="{{ values[name] }}" inputmode="numeric"
+          <input id="f-{{ name }}" name="{{ name }}" value="{{ values[name] }}" inputmode="decimal"
             pattern="\d+:[0-5]\d:[0-5]\d(\.\d{1,3})?" required>
           <button type="button" class="play-from" data-field="f-{{ name }}" {% if not seek %}disabled{% endif %}
             aria-label="Jump the player to {{ label | lower }}">▶ Jump to</button>
           <button type="button" class="set-from" data-field="f-{{ name }}" {% if not seek %}disabled{% endif %}
             aria-label="Set {{ label | lower }} to the player position">Set to player</button>
-        </div>
       </div>
     {% endfor %}
     </div>
@@ -92,16 +105,18 @@
   </fieldset>
   <fieldset>
     <legend>Metadata</legend>
-    <div class="grid">
+    <div class="stack">
       <label>Title <input name="title" value="{{ values.title }}"></label>
+      {% if "occasion" not in hidden %}<label>Occasion <input name="occasion" value="{{ values.occasion }}"></label>{% endif %}
       <label>Preacher <input name="preacher" value="{{ values.preacher }}"></label>
-      <label>Service date <input name="service_date" type="date" value="{{ values.service_date }}"></label>
-      <label>Service time <input name="service_time" type="time" value="{{ values.service_time }}"></label>
-      <label>Series <input name="series" value="{{ values.series }}"></label>
-      <label>Occasion <input name="occasion" value="{{ values.occasion }}"></label>
+      <div class="pair">
+        <label>Service date <input name="service_date" type="date" value="{{ values.service_date }}"></label>
+        {% if "service_time" not in hidden %}<label>Service time <input name="service_time" type="time" value="{{ values.service_time }}"></label>{% endif %}
+      </div>
+      {% if "series" not in hidden %}<label>Series <input name="series" value="{{ values.series }}"></label>{% endif %}
+      {% if "scripture" not in hidden %}<label>Scripture (one reference per line) <textarea name="scripture" rows="3">{{ values.scripture }}</textarea></label>{% endif %}
+      {% if "summary" not in hidden %}<label>Summary <textarea name="summary" rows="3">{{ values.summary }}</textarea></label>{% endif %}
     </div>
-    <label>Scripture (one reference per line) <textarea name="scripture" rows="3">{{ values.scripture }}</textarea></label>
-    <label>Summary <textarea name="summary" rows="3">{{ values.summary }}</textarea></label>
   </fieldset>
   <label for="f-transcript">Transcript (Markdown)</label>
   <textarea id="f-transcript" name="transcript" rows="20" class="transcript">{{ values.transcript }}</textarea>

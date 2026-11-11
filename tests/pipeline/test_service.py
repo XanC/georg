@@ -22,7 +22,10 @@ from georg.db.repositories import (
     UserRepository,
 )
 from georg.jobs.queue import JobQueue
+from georg.media.ffmpeg import probe
 from georg.pipeline import Worker, discover, process_service, publish_sermon, render_revision
+from georg.pipeline.service import _renditions_for
+from georg.storage.local import LocalStore
 
 
 @pytest.fixture
@@ -68,8 +71,18 @@ def test_discover_then_worker_proposes_a_revision(config: GeorgConfig, engine: E
         assert revision.transcript_markdown is not None
         assert "Grace to you." in revision.transcript_markdown
         kinds = sorted(a.kind for a in ArtifactRepository(s).for_service(service_id))
-        assert kinds == ["boundary_proposal", "rendition", "rendition", "rendition",
+        assert kinds == ["boundary_proposal", *["rendition"] * 5,
                          "sermon_audio", "transcript_formatted"]  # fmt: skip
+        cuts = cut_previews(s, service_id)
+        assert sorted(cuts) == ["sermon_preview", "service_preview"]
+        assert cuts["sermon_preview"].meta == {
+            "name": "sermon_preview", "span": "sermon", "preview": True,
+            "boundaries": [1_000, 4_000, 8_000, 11_000],
+        }  # fmt: skip
+        assert abs((cuts["sermon_preview"].duration_ms or 0) - 4_000) < 200
+        assert abs((cuts["service_preview"].duration_ms or 0) - 10_000) < 200
+        info = probe(store_path(config, cuts["service_preview"]))
+        assert (info.channels, info.sample_rate) == (1, 22050)
         [preview] = previews(s, service_id)
         assert preview.meta == {"name": "preview", "span": "recording"}
         assert abs((preview.duration_ms or 0) - 12_000) < 200
@@ -191,6 +204,15 @@ def previews(s: Session, service_id: int) -> list[Artifact]:
             if a.meta.get("name") == "preview"]  # fmt: skip
 
 
+def cut_previews(s: Session, service_id: int) -> dict[str, Artifact]:
+    return {str(a.meta["name"]): a for a in ArtifactRepository(s).for_service(service_id)
+            if a.meta.get("preview")}  # fmt: skip
+
+
+def store_path(config: GeorgConfig, artifact: Artifact) -> Path:
+    return LocalStore.for_data_dir(config.data_dir).path(artifact.sha256)
+
+
 def test_reprocess_creates_a_missing_preview_once(config: GeorgConfig, engine: Engine) -> None:
     sessions = session_factory(engine)
     sermon_id, _ = processed(config, engine)
@@ -231,6 +253,37 @@ def test_render_edited_boundaries(config: GeorgConfig, engine: Engine) -> None:
     with sessions() as s:
         assert len(ArtifactRepository(s).for_service(audio.service_id)) == count
         assert len(previews(s, audio.service_id)) == 1  # the preview is never re-cut
+        cuts = [
+            a
+            for a in ArtifactRepository(s).for_service(audio.service_id)
+            if a.meta.get("preview") and a.meta["boundaries"] == audio.meta["boundaries"]
+        ]
+        assert sorted(str(a.meta["name"]) for a in cuts) == ["sermon_preview", "service_preview"]
+        sermon_cut = next(a for a in cuts if a.meta["name"] == "sermon_preview")
+        assert abs((sermon_cut.duration_ms or 0) - 6_000) < 200
+
+
+def test_render_adds_missing_cut_previews(config: GeorgConfig, engine: Engine) -> None:
+    sessions = session_factory(engine)
+    sermon_id, revision_id = processed(config, engine)
+    with sessions.begin() as s:
+        service_id = SermonRepository(s).get(sermon_id).service_id
+        for artifact in cut_previews(s, service_id).values():
+            s.delete(artifact)  # as if rendered before cut previews existed
+    render_revision(config, sessions, revision_id, processors())
+    with sessions() as s:
+        assert sorted(cut_previews(s, service_id)) == ["sermon_preview", "service_preview"]
+
+
+def test_publication_never_uses_cut_previews(config: GeorgConfig, engine: Engine) -> None:
+    sessions = session_factory(engine)
+    sermon_id, revision_id = processed(config, engine)
+    with sessions() as s:
+        sermons = SermonRepository(s)
+        service_id = sermons.get(sermon_id).service_id
+        boundaries = sermons.boundaries(sermons.revision(revision_id))
+        names = set(_renditions_for(s, service_id, boundaries))
+    assert names == {"sermon", "service_hq", "service_phone"}
 
 
 def test_render_preserves_edited_metadata_and_replaces_unedited_transcript(
