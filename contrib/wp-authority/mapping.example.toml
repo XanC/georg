@@ -1,0 +1,38 @@
+# wp-authority mapping file. Copy to mapping.toml, edit, and run `plan` again until
+# plan.csv looks right. Names are compared after decoding HTML entities.
+
+[scripture]
+dash = "-"                 # or "–" (en dash)
+nest_under_books = false   # true: parent each reference under a term named for its book
+
+# Terms the splitter can't read ("needs a human"): term name -> the references it
+# should become. [] removes the term from its sermons.
+[scripture.fix]
+# "Third Sunday of Easter" = []
+# "Ruth 1:-19a" = ["Ruth 1:1-19a"]
+
+# Canonical name -> aliases. Sermons on an alias move to the canonical term; if the
+# canonical term doesn't exist yet, the most-used alias is renamed (its slug is kept).
+# For speakers this is also how to rename everyone to their current title instead of
+# nesting under [speakers.people].
+[series.canonical]
+"All Saints' Day" = ["All Saints Sunday", "All Saints", "All Saints' Day (Observed)"]
+"Reformation Day" = ["Reformation Sunday", "Reformation"]
+
+# Sermon post ID -> series, e.g. copied from plan.csv's "proposed series" section.
+# Only these are ever applied; proposals are report-only.
+[series.assign]
+# "1730" = "The Baptism of Our Lord"
+
+[speakers.canonical]
+"Seminarian Mark De Young" = ["Seminarian Mark DeYoung"]
+
+# Person -> speaker terms. Speakers keep the title they had at the time; these terms are
+# nested under a parent term named for the person, whose archive lists all of them.
+[speakers.people]
+# "Ross Davis" = ["Vicar Ross Davis", "Rev. Ross Davis"]
+# Or, to also set the parent term's description (optional):
+# "Ross Davis" = { terms = ["Vicar Ross Davis", "Rev. Ross Davis"], description = "..." }
+
+[unused]
+delete = true              # propose deleting terms no sermon uses
