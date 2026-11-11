@@ -12,10 +12,17 @@ from sqlalchemy import Engine
 
 from georg.core.config import GeorgConfig
 from georg.core.errors import ConfigError
-from georg.core.types import SermonMetadata, ServiceBoundaries, SourceItem, SourcePart
+from georg.core.types import (
+    ExternalRef,
+    SermonMetadata,
+    ServiceBoundaries,
+    SourceItem,
+    SourcePart,
+)
 from georg.db.engine import session_factory
 from georg.db.repositories import (
     ArtifactRepository,
+    PublicationRepository,
     SermonRepository,
     ServiceRepository,
     UserRepository,
@@ -243,7 +250,8 @@ def test_review_page_without_preview_falls_back_to_service_hq(env: Env) -> None:
     assert (
         '<output id="player-position" for="seek-audio" class="position">0:01:00.0</output>' in html
     )
-    assert html.count('class="set-from"') == 4
+    assert html.count('class="play-from"') == 4
+    assert "set-from" not in html
 
 
 def test_review_page_with_preview_uses_recording_time(env: Env, tmp_path: Path) -> None:
@@ -262,7 +270,6 @@ def test_review_page_with_preview_uses_recording_time(env: Env, tmp_path: Path) 
     )
     for name in ("service_start", "sermon_start", "sermon_end", "service_end"):
         assert f'class="play-from" data-field="f-{name}"' in html
-        assert f'class="set-from" data-field="f-{name}"' in html
 
 
 def _add_cut_preview(env: Env, tmp_path: Path, name: str, span: str) -> int:
@@ -288,7 +295,7 @@ def test_review_page_shows_cut_previews_and_downloads(env: Env, tmp_path: Path) 
     service_label = "Service (as cut, 0:01:00.0\N{EN DASH}1:00:00.0)"
     assert html.index(sermon_label) < html.index(service_label)
     for artifact_id in (sermon_id, service_id):
-        assert f'<audio controls preload="auto" src="/artifacts/{artifact_id}"' in html
+        assert f'<audio controls preload="metadata" src="/artifacts/{artifact_id}"' in html
     assert f'<a href="/artifacts/{env.audio_id}" download>service_hq</a>' in html
     assert f'src="/artifacts/{env.audio_id}"' not in html  # no full-quality player
 
@@ -437,13 +444,67 @@ def test_approve_enqueues_publish(env: Env) -> None:
         f"/sermons/{env.sermon_id}/approve",
         data={"csrf_token": token, "revision_id": str(env.revision_id), "note": "ok"},
     )
-    assert "publishing has been queued" in response.text
+    assert "Approved revision 1." in response.text
+    assert "queued" not in response.text
+    assert 'hx-get="/sermons/1/publish-status" hx-trigger="every 3s"' in response.text
     with session_factory(env.engine)() as s:
         approval = SermonRepository(s).current_approval(env.sermon_id)
         assert approval is not None
         assert approval.revision_id == env.revision_id
     assert _jobs(env, "publish") == [{"sermon_id": env.sermon_id}]
     assert "approved (revision 1)" in env.client.get("/").text
+
+
+def _publication(env: Env, target: str, *, error: str | None = None) -> None:
+    with session_factory(env.engine).begin() as s:
+        pubs = PublicationRepository(s)
+        pub = pubs.prepare(env.sermon_id, target, env.revision_id, f"key-{target}")
+        pubs.mark_publishing(pub.id)
+        if error:
+            pubs.mark_failed(pub.id, error)
+        else:
+            pubs.mark_published(pub.id, ExternalRef(target=target, external_id="1"))
+
+
+def _approve(env: Env) -> None:
+    with session_factory(env.engine).begin() as s:
+        SermonRepository(s).approve(env.revision_id, approved_by=1)
+
+
+def test_publish_status_shows_publishing_while_the_job_is_active(env: Env) -> None:
+    _login(env)
+    _approve(env)
+    _publication(env, "website")
+    _publication(env, "podcast", error="HTTP 500")
+    job_id = env.queue.enqueue("publish", {"sermon_id": env.sermon_id})
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert 'hx-trigger="every 3s"' in html
+    # website already holds this revision, so the job leaves it alone.
+    assert 'data-output="website">Published<' in html
+    assert 'data-output="podcast">Publishing…<' in html
+
+    leased = env.queue.lease("w")
+    assert leased is not None and leased.id == job_id
+    fragment = env.client.get(f"/sermons/{env.sermon_id}/publish-status").text
+    assert 'data-output="podcast">Publishing…<' in fragment
+
+    env.queue.complete(job_id, "w")
+    fragment = env.client.get(f"/sermons/{env.sermon_id}/publish-status").text
+    assert fragment.startswith('<div id="publish-status"')
+    assert "hx-trigger" not in fragment
+    assert 'data-output="website">Published<' in fragment
+    assert 'data-output="podcast">Failed: HTTP 500<' in fragment
+    assert "Publish again" in fragment
+
+
+def test_publish_again_does_not_flash_a_contradicting_message(env: Env) -> None:
+    _login(env)
+    _approve(env)
+    token = _csrf(env.client, f"/sermons/{env.sermon_id}")
+    response = env.client.post(f"/sermons/{env.sermon_id}/publish", data={"csrf_token": token})
+    assert "queued" not in response.text
+    assert "Publishing…" in response.text
+    assert _jobs(env, "publish") == [{"sermon_id": env.sermon_id}]
 
 
 def test_approving_a_stale_revision_is_refused(env: Env) -> None:

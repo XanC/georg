@@ -29,7 +29,7 @@ legend { font-weight: 700; padding: 0 .3rem; }
 button { padding: .5rem 1rem; border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 4px; cursor: pointer; }
 button[disabled] { opacity: .5; cursor: not-allowed; }
 button.link { background: none; border: none; color: var(--accent); padding: 0; text-decoration: underline; }
-button.small, button.play-from, button.set-from { padding: .3rem .6rem; font-size: .9rem; white-space: nowrap; }
+button.small, button.play-from { padding: .3rem .6rem; font-size: .9rem; white-space: nowrap; }
 :focus-visible { outline: 3px solid #f5a623; outline-offset: 2px; }
 .scroll { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; }

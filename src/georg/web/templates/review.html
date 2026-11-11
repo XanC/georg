@@ -41,7 +41,7 @@
   {% for f in cut_previews %}
   <figure class="player">
     <figcaption>{{ f.label }}{% if not f.current %} (earlier boundaries){% endif %}</figcaption>
-    <audio controls preload="auto" src="/artifacts/{{ f.artifact.id }}"
+    <audio controls preload="metadata" src="/artifacts/{{ f.artifact.id }}"
       {% if not preview and seek and f.artifact.id == seek.artifact.id %}id="seek-audio" data-origin-ms="{{ f.origin_ms or 0 }}"{% endif %}></audio>
   </figure>
   {% endfor %}
@@ -96,8 +96,6 @@
             pattern="\d+:[0-5]\d:[0-5]\d(\.\d{1,3})?" required>
           <button type="button" class="play-from" data-field="f-{{ name }}" {% if not seek %}disabled{% endif %}
             aria-label="Jump the player to {{ label | lower }}">▶ Jump to</button>
-          <button type="button" class="set-from" data-field="f-{{ name }}" {% if not seek %}disabled{% endif %}
-            aria-label="Set {{ label | lower }} to the player position">Set to player</button>
       </div>
     {% endfor %}
     </div>
@@ -127,44 +125,7 @@
 
 <section aria-labelledby="approve-h">
   <h2 id="approve-h">Approval and publishing</h2>
-  {% if approval %}
-  <p>Revision {{ revision.number }} is approved{% if approval.note %} ({{ approval.note }}){% endif %}.</p>
-  <form method="post" action="/sermons/{{ sermon.id }}/publish">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button type="submit" {% if publishing %}disabled{% endif %}>{{ "Publishing…" if publishing else "Publish again" }}</button>
-  </form>
-  {% else %}
-  <form method="post" action="/sermons/{{ sermon.id }}/approve" class="stack narrow">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="revision_id" value="{{ revision.id }}">
-    <label>Note (optional) <input name="note"></label>
-    <button type="submit">Approve revision {{ revision.number }} and publish</button>
-  </form>
-  {% endif %}
-  {% if publications or unpublished_outputs %}
-  <div class="scroll">
-  <table>
-    <thead><tr><th scope="col">Output</th><th scope="col">Status</th><th scope="col">Revision</th><th scope="col">Details</th></tr></thead>
-    <tbody>
-    {% for p in publications %}
-      <tr>
-        <td>{{ p.target_name }}</td>
-        <td><span class="badge {{ p.status }}">{{ p.status }}</span></td>
-        <td>{{ revision_numbers.get(p.revision_id, "?") }}</td>
-        <td>
-          {% if p.external_url %}<a href="{{ p.external_url }}">{{ p.external_url }}</a>{% endif %}
-          {% if p.last_error %}<span class="error">{{ p.last_error }}</span>{% endif %}
-          {% if p.attempts %}({{ p.attempts }} attempt{{ "s" if p.attempts != 1 }}){% endif %}
-        </td>
-      </tr>
-    {% endfor %}
-    {% for name in unpublished_outputs %}
-      <tr><td>{{ name }}</td><td><span class="badge">not published</span></td><td>—</td><td></td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  </div>
-  {% endif %}
+  {% include "_publish_status.html" %}
 </section>
 
 {% if user.role == "admin" %}
