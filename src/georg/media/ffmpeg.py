@@ -3,8 +3,9 @@
 
 Every function writes to a temporary sibling file and renames it into place, so a
 crash never leaves a truncated output under the final name. Inputs may be local
-paths or `RemoteMedia` HTTP(S) sources; credentials sent in `-headers` are
-redacted from errors.
+paths or `RemoteMedia` HTTP(S) sources. Remote sources are read through the
+loopback `range_proxy`, which turns ffmpeg's open-ended range reads into closed
+upstream ranges — Drive's download quota refuses open-ended requests with 403.
 """
 
 import hashlib
@@ -23,6 +24,7 @@ import httpx
 from georg.core.config import RenditionSpec
 from georg.core.errors import ModuleError
 from georg.core.types import ArtifactRef, MediaInput, RemoteMedia, TimeRange
+from georg.media import range_proxy
 
 FFMPEG = os.environ.get("GEORG_FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("GEORG_FFPROBE", "ffprobe")
@@ -149,23 +151,14 @@ def _tmp(dest: Path) -> Path:
     return dest.with_name(f".{dest.stem}.partial{dest.suffix}")
 
 
-def _headers_value(headers: Mapping[str, str]) -> str:
-    """An ffmpeg `-headers` argument: `Name: value` lines ended by CRLF."""
-    return "".join(f"{name}: {value}\r\n" for name, value in headers.items())
-
-
 def _name(part: MediaInput) -> str:
     return part.name if isinstance(part, RemoteMedia) else str(part)
 
 
-def _probe_args(part: MediaInput, *, force_refresh: bool = False) -> list[str]:
-    args = [FFPROBE, "-v", "error"]
-    if isinstance(part, RemoteMedia):
-        args += ["-headers", _headers_value(part.headers(force_refresh=force_refresh))]
-        target = part.url
-    else:
-        target = str(part)
-    return [*args, "-print_format", "json", "-show_format", "-show_streams", target]
+def _probe_args(part: MediaInput, *, url: str | None = None) -> list[str]:
+    target = url or (part.url if isinstance(part, RemoteMedia) else str(part))
+    return [FFPROBE, "-v", "error", "-print_format", "json",
+            "-show_format", "-show_streams", target]  # fmt: skip
 
 
 def probe(path: Path) -> MediaInfo:
@@ -173,16 +166,27 @@ def probe(path: Path) -> MediaInfo:
 
 
 def probe_media(
-    part: MediaInput, *, force_refresh: bool = False, retryable: bool = False
+    part: MediaInput,
+    *,
+    force_refresh: bool = False,
+    retryable: bool = False,
+    chunk_bytes: int = range_proxy.DEFAULT_CHUNK_BYTES,
 ) -> MediaInfo:
-    """`probe` for a `MediaInput`: ffprobe a local file or a remote URL."""
+    """`probe` for a `MediaInput`: ffprobe a local file or a remote URL.
+
+    Remote parts are probed through the loopback range proxy, so the upstream
+    server only ever sees closed ranges.
+    """
     if isinstance(part, RemoteMedia):
-        out = _run(
-            _probe_args(part, force_refresh=force_refresh),
-            retryable=retryable,
-            remote=part,
-            force_refresh=force_refresh,
-        )
+        with range_proxy.serve_remote(
+            part, chunk_bytes=chunk_bytes, force_refresh=force_refresh
+        ) as url:
+            out = _run(
+                _probe_args(part, url=url),
+                retryable=retryable,
+                remote=part,
+                force_refresh=force_refresh,
+            )
         return _probe_data(out, Path(part.name))
     return probe(part)
 
@@ -207,20 +211,14 @@ def _probe_data(out: str, path: Path) -> MediaInfo:
     )
 
 
-def _input_args(part: MediaInput, *, force_refresh: bool = False) -> list[str]:
+def _input_args(part: MediaInput, *, url: str | None = None) -> list[str]:
     if isinstance(part, RemoteMedia):
         return [
-            "-reconnect",
-            "1",
-            "-reconnect_on_network_error",
-            "1",
-            "-reconnect_delay_max",
-            "30",
-            "-headers",
-            _headers_value(part.headers(force_refresh=force_refresh)),
-            "-i",
-            part.url,
-        ]
+            "-reconnect", "1",
+            "-reconnect_on_network_error", "1",
+            "-reconnect_delay_max", "30",
+            "-i", url or part.url,
+        ]  # fmt: skip
     return ["-i", str(part)]
 
 
@@ -238,6 +236,7 @@ def _extract_once(
     force_refresh: bool,
     remote: bool,
     probe_part: Callable[[MediaInput], MediaInfo],
+    chunk_bytes: int,
 ) -> None:
     expected_ms = 0
     for part in parts:
@@ -245,25 +244,28 @@ def _extract_once(
         if not info.has_audio:
             raise MediaError(f"{_name(part)}: no audio stream")
         expected_ms += info.duration_ms
-    inputs = [a for part in parts for a in _input_args(part, force_refresh=force_refresh)]
     fmt = f"aresample={sample_rate},aformat=sample_fmts=s16:channel_layouts="
     layout = "mono" if channels == 1 else "stereo"
     chains = "".join(f"[{i}:a:0]{fmt}{layout}[a{i}];" for i in range(len(parts)))
     joined = "".join(f"[a{i}]" for i in range(len(parts)))
     graph = f"{chains}{joined}concat=n={len(parts)}:v=0:a=1[out]"
-    _ffmpeg(
-        *inputs,
-        "-filter_complex",
-        graph,
-        "-map",
-        "[out]",
-        "-c:a",
-        "flac",
-        str(dest),
-        retryable=remote,
-        remote=next((p for p in parts if isinstance(p, RemoteMedia)), None),
-        force_refresh=force_refresh,
-    )
+    with range_proxy.serve_all(
+        list(parts), chunk_bytes=chunk_bytes, force_refresh=force_refresh
+    ) as urls:
+        inputs = [a for part in parts for a in _input_args(part, url=urls.get(id(part)))]
+        _ffmpeg(
+            *inputs,
+            "-filter_complex",
+            graph,
+            "-map",
+            "[out]",
+            "-c:a",
+            "flac",
+            str(dest),
+            retryable=remote,
+            remote=next((p for p in parts if isinstance(p, RemoteMedia)), None),
+            force_refresh=force_refresh,
+        )
     produced = probe(dest).duration_ms
     if produced < expected_ms - duration_tolerance_ms(expected_ms):
         raise MediaError(
@@ -281,6 +283,7 @@ def extract_audio(
     attempts: int = 3,
     sleep: Callable[[float], None] = time.sleep,
     remote_probes: Mapping[str, MediaInfo] | None = None,
+    chunk_bytes: int = range_proxy.DEFAULT_CHUNK_BYTES,
 ) -> Path:
     """Join the audio of `parts`, in order, into one lossless FLAC file.
 
@@ -308,7 +311,12 @@ def extract_audio(
     def probe_part(part: MediaInput, *, force_refresh: bool = False) -> MediaInfo:
         if isinstance(part, RemoteMedia):
             if part.key not in probes:
-                probes[part.key] = probe_media(part, force_refresh=force_refresh, retryable=remote)
+                probes[part.key] = probe_media(
+                    part,
+                    force_refresh=force_refresh,
+                    retryable=remote,
+                    chunk_bytes=chunk_bytes,
+                )
             return probes[part.key]
         return probe_media(part)
 
@@ -327,6 +335,7 @@ def extract_audio(
                 force_refresh=refresh,
                 remote=remote,
                 probe_part=probe_for_attempt,
+                chunk_bytes=chunk_bytes,
             )
         except MediaError as exc:
             tmp.unlink(missing_ok=True)

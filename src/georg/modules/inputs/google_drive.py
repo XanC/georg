@@ -256,6 +256,7 @@ class GoogleDriveInput:
                     key=f"drive\0{part.ref}\0{part.size}\0{part.checksum}",
                     headers=self._drive.media_headers,
                     quota_retry_after=timedelta(hours=self.options.quota_retry_after_hours),
+                    size=part.size,
                 )
             )
         return media
