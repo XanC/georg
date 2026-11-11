@@ -180,6 +180,21 @@ def test_run_local_caches_expensive_stages(tmp_path: Path, parts: list[Path]) ->
     assert (tmp_path / "two" / "transcript.md").read_text().endswith("Grace to you.\n")
 
 
+def test_short_cached_audio_is_reextracted(tmp_path: Path, parts: list[Path]) -> None:
+    """A truncated cached extraction (e.g. a dropped stream) heals on the next run."""
+    cache = StageCache(tmp_path / "cache")
+    kwargs = {"cache": cache, "renditions": default_renditions()[:1], "documents": ["x"]}
+    first = run_local(parts, tmp_path / "one", processors(), **kwargs)  # type: ignore[arg-type]
+    [cached] = list((tmp_path / "cache" / "audio").glob("*.flac"))
+    ffmpeg.cut(cached, TimeRange(start_ms=0, end_ms=2_000), tmp_path / "short.flac")
+    (tmp_path / "short.flac").replace(cached)
+
+    second = run_local(parts, tmp_path / "two", processors(), **kwargs)  # type: ignore[arg-type]
+
+    assert second.timings["extract"] > 0
+    assert second.duration_ms == first.duration_ms
+
+
 def test_preview_is_the_whole_recording_cached_by_source(tmp_path: Path, parts: list[Path]) -> None:
     cache = StageCache(tmp_path / "cache")
     kwargs = {"cache": cache, "renditions": default_renditions()[:1], "documents": ["x"]}

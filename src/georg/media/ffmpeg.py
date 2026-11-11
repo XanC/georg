@@ -210,12 +210,23 @@ def _probe_data(out: str, path: Path) -> MediaInfo:
 def _input_args(part: MediaInput, *, force_refresh: bool = False) -> list[str]:
     if isinstance(part, RemoteMedia):
         return [
+            "-reconnect",
+            "1",
+            "-reconnect_on_network_error",
+            "1",
+            "-reconnect_delay_max",
+            "30",
             "-headers",
             _headers_value(part.headers(force_refresh=force_refresh)),
             "-i",
             part.url,
         ]
     return ["-i", str(part)]
+
+
+def duration_tolerance_ms(expected_ms: int) -> int:
+    """How far an extracted file may fall short of the probed source total."""
+    return max(2000, expected_ms // 200)
 
 
 def _extract_once(
@@ -228,9 +239,12 @@ def _extract_once(
     remote: bool,
     probe_part: Callable[[MediaInput], MediaInfo],
 ) -> None:
+    expected_ms = 0
     for part in parts:
-        if not probe_part(part).has_audio:
+        info = probe_part(part)
+        if not info.has_audio:
             raise MediaError(f"{_name(part)}: no audio stream")
+        expected_ms += info.duration_ms
     inputs = [a for part in parts for a in _input_args(part, force_refresh=force_refresh)]
     fmt = f"aresample={sample_rate},aformat=sample_fmts=s16:channel_layouts="
     layout = "mono" if channels == 1 else "stereo"
@@ -250,6 +264,12 @@ def _extract_once(
         remote=next((p for p in parts if isinstance(p, RemoteMedia)), None),
         force_refresh=force_refresh,
     )
+    produced = probe(dest).duration_ms
+    if produced < expected_ms - duration_tolerance_ms(expected_ms):
+        raise MediaError(
+            f"extracted {produced / 1000:.1f} s of expected {expected_ms / 1000:.1f} s",
+            retryable=True,
+        )
 
 
 def extract_audio(
@@ -268,7 +288,9 @@ def extract_audio(
     atom's position does not matter) and only the audio lands on disk. A failed
     run is retried `attempts` times with refreshed credentials, then raises a
     retryable error so the job queue retries the stage; the partial output is
-    always removed.
+    always removed. An output much shorter than the probed source total (e.g.
+    the server closed the stream early and ffmpeg took it for EOF) counts as a
+    retryable failure too.
 
     `remote_probes` supplies already-known probe results keyed by
     `RemoteMedia.key` (the pipeline stage cache fills it); otherwise each remote
