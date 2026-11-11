@@ -3,7 +3,7 @@
 
 import json
 import os
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -24,7 +24,7 @@ from georg.core.config import GeorgConfig
 from georg.core.errors import ConfigError
 from georg.core.types import ServiceBoundaries
 from georg.db.engine import session_factory
-from georg.db.models import Artifact, Sermon, SermonRevision
+from georg.db.models import Artifact, Publication, Sermon, SermonRevision
 from georg.db.repositories import (
     ArtifactRepository,
     NotCurrentRevisionError,
@@ -328,7 +328,7 @@ def create_app(
         users = UserRepository(session)
         numbers = {r.id: r.number for r in revisions}
         publications = PublicationRepository(session).for_sermon(sermon_id)
-        published = {p.target_name for p in publications}
+        publishing = any(j.payload.get("sermon_id") == sermon_id for j in active_jobs(PUBLISH))
         preview = _preview(artifacts)
         cut_previews = _cut_previews(artifacts, boundaries)
         seek = preview or next(
@@ -356,13 +356,12 @@ def create_app(
             "approved_ids": {a.revision_id for a in approvals},
             "approval": sermons.current_approval(sermon_id),
             "review_state": _review_state(sermons, [sermon]),
-            "publications": publications,
-            "unpublished_outputs": [o.name for o in config.outputs if o.name not in published],
+            "outputs": _output_states(
+                [o.name for o in config.outputs], publications, revision.id, publishing
+            ),
             "revision_numbers": numbers,
             "author_name": lambda author: _author_name(users, author),
-            "publishing": bool(
-                [j for j in active_jobs(PUBLISH) if j.payload.get("sermon_id") == sermon_id]
-            ),
+            "publishing": publishing,
             "errors": [],
             "polled": False,
         }
@@ -375,6 +374,10 @@ def create_app(
     def render_status(request: Request, sermon_id: int, user: User, session: DB) -> HTMLResponse:
         context = {**review_context(session, sermon_id), "polled": True}
         return render(request, "_render_status.html", context)
+
+    @app.get("/sermons/{sermon_id}/publish-status", response_class=HTMLResponse)
+    def publish_status(request: Request, sermon_id: int, user: User, session: DB) -> HTMLResponse:
+        return render(request, "_publish_status.html", review_context(session, sermon_id))
 
     @app.post("/sermons/{sermon_id}/revisions", response_class=HTMLResponse)
     async def save(request: Request, sermon_id: int, user: User) -> Response:
@@ -462,7 +465,7 @@ def create_app(
             _flash(request, "A newer revision exists; review it before approving.", "error")
             return _redirect(f"/sermons/{sermon_id}")
         queue.enqueue(PUBLISH, {"sermon_id": sermon_id})
-        _flash(request, f"Approved revision {number}; publishing has been queued.")
+        _flash(request, f"Approved revision {number}.")
         return _redirect(f"/sermons/{sermon_id}")
 
     @app.post("/sermons/{sermon_id}/reprocess")
@@ -483,7 +486,6 @@ def create_app(
             _flash(request, "Approve the current revision before publishing.", "error")
         else:
             queue.enqueue(PUBLISH, {"sermon_id": sermon_id})
-            _flash(request, "Publishing has been queued.")
         return _redirect(f"/sermons/{sermon_id}")
 
     # --- artifacts --------------------------------------------------------------------
@@ -615,6 +617,41 @@ def _audio_files(
         if previous is None or current or not previous.current:
             chosen[name] = AudioFile(a, name, origin, current)
     return sorted(chosen.values(), key=lambda f: (f.artifact.kind != "sermon_audio", f.name))
+
+
+@dataclass(frozen=True)
+class OutputState:
+    name: str
+    status: str
+    label: str
+    publication: Publication | None
+
+
+def _output_states(
+    configured: list[str],
+    publications: Sequence[Publication],
+    revision_id: int,
+    publishing: bool,
+) -> list[OutputState]:
+    """What each output shows: a queued or running publish job wins over stored state,
+    except for outputs that already hold the current revision (the job skips them)."""
+    by_name = {p.target_name: p for p in publications}
+    names = [*configured, *(p.target_name for p in publications if p.target_name not in configured)]
+    states = []
+    for name in names:
+        pub = by_name.get(name)
+        current = pub is not None and pub.status == "published" and pub.revision_id == revision_id
+        if publishing and not current:
+            states.append(OutputState(name, "publishing", "Publishing…", pub))
+        elif pub is None:
+            states.append(OutputState(name, "", "Not published", None))
+        elif pub.status == "published":
+            states.append(OutputState(name, "published", "Published", pub))
+        elif pub.status == "failed":
+            states.append(OutputState(name, "failed", f"Failed: {pub.last_error}", pub))
+        else:
+            states.append(OutputState(name, "", "Not finished", pub))
+    return states
 
 
 def _preview(artifacts: Any) -> AudioFile | None:

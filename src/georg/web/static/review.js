@@ -30,16 +30,11 @@
     ["timeupdate", "seeked", "loadedmetadata"].forEach(function (e) { p.audio.addEventListener(e, update); });
   });
   document.addEventListener("click", function (event) {
-    var button = event.target.closest("button.play-from, button.set-from");
+    var button = event.target.closest("button.play-from");
     if (!button) return;
     var p = player();
     var field = document.getElementById(button.dataset.field);
     if (!p || !field) return;
-    if (button.classList.contains("set-from")) {
-      field.value = formatHms(positionMs(p));
-      field.dispatchEvent(new Event("input", { bubbles: true }));
-      return;
-    }
     var ms = parseHms(field.value);
     if (ms === null) return;
     p.audio.currentTime = Math.max(0, (ms - p.origin) / 1000);

@@ -1,0 +1,38 @@
+<div id="publish-status" aria-live="polite"
+  {% if publishing %}hx-get="/sermons/{{ sermon.id }}/publish-status" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+  {% if approval %}
+  <p>Revision {{ revision.number }} is approved{% if approval.note %} ({{ approval.note }}){% endif %}.</p>
+  <form method="post" action="/sermons/{{ sermon.id }}/publish">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" {% if publishing %}disabled{% endif %}>{{ "Publishing…" if publishing else "Publish again" }}</button>
+  </form>
+  {% else %}
+  <form method="post" action="/sermons/{{ sermon.id }}/approve" class="stack narrow">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="revision_id" value="{{ revision.id }}">
+    <label>Note (optional) <input name="note"></label>
+    <button type="submit">Approve revision {{ revision.number }} and publish</button>
+  </form>
+  {% endif %}
+  {% if outputs %}
+  <div class="scroll">
+  <table>
+    <thead><tr><th scope="col">Output</th><th scope="col">Status</th><th scope="col">Revision</th><th scope="col">Details</th></tr></thead>
+    <tbody>
+    {% for o in outputs %}
+    {% set p = o.publication %}
+      <tr>
+        <td>{{ o.name }}</td>
+        <td><span class="badge {{ o.status }}" data-output="{{ o.name }}">{{ o.label }}</span></td>
+        <td>{{ revision_numbers.get(p.revision_id, "?") if p else "—" }}</td>
+        <td>
+          {% if p and p.external_url %}<a href="{{ p.external_url }}">{{ p.external_url }}</a>{% endif %}
+          {% if p and p.attempts %}({{ p.attempts }} attempt{{ "s" if p.attempts != 1 }}){% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
