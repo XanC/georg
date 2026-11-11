@@ -4,7 +4,10 @@
 Activity is shared between processes through the database and one marker file:
 
 - the web process touches `<data_dir>/run/web-activity` on every request except
-  `/healthz` (see `ActivityMarker`);
+  `EXEMPT_PATHS` (see `ActivityMarker`), and on `POST /keepalive`, which the
+  browser sends while audio plays or the user is typing;
+- a watchdog touches it when it starts (or retries after a failed shutdown), so
+  the web process can tell how long is left (`idle_state`);
 - queued or running jobs keep the host awake, and a job finishing counts as
   activity, so the idle period restarts after the last job.
 
@@ -18,11 +21,12 @@ import os
 import subprocess
 import threading
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-from sqlalchemy import Engine, Table, func, select
+from sqlalchemy import Connection, Engine, Table, func, select
 
 from georg.db.engine import writer
 from georg.db.models import Job
@@ -31,8 +35,9 @@ from georg.db.types import utcnow
 log = logging.getLogger(__name__)
 
 _jobs = cast(Table, Job.__table__).c
-EXEMPT_PATHS = frozenset({"/healthz"})
-"""Requests that do not count as activity (the wake page polls `/healthz`)."""
+EXEMPT_PATHS = frozenset({"/healthz", "/idle-status"})
+"""Requests that do not count as activity: both are polled (by the wake page and by
+every open browser tab), so counting them would keep the host on forever."""
 
 
 class ActivityMarker:
@@ -46,7 +51,7 @@ class ActivityMarker:
         min_interval: timedelta = timedelta(seconds=30),
     ) -> None:
         self.path = path
-        self._clock = clock
+        self.clock = clock
         self._min_interval = min_interval
         self._last_touch: datetime | None = None
         self._lock = threading.Lock()
@@ -57,10 +62,12 @@ class ActivityMarker:
     ) -> "ActivityMarker":
         return cls(data_dir / "run" / "web-activity", clock=clock)
 
-    def touch(self) -> None:
-        now = self._clock()
+    def touch(self, *, force: bool = False) -> None:
+        """Record activity now; without `force`, at most once per `min_interval`."""
+        now = self.clock()
         with self._lock:
-            if self._last_touch is not None and now - self._last_touch < self._min_interval:
+            recent = self._last_touch is not None and now - self._last_touch < self._min_interval
+            if recent and not force:
                 return
             self._last_touch = now
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,6 +80,29 @@ class ActivityMarker:
             return datetime.fromtimestamp(self.path.stat().st_mtime, UTC)
         except FileNotFoundError:
             return None
+
+
+@dataclass(frozen=True)
+class IdleState:
+    busy: bool
+    """Jobs are queued or running."""
+    last_activity: datetime
+    """Latest of: web activity, last job finish, `since`."""
+
+    def remaining(self, idle_after: timedelta, now: datetime) -> timedelta:
+        return max(timedelta(0), self.last_activity + idle_after - now)
+
+
+def idle_state(conn: Connection, marker: ActivityMarker, since: datetime) -> IdleState:
+    """What the watchdog decides on; `since` is when this process started watching."""
+    busy, last_finished = conn.execute(
+        select(
+            func.count().filter(_jobs.status.in_(("queued", "running"))),
+            func.max(_jobs.finished_at),
+        )
+    ).one()
+    candidates = [since, marker.last(), last_finished]
+    return IdleState(bool(busy), max(c for c in candidates if c is not None))
 
 
 def run_command(command: Sequence[str]) -> Callable[[], None]:
@@ -103,9 +133,16 @@ class IdleWatchdog:
         self.marker = marker
         self._shutdown = shutdown
         self._clock = clock
-        self._armed_at = clock()
-        """Start of the grace period: process start, or the last failed shutdown."""
         self.fired = False
+        self._arm(clock())
+
+    def _arm(self, now: datetime) -> None:
+        """Start a grace period (process start, or after a failed shutdown)."""
+        self._armed_at = now
+        try:
+            self.marker.touch(force=True)
+        except OSError:
+            log.exception("cannot touch %s", self.marker.path)
 
     def check(self) -> bool:
         """Request shutdown if idle; return True if it did (now or earlier)."""
@@ -115,21 +152,18 @@ class IdleWatchdog:
         if self._last_web_or_start() > now - self.idle_after:
             return False
         with self._engine.begin() as conn:
-            busy, last_finished = conn.execute(
-                select(
-                    func.count().filter(_jobs.status.in_(("queued", "running"))),
-                    func.max(_jobs.finished_at),
-                )
-            ).one()
-            if busy or (last_finished is not None and last_finished > now - self.idle_after):
+            state = idle_state(conn, self.marker, self._armed_at)
+            if state.busy or state.last_activity > now - self.idle_after:
                 return False
-            last = max(self._last_web_or_start(), last_finished or self._armed_at)
-            log.warning("idle since %s with no pending jobs; shutting down", last.isoformat())
+            log.warning(
+                "idle since %s with no pending jobs; shutting down",
+                state.last_activity.isoformat(),
+            )
             try:
                 self._shutdown()
             except Exception:
                 log.exception("shutdown command failed; retrying after another idle period")
-                self._armed_at = now
+                self._arm(now)
                 return False
         self.fired = True
         return True

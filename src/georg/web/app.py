@@ -5,6 +5,7 @@ import json
 import os
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import Annotated, Any, Final
 
@@ -33,7 +34,8 @@ from georg.db.repositories import (
     ServiceRepository,
     UserRepository,
 )
-from georg.idle import EXEMPT_PATHS, ActivityMarker
+from georg.db.types import utcnow
+from georg.idle import EXEMPT_PATHS, ActivityMarker, idle_state
 from georg.jobs.queue import JobInfo, JobQueue
 from georg.storage.base import ArtifactNotFoundError
 from georg.storage.local import LocalStore
@@ -124,6 +126,13 @@ def create_app(
     source_url = source_url or os.environ.get(SOURCE_URL_ENV, DEFAULT_SOURCE_URL)
     if activity is None and config.idle_shutdown_minutes is not None:
         activity = ActivityMarker.for_data_dir(config.data_dir)
+    idle_after = (
+        None
+        if config.idle_shutdown_minutes is None
+        else timedelta(minutes=config.idle_shutdown_minutes)
+    )
+    clock = activity.clock if activity is not None else utcnow
+    started = clock()
 
     app = FastAPI(
         title="Georg",
@@ -224,6 +233,20 @@ def create_app(
     @app.get("/healthz", response_class=PlainTextResponse)
     def healthz() -> str:
         return "ok"
+
+    @app.post("/keepalive", status_code=204)
+    def keepalive(user: User) -> Response:
+        if activity is not None:
+            activity.touch(force=True)
+        return Response(status_code=204)
+
+    @app.get("/idle-status")
+    def idle_status(user: User, session: DB) -> dict[str, Any]:
+        if idle_after is None or activity is None:
+            return {"enabled": False, "busy": False, "seconds_left": None}
+        state = idle_state(session.connection(), activity, started)
+        left = state.remaining(idle_after, clock())
+        return {"enabled": True, "busy": state.busy, "seconds_left": int(left.total_seconds())}
 
     @app.get("/login", response_class=HTMLResponse)
     def login_form(request: Request, next: str | None = None) -> HTMLResponse:

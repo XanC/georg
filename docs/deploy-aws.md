@@ -229,6 +229,19 @@ several workers agree and none fires while a job is queued or running. Web reque
 than `/healthz` count as activity. The container cannot power off the host, so it creates
 `/run/georg/shutdown/poweroff`; `georg-poweroff.path` on the host notices and runs
 `systemctl poweroff`. The instance's shutdown behaviour is *stop*, so the volumes stay.
+While the watchdog is on, the worker polls the queue at least every 10 seconds
+(`georg worker --poll` is capped at 10), so the shutdown happens within seconds of the
+deadline.
+
+Playing a recording or editing a transcript without saving sends no requests by itself,
+so every logged-in page (`static/idle.js`) sends `POST /keepalive` at most once a minute
+while an `<audio>` element is playing or while the user has typed, clicked or scrolled in
+the last minute. An open tab nobody touches sends nothing, so it does not keep the host
+on. Each page also polls `GET /idle-status` (which, like `/healthz`, does not count as
+activity) every 30 seconds; in the last minute it shows a banner "Georg will shut down in
+N s because nothing is happening." with a **Keep it on** button. If the host then goes
+away, the banner says "Georg has shut down. Reload the page to start it again."; reloading
+goes through the wake page. With idle shutdown off there is no banner.
 
 The instance starts again:
 
