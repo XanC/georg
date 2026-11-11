@@ -279,6 +279,33 @@ class GoogleDriveInput:
             paths.append(final)
         return paths
 
+    def fetch_document(self, item: SourceItem, name: str, dest_dir: Path) -> Path | None:
+        """Download a companion document from the service folder into `dest_dir`.
+
+        The local name includes the Drive file ID and md5, so an unchanged document is
+        downloaded once. Google Docs/Sheets (no binary content) return None.
+        """
+        query = f" and name = '{quote_query(name)}'"
+        found = [f for f in self._children(item.source_ref, query) if f.get("name") == name]
+        if not found:
+            return None
+        doc = _part(found[0])
+        if (doc.mime or "").startswith("application/vnd.google-apps."):
+            log.info("google_drive: %r is a native Google file; not downloaded", name)
+            return None
+        final = dest_dir / _UNSAFE.sub("_", f"{doc.ref}-{doc.checksum}-{PurePath(name).name}")
+        if doc.checksum is not None and final.exists() and self._matches(final, doc):
+            return final
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        partial = final.with_name(f".{final.name}.partial")
+        try:
+            size, md5 = self._drive.download(doc.ref, partial)
+            self._verify(doc, size, md5)
+            os.replace(partial, final)
+        finally:
+            partial.unlink(missing_ok=True)
+        return final
+
     def _check_unchanged(self, part: SourcePart) -> None:
         raw = self._drive.get_file(part.ref, FILE_FIELDS)
         if raw is None or raw.get("trashed"):

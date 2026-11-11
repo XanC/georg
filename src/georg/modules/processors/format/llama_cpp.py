@@ -47,7 +47,9 @@ class LlamaLike(Protocol):
     def create_chat_completion(self, messages: Any, **kwargs: Any) -> Any: ...
 
 
-class LlamaFormatterOptions(BaseModel):
+class LlamaModelOptions(BaseModel):
+    """Which GGUF model to run and how; shared by every llama.cpp-based module."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     model_repo: str = DEFAULT_MODEL_REPO
@@ -61,18 +63,25 @@ class LlamaFormatterOptions(BaseModel):
     threads: int = Field(default=0, ge=0)
     """CPU threads; 0 lets llama.cpp choose."""
     context_size: int = Field(default=4096, ge=1024)
+    seed: int = Field(default=0, ge=0)
+    disable_thinking: bool = True
+    """Send Qwen3's `/no_think` switch and drop any `<think>` block from the reply."""
+
+    @property
+    def model_name(self) -> str:
+        return self.model_path.name if self.model_path else self.model_file
+
+
+class LlamaFormatterOptions(LlamaModelOptions):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     retry_temperature: float = Field(default=0.3, ge=0.0, le=2.0)
     """Used for the single retry of a chunk whose words changed."""
-    seed: int = Field(default=0, ge=0)
     mode: Literal["breaks", "rewrite"] = "breaks"
     """`breaks`: the model only picks paragraph starts. `rewrite`: it returns the text."""
     paragraph_words: int = Field(default=120, ge=20)
     """`breaks` mode: the target paragraph length; paragraphs under a third of it are merged."""
     min_chunk_words: int = Field(default=400, gt=0)
     max_chunk_words: int = Field(default=700, gt=0)
-    disable_thinking: bool = True
-    """Send Qwen3's `/no_think` switch and drop any `<think>` block from the reply."""
     prompt_version: str = Field(default="v1", pattern=r"^[a-z0-9_-]+$")
     prompt_file: Path | None = None
     """A custom template using `$text` and `$language`; overrides `prompt_version`.
@@ -89,7 +98,7 @@ class LlamaFormatterOptions(BaseModel):
         return self
 
 
-def model_file_path(options: LlamaFormatterOptions) -> Path:
+def model_file_path(options: LlamaModelOptions) -> Path:
     """The local GGUF path, downloading it first if needed."""
     if options.model_path is not None:
         if not options.model_path.is_file():
@@ -116,7 +125,8 @@ def model_file_path(options: LlamaFormatterOptions) -> Path:
     return Path(path)
 
 
-def _load_model(options: LlamaFormatterOptions) -> LlamaLike:
+def load_model(options: LlamaModelOptions) -> LlamaLike:
+    """Load the GGUF model (downloading it first if needed) for CPU inference."""
     # Spinning OpenMP workers make generation several times slower on shared vCPUs.
     os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
     try:
@@ -195,9 +205,8 @@ class LlamaCppFormatter:
         self._template, prompt_id = load_template(o.prompt_version, o.prompt_file, stem)
         self._factory = model_factory
         self._model: LlamaLike | None = None
-        model = o.model_path.name if o.model_path else o.model_file
         self.version = (
-            f"{TYPE_NAME}-r{_REVISION}-{o.mode}-{model}-prompt-{prompt_id}-t{o.temperature:g}"
+            f"{TYPE_NAME}-r{_REVISION}-{o.mode}-{o.model_name}-prompt-{prompt_id}-t{o.temperature:g}"
             f"-rt{o.retry_temperature:g}-s{o.seed}-w{o.min_chunk_words}-{o.max_chunk_words}"
             f"-p{o.paragraph_words}"
             f"-nt{int(o.disable_thinking)}"
@@ -310,7 +319,7 @@ class LlamaCppFormatter:
         self, messages: Sequence[dict[str, str]], temperature: float, seed: int, max_tokens: int
     ) -> str:
         if self._model is None:
-            self._model = (self._factory or _load_model)(self.options)
+            self._model = (self._factory or load_model)(self.options)
         try:
             result = self._model.create_chat_completion(
                 list(messages), temperature=temperature, seed=seed, max_tokens=max_tokens

@@ -1,0 +1,11 @@
+Below are the Scripture readings from a church service's bulletin, each with a label in square brackets, followed by the transcript of the sermon preached at that service.
+
+Decide which of these readings the sermon preaches on: readings whose content the sermon explains, retells or builds its message on. Do not count a reading that is only mentioned or quoted in passing, and ignore Bible passages that are not among these readings.
+
+Reply with JSON only, in the form {"readings": ["<label>", ...]}, using the labels exactly as given and listing the most prominent reading first. Reply {"readings": []} if the sermon is not about any of them.
+
+Readings:
+$readings
+
+Sermon transcript:
+$transcript

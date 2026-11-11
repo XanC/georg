@@ -103,6 +103,18 @@ def _fmt_ms(ms: int) -> str:
     return f"{seconds // 3600}:{seconds // 60 % 60:02d}:{seconds % 60:02d}"
 
 
+def _document_texts(documents: list[str]) -> dict[str, str]:
+    """Text of the `--document` arguments that are readable local files."""
+    from georg.documents import extract_text
+
+    texts = {}
+    for document in documents:
+        path = Path(document)
+        if path.is_file() and (text := extract_text(path)):
+            texts[path.name] = text
+    return texts
+
+
 def _run(args: argparse.Namespace) -> int:
     from georg.core.config import load_config
     from georg.pipeline import StageCache, build_processors, run_local
@@ -117,7 +129,8 @@ def _run(args: argparse.Namespace) -> int:
         renditions=config.renditions,
         language=config.language,
         service_date=args.date,
-        documents=args.document,
+        documents=[Path(d).name for d in args.document],
+        document_texts=_document_texts(args.document),
         boundaries=args.boundaries,
     )
     b = result.boundaries
@@ -296,7 +309,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--cache", type=Path, help="stage cache (default: <data_dir>/cache)")
     run.add_argument("--date", type=date.fromisoformat, help="service date, YYYY-MM-DD")
     run.add_argument(
-        "--document", action="append", default=[], help="companion document name (repeatable)"
+        "--document",
+        action="append",
+        default=[],
+        help="companion document name or local file to read (repeatable)",
     )
     run.add_argument(
         "--boundaries",

@@ -300,3 +300,27 @@ def test_unset_folder_env_is_config_error(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.delenv("GEORG_TEST_DRIVE_FOLDER", raising=False)
     with pytest.raises(ConfigError, match="GEORG_TEST_DRIVE_FOLDER"):
         GoogleDriveInput.from_options({"folder_id": "env:GEORG_TEST_DRIVE_FOLDER"})
+
+
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def test_fetch_document_downloads_once_per_version(drive: FakeDrive, tmp_path: Path) -> None:
+    folder = service_folder(drive, "SPX 11.08.26", ("service.mp4", b"video"))
+    name = "2026-11-08_Twenty-third_Sunday_after_Trinity_-_DS1-Eric.docx"
+    doc = drive.add(name, folder, b"docx bytes", mime=DOCX_MIME, modified=OLD)
+    drive.add("Order of Service", folder, mime="application/vnd.google-apps.document")
+    source = make_input(drive)
+    [item] = source.discover(None)
+    dest = tmp_path / "documents"
+    path = source.fetch_document(item, name, dest)
+    assert path is not None and path.read_bytes() == b"docx bytes"
+    assert doc.id in path.name and path.parent == dest
+    assert source.fetch_document(item, name, dest) == path
+    downloads = [r for r in drive.calls("GET", f"/files/{doc.id}") if "alt=media" in str(r.url)]
+    assert len(downloads) == 1
+    doc.content = b"edited"
+    newer = source.fetch_document(item, name, dest)
+    assert newer is not None and newer != path and newer.read_bytes() == b"edited"
+    assert source.fetch_document(item, "Order of Service", dest) is None
+    assert source.fetch_document(item, "missing.docx", dest) is None

@@ -237,7 +237,7 @@ def test_registered_and_default_in_config(tmp_path: Path, monkeypatch: pytest.Mo
         'transcriber = { type = "faster_whisper" }\nmetadata = { type = "rules" }\n'
     )
     fake = FakeLlama(lambda chunk, n: "6")
-    monkeypatch.setattr(llama_cpp, "_load_model", lambda _: fake)
+    monkeypatch.setattr(llama_cpp, "load_model", lambda _: fake)
     formatter = build_processors(load_config(path).processors).formatter
     assert isinstance(formatter, LlamaCppFormatter) and formatter.options.mode == "breaks"
     result = formatter.format(transcript(sentences(5), sentences(5, start=5)), CTX)
@@ -254,7 +254,7 @@ def test_load_model_prefers_passive_openmp_and_needs_extra(monkeypatch: pytest.M
     monkeypatch.delenv("OMP_WAIT_POLICY", raising=False)
     monkeypatch.setitem(sys.modules, "llama_cpp", None)
     with pytest.raises(ModuleError, match="llm"):
-        llama_cpp._load_model(LlamaFormatterOptions())
+        llama_cpp.load_model(LlamaFormatterOptions())
     assert os.environ["OMP_WAIT_POLICY"] == "PASSIVE"
 
 

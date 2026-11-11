@@ -43,6 +43,13 @@ metadata = { type = "rules" }
 # known and no title is set), and whether the name at the end of document names is the
 # preacher (preacher_from_documents, default true; `preachers` maps it to display names).
 # metadata = { type = "rules", options = { service_time = "12:00", title = "Sermon for {occasion}", preacher_from_documents = false } }
+# The occasion is taken from the bulletin's first paragraph when the next one is the
+# service date (occasion_from_document_text, default true), else from its file name.
+# Opt-in Scripture detection reads the transcript and the bulletin's readings: a stated
+# text ("the text for this morning is ...") wins, then a named reading ("... comes from
+# the Gospel reading"), else the local model (the formatter's Qwen3-4B GGUF; needs the
+# `llm` extra) picks the readings the sermon is about. Picks are cached in results_dir.
+# metadata = { type = "rules", options = { service_time = "12:00", title = "Sermon for {occasion}", preacher_from_documents = false, scripture = { results_dir = "/var/lib/georg/cache/scripture", llm = { cache_dir = "/var/lib/georg/models" } } } }
 
 # Renditions default to sermon, service_hq and service_phone. A built-in whole-recording
 # `preview` (for the review page's player) is always made; that name is reserved.
