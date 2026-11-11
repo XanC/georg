@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from georg.cli import parse_boundaries
-from georg.core.config import ModuleConfig, ProcessorsConfig, default_renditions
+from georg.core.config import CalendarConfig, ModuleConfig, ProcessorsConfig, default_renditions
 from georg.core.errors import ConfigError
 from georg.core.types import (
     AudioSegment,
@@ -376,3 +376,23 @@ def test_run_local_passes_document_texts_and_reports_origins(
     origins = {"occasion": f"rules-3/document text: {name}"}
     assert result.metadata_origins == origins
     assert json.loads((out / "report.json").read_text())["metadata_origins"] == origins
+
+
+def test_build_processors_gives_rules_the_configured_calendar(tmp_path: Path) -> None:
+    local = tmp_path / "occasions.toml"
+    local.write_text('[canonical]\n"Church Anniversary" = ["Anniversary Sunday"]\n', "utf-8")
+    config = ProcessorsConfig(
+        classifier=ModuleConfig(type="ina_speech_segmenter"),
+        detector=ModuleConfig(type="heuristic"),
+        transcriber=ModuleConfig(type="faster_whisper"),
+        metadata=ModuleConfig(type="rules"),
+    )
+    built = build_processors(
+        config, formatter=False, calendar=CalendarConfig(lectionary="one-year", occasions=local)
+    )
+    calendar = built.metadata._calendar  # type: ignore[attr-defined]
+    assert calendar.normalize("Anniversary Sunday").name == "Church Anniversary"
+    assert calendar.normalize("Trinity 23").name == "Twenty-third Sunday after Trinity"
+    assert "+lsb-one-year-" in built.metadata.version
+    default = build_processors(config, formatter=False).metadata
+    assert "+lsb-three-year-" in default.version

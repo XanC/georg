@@ -50,7 +50,10 @@ in the book taxonomy, a missing book or chapter) goes to **needs a human** and i
 alone until `[scripture.fix]` says what it should become. With `nest_under_books`, each
 reference term gets a parent term named exactly as its book.
 
-**Series and speakers.** `[series.canonical]` / `[speakers.canonical]` map a canonical name
+**Series and speakers.** Name keys and ordinal spelling come from
+`georg.modules.processors.metadata.names`, shared with Georg. Georg's bundled day names
+(`src/georg/data/calendars/lsb.toml`) use the same canonical-to-aliases table format, so a
+table can be copied into `[series.canonical]` and back. `[series.canonical]` / `[speakers.canonical]` map a canonical name
 to aliases; sermons on an alias move to the canonical term. **Suggested merges** (in/of,
 "the", St/St., numeric vs spelled-out ordinals, case, punctuation; for speakers, spacing
 like "De Young"/"DeYoung") are listed separately and are not applied until copied into

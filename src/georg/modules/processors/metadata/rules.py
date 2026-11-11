@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from georg.core.errors import ConfigError
 from georg.core.types import MetadataContext, MetadataProposal, SermonMetadata
 from georg.modules.processors.format.llama_cpp import LlamaLike, LlamaModelOptions
+from georg.modules.processors.metadata.calendar import Calendar
 from georg.modules.processors.metadata.readings import parse_header
 from georg.modules.processors.metadata.scripture import ScriptureDetector, ScriptureOptions
 
@@ -173,7 +174,9 @@ class RulesMetadataGenerator:
         options: Mapping[str, Any] | None = None,
         *,
         model_factory: Callable[[LlamaModelOptions], LlamaLike] | None = None,
+        calendar: Calendar | None = None,
     ) -> None:
+        self._calendar = calendar
         try:
             self.options = MetadataOptions.model_validate(dict(options or {}))
         except ValidationError as exc:
@@ -186,6 +189,8 @@ class RulesMetadataGenerator:
         )
         if self._scripture is not None:
             self.version = f"{type(self).version}+{self._scripture.version}"
+        if calendar is not None:
+            self.version = f"{self.version}+{calendar.version}"
         self.uses_documents = self.options.occasion_from_document_text or bool(self._scripture)
 
     def generate(self, ctx: MetadataContext) -> SermonMetadata:
@@ -242,12 +247,23 @@ class RulesMetadataGenerator:
                         meta.service_date,
                     )
                     continue
-                origins["occasion"] = f"{type(self).version}/document text: {name}"
-                return meta.model_copy(update={"occasion": header.occasion})
+                return self._set_occasion(meta, header.occasion, f"document text: {name}", origins)
         if hint is not None and hint.occasion:
-            origins["occasion"] = f"{type(self).version}/document name: {hint_name}"
-            return meta.model_copy(update={"occasion": hint.occasion})
+            return self._set_occasion(meta, hint.occasion, f"document name: {hint_name}", origins)
         return meta
+
+    def _set_occasion(
+        self, meta: SermonMetadata, occasion: str, source: str, origins: dict[str, str]
+    ) -> SermonMetadata:
+        origin = f"{type(self).version}/{source}"
+        if self._calendar is not None:
+            normalized = self._calendar.normalize(occasion)
+            occasion = normalized.name
+            note = normalized.note()
+            if note:
+                origin += f"; {note}"
+        origins["occasion"] = origin
+        return meta.model_copy(update={"occasion": occasion})
 
     def _detect_scripture(
         self,

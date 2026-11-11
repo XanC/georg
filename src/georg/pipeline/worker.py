@@ -109,7 +109,9 @@ class Worker:
     @property
     def processors(self) -> Processors:
         if self._processors is None:
-            self._processors = build_processors(self.config.processors)
+            self._processors = build_processors(
+                self.config.processors, calendar=self.config.calendar
+            )
         return self._processors
 
     def run_once(self) -> bool:

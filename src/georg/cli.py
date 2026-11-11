@@ -120,7 +120,9 @@ def _run(args: argparse.Namespace) -> int:
     from georg.pipeline import StageCache, build_processors, run_local
 
     config = load_config(args.config)
-    processors = build_processors(config.processors, formatter=not args.no_format)
+    processors = build_processors(
+        config.processors, formatter=not args.no_format, calendar=config.calendar
+    )
     result = run_local(
         args.parts,
         args.out_dir,

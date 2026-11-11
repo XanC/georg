@@ -6,7 +6,13 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from georg.core.config import ModuleConfig, NamedModuleConfig, OutputConfig, ProcessorsConfig
+from georg.core.config import (
+    CalendarConfig,
+    ModuleConfig,
+    NamedModuleConfig,
+    OutputConfig,
+    ProcessorsConfig,
+)
 from georg.core.contracts import (
     AudioClassifier,
     BoundaryDetector,
@@ -100,14 +106,19 @@ class Processors:
     sermon_transcribe_pad_ms: int = 2_000
 
 
-def build_processors(config: ProcessorsConfig, *, formatter: bool = True) -> Processors:
-    """Build every processor; skip the formatter when `formatter` is false."""
+def build_processors(
+    config: ProcessorsConfig, *, formatter: bool = True, calendar: CalendarConfig | None = None
+) -> Processors:
+    """Build every processor; skip the formatter when `formatter` is false.
+
+    A metadata generator whose constructor takes `calendar` gets the configured day names.
+    """
     return Processors(
         classifier=build_processor("classifier", config.classifier),
         detector=build_processor("detector", config.detector),
         transcriber=build_processor("transcriber", config.transcriber),
         formatter=build_processor("formatter", config.formatter) if formatter else None,
-        metadata=build_processor("metadata", config.metadata),
+        metadata=_build_metadata(config.metadata, calendar or CalendarConfig()),
         sermon_transcriber=(
             build_processor("transcriber", config.sermon_transcriber)
             if config.sermon_transcriber is not None
@@ -115,3 +126,17 @@ def build_processors(config: ProcessorsConfig, *, formatter: bool = True) -> Pro
         ),
         sermon_transcribe_pad_ms=config.sermon_transcribe_pad_ms,
     )
+
+
+def _build_metadata(config: ModuleConfig, calendar: CalendarConfig) -> Any:
+    target = PROCESSOR_TYPES["metadata"].get(config.type)
+    if target is None:
+        return build_processor("metadata", config)
+    module_name, _, attr = target.partition(":")
+    cls = getattr(importlib.import_module(module_name), attr)
+    if "calendar" not in inspect.signature(cls).parameters:
+        return build_processor("metadata", config)
+    from georg.modules.processors.metadata.calendar import load_calendar
+
+    loaded = load_calendar(calendar.book, calendar.lectionary, calendar.occasions)
+    return cls(dict(config.options), calendar=loaded)

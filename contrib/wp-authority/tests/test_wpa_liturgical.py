@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
+import tomllib
 from datetime import date, timedelta
+from importlib import resources
 
 import pytest
 
 from wp_authority.liturgical import advent1, church_year, days, easter, series, table_for
+from wp_authority.mapping import Canonical
 from wp_authority.names import ordinal, person_name, series_key, speaker_key, spell_ordinals
 
 
@@ -125,3 +128,9 @@ def test_ordinals_and_keys() -> None:
     assert person_name("Rev. Dr. Mark S. Nuckols, Senior Pastor") == "Mark Nuckols"
     assert person_name("Vicar Ross Davis") == "Ross Davis"
     assert person_name("Nobody") is None
+
+
+def test_georg_calendar_file_reads_as_a_canonical_table() -> None:
+    text = resources.files("georg").joinpath("data/calendars/lsb.toml").read_text("utf-8")
+    for table in tomllib.loads(text).values():
+        Canonical.model_validate({"canonical": table})

@@ -23,6 +23,7 @@ from georg.modules.processors.metadata import (
     RulesMetadataGenerator,
     parse_document_name,
 )
+from georg.modules.processors.metadata.calendar import load_calendar
 
 
 @pytest.mark.parametrize(
@@ -325,3 +326,21 @@ def test_scripture_never_overrides_and_never_fails(tmp_path: Path) -> None:
     failing = RulesMetadataGenerator({"scripture": {}}, model_factory=broken)
     meta = failing.generate(doc_ctx(date(2026, 11, 8), texts, transcript=SERMON))
     assert meta.scripture == () and meta.occasion == "Twenty-third Sunday after Trinity"
+
+
+def test_rules_generator_normalizes_bulletin_occasion(tmp_path: Path) -> None:
+    gen = RulesMetadataGenerator({"title": "Sermon for {occasion}"}, calendar=load_calendar())
+    assert gen.version.startswith("rules-3+lsb-three-year-")
+    text = bulletin(tmp_path, [["All Saints Sunday"], ["November 1, 2026"]])
+    proposal = gen.propose(doc_ctx(date(2026, 11, 1), {DOC_1101: text}))
+    assert proposal.metadata.occasion == "All Saints' Day"
+    assert proposal.metadata.title == "Sermon for All Saints' Day"
+    assert proposal.origins == {
+        "occasion": f"rules-3/document text: {DOC_1101}; normalized from 'All Saints Sunday'"
+    }
+    text = bulletin(tmp_path, [["Feast of the Holy Trinity"], ["November 1, 2026"]])
+    proposal = gen.propose(doc_ctx(date(2026, 11, 1), {DOC_1101: text}))
+    assert proposal.metadata.occasion == "Feast of the Holy Trinity"
+    assert proposal.origins["occasion"].endswith(
+        "; not a known day name; did you mean 'The Holy Trinity'?"
+    )

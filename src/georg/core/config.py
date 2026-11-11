@@ -113,6 +113,14 @@ class ReviewConfig(_Section):
     """Preachers of sermons within this many days of the reviewed service come first."""
 
 
+class CalendarConfig(_Section):
+    book: Literal["lsb"] = "lsb"
+    """Bundled day-name list (georg/data/calendars/<book>.toml)."""
+    lectionary: Literal["three-year", "one-year"] = "three-year"
+    occasions: Path | None = None
+    """Local TOML in the same format, merged over the bundled names."""
+
+
 class DiscoveryConfig(_Section):
     start_date: date | None = None
     """Oldest service date automatic discovery picks up; unset means no cutoff.
@@ -131,6 +139,7 @@ class GeorgConfig(_Section):
     outputs: tuple[OutputConfig, ...] = ()
     review: ReviewConfig = ReviewConfig()
     discovery: DiscoveryConfig = DiscoveryConfig()
+    calendar: CalendarConfig = CalendarConfig()
     idle_shutdown_minutes: int | None = Field(default=None, gt=0)
     """Power the host off after this long with no jobs and no web requests (off if unset)."""
     idle_shutdown_command: tuple[str, ...] = Field(
