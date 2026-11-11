@@ -67,6 +67,38 @@ def _weeks(later: date, earlier: date) -> int:
     return (later - earlier).days // 7
 
 
+LSB_TITLES = {
+    "St. Andrew": "St. Andrew, Apostle",
+    "St. Thomas": "St. Thomas, Apostle",
+    "St. Stephen": "St. Stephen, Martyr",
+    "Holy Innocents": "The Holy Innocents, Martyrs",
+    "Confession of St. Peter": "The Confession of St. Peter",
+    "St. Timothy": "St. Timothy, Pastor and Confessor",
+    "Conversion of St. Paul": "The Conversion of St. Paul",
+    "St. Titus": "St. Titus, Pastor and Confessor",
+    "Purification of Mary and Presentation of Our Lord": (
+        "The Purification of Mary and the Presentation of Our Lord"
+    ),
+    "St. Matthias": "St. Matthias, Apostle",
+    "St. Joseph": "St. Joseph, Guardian of Jesus",
+    "Annunciation of Our Lord": "The Annunciation of Our Lord",
+    "St. Mark": "St. Mark, Evangelist",
+    "St. Philip and St. James": "St. Philip and St. James, Apostles",
+    "Visitation": "The Visitation",
+    "St. Barnabas": "St. Barnabas, Apostle",
+    "Nativity of St. John the Baptist": "The Nativity of St. John the Baptist",
+    "St. Peter and St. Paul": "St. Peter and St. Paul, Apostles",
+    "St. James the Elder": "St. James the Elder, Apostle",
+    "St. Bartholomew": "St. Bartholomew, Apostle",
+    "Martyrdom of St. John the Baptist": "The Martyrdom of St. John the Baptist",
+    "St. Matthew": "St. Matthew, Apostle and Evangelist",
+    "St. Luke": "St. Luke, Evangelist",
+    "St. James of Jerusalem": "St. James of Jerusalem, Brother of Jesus and Martyr",
+    "St. Simon and St. Jude": "St. Simon and St. Jude, Apostles",
+}
+"""LSB's full feast names; the lectionary source uses the short ones."""
+
+
 def days(day: date) -> list[Day]:
     """Every day that may be kept on `day` (three-year calendar); [] for ordinary weekdays."""
     table = table_for(day)
@@ -75,7 +107,8 @@ def days(day: date) -> list[Day]:
     if sunday:
         for name, (month, dom) in feasts().items():
             if (day.month, day.day) == (month, dom):
-                found.append(Day((name,), FEASTS, name))
+                title = LSB_TITLES.get(name, name)
+                found.append(Day((title, *([name] if title != name else [])), FEASTS, name))
     if sunday and day.month == 11 and day.day <= 7:
         observed = ("All Saints' Day", "All Saints' Day (Observed)")
         found.append(Day(observed, FEASTS, "All Saints' Day"))
