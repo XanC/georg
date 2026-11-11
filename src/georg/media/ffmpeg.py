@@ -172,8 +172,6 @@ def probe_media(
     *,
     force_refresh: bool = False,
     retryable: bool = False,
-    chunk_bytes: int = range_proxy.DEFAULT_CHUNK_BYTES,
-    prefetch: int = range_proxy.DEFAULT_PREFETCH,
 ) -> MediaInfo:
     """`probe` for a `MediaInput`: ffprobe a local file or a remote URL.
 
@@ -181,9 +179,7 @@ def probe_media(
     server only ever sees closed ranges.
     """
     if isinstance(part, RemoteMedia):
-        with range_proxy.serve_remote(
-            part, chunk_bytes=chunk_bytes, prefetch=prefetch, force_refresh=force_refresh
-        ) as url:
+        with range_proxy.serve_remote(part, force_refresh=force_refresh) as url:
             out = _run(
                 _probe_args(part, url=url),
                 retryable=retryable,
@@ -239,8 +235,6 @@ def _extract_once(
     force_refresh: bool,
     remote: bool,
     probe_part: Callable[[MediaInput], MediaInfo],
-    chunk_bytes: int,
-    prefetch: int,
 ) -> None:
     expected_ms = 0
     for part in parts:
@@ -253,9 +247,7 @@ def _extract_once(
     chains = "".join(f"[{i}:a:0]{fmt}{layout}[a{i}];" for i in range(len(parts)))
     joined = "".join(f"[a{i}]" for i in range(len(parts)))
     graph = f"{chains}{joined}concat=n={len(parts)}:v=0:a=1[out]"
-    with range_proxy.serve_all(
-        list(parts), chunk_bytes=chunk_bytes, prefetch=prefetch, force_refresh=force_refresh
-    ) as urls:
+    with range_proxy.serve_all(list(parts), force_refresh=force_refresh) as urls:
         inputs = [a for part in parts for a in _input_args(part, url=urls.get(id(part)))]
         _ffmpeg(
             *inputs,
@@ -287,8 +279,6 @@ def extract_audio(
     attempts: int = 3,
     sleep: Callable[[float], None] = time.sleep,
     remote_probes: Mapping[str, MediaInfo] | None = None,
-    chunk_bytes: int = range_proxy.DEFAULT_CHUNK_BYTES,
-    prefetch: int = range_proxy.DEFAULT_PREFETCH,
 ) -> Path:
     """Join the audio of `parts`, in order, into one lossless FLAC file.
 
@@ -320,8 +310,6 @@ def extract_audio(
                     part,
                     force_refresh=force_refresh,
                     retryable=remote,
-                    chunk_bytes=chunk_bytes,
-                    prefetch=prefetch,
                 )
             return probes[part.key]
         return probe_media(part)
@@ -341,8 +329,6 @@ def extract_audio(
                 force_refresh=refresh,
                 remote=remote,
                 probe_part=probe_for_attempt,
-                chunk_bytes=chunk_bytes,
-                prefetch=prefetch,
             )
         except MediaError as exc:
             tmp.unlink(missing_ok=True)
