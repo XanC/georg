@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Pin to 24.04: ubuntu-26.04 runners fail DNS for security.ubuntu.com
+    # during `apt-get install ffmpeg` (job times out after ~1 h of retries).
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
