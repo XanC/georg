@@ -10,16 +10,20 @@ permissions:
 
 jobs:
   check:
-    # Pin to 24.04: ubuntu-26.04 runners fail DNS for security.ubuntu.com
-    # during `apt-get install ffmpeg` (job times out after ~1 h of retries).
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        # Static build from GitHub releases: `apt-get install ffmpeg` depends on
+        # the Ubuntu archive mirrors, whose DNS has been failing on the hosted
+        # runners (the step burned ~1 h of retries before erroring).
+        run: |
+          url=https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz
+          curl -fsSL "$url" | sudo tar -xJ -C /usr/local/bin --strip-components=2 --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'
+          ffmpeg -version | head -1
       - run: uv sync --locked
       - name: Lint
         run: uv run ruff check . && uv run ruff format --check .
