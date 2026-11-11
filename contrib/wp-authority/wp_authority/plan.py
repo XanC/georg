@@ -444,7 +444,7 @@ def _series_fill(
                 clues.append("scripture")
             if title_key and title_key in keys:
                 clues.append("title")
-            found.append((candidate, term or candidate.name, clues))
+            found.append((candidate, spell_ordinals(term or candidate.name), clues))
         agree = [f for f in found if len(f[2]) > 1]
         base = {"post": s["id"], "date": s["date"][:10], "title": clean_name(s["title"])}
         if len(agree) == 1:

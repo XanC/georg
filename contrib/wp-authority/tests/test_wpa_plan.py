@@ -114,7 +114,12 @@ def test_speakers_people_and_suggestions() -> None:
         "Rev. Ross Davis": ["Ross Davis"],
     }
     assert set(terms(plan, "delete-unused", "ctc_sermon_speaker")) == {"Nobody"}
-    assert plan["suggestions"]["speakers"] == {
+    assert plan["suggestions"]["speakers"] == {}
+    assert terms(plan, "merge", "ctc_sermon_speaker") == {
+        "Seminarian Mark DeYoung": ["Seminarian Mark De Young"]
+    }
+    unmapped = build_plan(snapshot(), Mapping())
+    assert unmapped["suggestions"]["speakers"] == {
         "Seminarian Mark DeYoung": ["Seminarian Mark De Young"]
     }
     assert plan["suggestions"]["people"] == {}

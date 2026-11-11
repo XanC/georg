@@ -27,6 +27,7 @@ wpa --ssh church --path /var/www/html --wp "sudo -u www-data wp" plan --mapping 
 | Command | Does |
 | --- | --- |
 | `dump OUT.json` | Writes a snapshot: every term (id, name, slug, parent, description) and every sermon's assignments, in all post statuses including trash. |
+| `dump-rest URL OUT.json` | Read-only snapshot from the public REST API (`/wp-json/wp/v2/ctc_sermon` and the three taxonomies), for planning before WP-CLI is installed. It sees published sermons only, and only the terms they use plus whatever the term listings return (term paging skips terms, so missing IDs are fetched with `?include=`). Use it to review a plan; `apply` still needs a plan made from a WP-CLI `dump`. |
 | `plan [--mapping M] [--snapshot S] [--out-dir D]` | Writes `plan.json` and `plan.csv`. With `--snapshot`, plans from a dump instead of the site. Read-only. |
 | `apply plan.json [--backup-dir D]` | Writes `backup-<timestamp>.json` (a full snapshot), then applies the plan's actions and writes `apply-<timestamp>.json` with each action's result. |
 | `restore backup.json` | Puts the backup back (see below). |

@@ -11,6 +11,7 @@ from typing import Any
 from wp_authority.check import check_calendar
 from wp_authority.mapping import Mapping
 from wp_authority.plan import build_plan, write_csv
+from wp_authority.rest import RestSnapshot
 from wp_authority.wp import WP
 
 
@@ -26,6 +27,9 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     dump = sub.add_parser("dump", help="write a snapshot (the same data a backup holds)")
     dump.add_argument("out", type=Path)
+    rest = sub.add_parser("dump-rest", help="read-only snapshot from the public REST API")
+    rest.add_argument("url", help="site URL, e.g. https://www.example.org")
+    rest.add_argument("out", type=Path)
     plan = sub.add_parser("plan", help="write plan.json and plan.csv")
     plan.add_argument("--mapping", type=Path)
     plan.add_argument("--snapshot", type=Path, help="plan from a snapshot file, not the site")
@@ -47,6 +51,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "dump":
         _write(args.out, wp.snapshot())
+    elif args.command == "dump-rest":
+        reader = RestSnapshot(args.url)
+        snap = reader.snapshot()
+        _write(args.out, snap)
+        for warning in reader.warnings:
+            print(f"warning: {warning}", file=sys.stderr)
+        counts = {t: len(v) for t, v in snap["terms"].items()}
+        print(f"{len(snap['sermons'])} sermons, terms {counts}")
     elif args.command == "plan":
         mapping = Mapping.load(args.mapping)
         source = args.snapshot
