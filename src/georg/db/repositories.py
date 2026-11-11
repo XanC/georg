@@ -7,7 +7,9 @@ boundaries (use `georg.db.session_factory`, whose sessions begin `IMMEDIATE`).
 
 import hashlib
 import json
+from collections import Counter
 from collections.abc import Mapping, Sequence
+from datetime import date
 from typing import Any
 
 from sqlalchemy import func, select
@@ -364,6 +366,77 @@ class SermonRepository:
     def is_approved(self, sermon_id: int) -> bool:
         return self.current_approval(sermon_id) is not None
 
+    def preacher_suggestions(
+        self,
+        service_date: date | None,
+        *,
+        recent_days: int,
+        seeds: Sequence[str] = (),
+        exclude_sermon_id: int | None = None,
+    ) -> list[str]:
+        """Preacher names to offer when reviewing a service on `service_date`.
+
+        Names come from each other sermon's latest approved revision, else the revision
+        it was last published from, else its current revision. Preachers of sermons
+        dated within `recent_days` of `service_date` come first, then the rest of the
+        history, each ordered by sermon count and then by latest date; then the `seeds`
+        not already listed. Names are trimmed and de-duplicated exactly.
+        """
+        rows = self.session.execute(
+            select(Sermon.id, Sermon.current_revision_id, Service.service_date)
+            .join(Service, Service.id == Sermon.service_id)
+            .where(Sermon.current_revision_id.is_not(None))
+        ).all()
+        chosen: dict[int, int] = {
+            sermon_id: revision_id for sermon_id, revision_id, _ in rows if revision_id is not None
+        }
+        published = self.session.execute(
+            select(Publication.sermon_id, Publication.revision_id)
+            .where(Publication.status == "published")
+            .order_by(Publication.updated_at, Publication.id)
+        ).all()
+        approved = self.session.execute(
+            select(SermonRevision.sermon_id, Approval.revision_id)
+            .join(SermonRevision, SermonRevision.id == Approval.revision_id)
+            .order_by(Approval.id)
+        ).all()
+        for sermon_id, revision_id in [*published, *approved]:
+            if sermon_id in chosen:
+                chosen[sermon_id] = revision_id
+        if exclude_sermon_id is not None:
+            chosen.pop(exclude_sermon_id, None)
+        metadata: dict[int, dict[str, Any]] = dict(
+            self.session.execute(
+                select(SermonRevision.id, SermonRevision.sermon_metadata).where(
+                    SermonRevision.id.in_(chosen.values())
+                )
+            ).all()
+        )
+        dates = {sermon_id: when for sermon_id, _, when in rows}
+        recent: list[tuple[str, date | None]] = []
+        rest: list[tuple[str, date | None]] = []
+        for sermon_id, revision_id in chosen.items():
+            meta = metadata.get(revision_id) or {}
+            name = str(meta.get("preacher") or "").strip()
+            if not name:
+                continue
+            raw = meta.get("service_date")
+            when = date.fromisoformat(raw) if isinstance(raw, str) else dates[sermon_id]
+            near = (
+                service_date is not None
+                and when is not None
+                and abs((when - service_date).days) <= recent_days
+            )
+            (recent if near else rest).append((name, when))
+        listed: list[str] = []
+        for group in (recent, rest):
+            listed.extend(n for n in _by_count_then_date(group) if n not in listed)
+        for seed in seeds:
+            name = seed.strip()
+            if name and name not in listed:
+                listed.append(name)
+        return listed
+
     @staticmethod
     def boundaries(revision: SermonRevision) -> ServiceBoundaries:
         return ServiceBoundaries(
@@ -376,6 +449,15 @@ class SermonRepository:
     @staticmethod
     def metadata(revision: SermonRevision) -> SermonMetadata:
         return SermonMetadata.model_validate(revision.sermon_metadata)
+
+
+def _by_count_then_date(entries: Sequence[tuple[str, date | None]]) -> list[str]:
+    counts = Counter(name for name, _ in entries)
+    latest: dict[str, date] = {}
+    for name, when in entries:
+        if when is not None and (name not in latest or when > latest[name]):
+            latest[name] = when
+    return sorted(counts, key=lambda n: (-counts[n], -latest.get(n, date.min).toordinal(), n))
 
 
 class PublicationRepository:

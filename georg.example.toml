@@ -82,8 +82,13 @@ options = { folder_id = "env:GEORG_ARCHIVE_FOLDER_ID" }
 [review]
 require_approval = true
 # Optional metadata fields left off the review form; saving keeps their values.
-# Any of: series, summary, occasion, scripture, service_time.
+# Any of: preacher, series, summary, occasion, scripture, service_time.
 # hidden_fields = ["series", "summary"]
+# The Preacher field suggests names (it still accepts any name): preachers of sermons
+# within preacher_recent_days of the reviewed service first, then the rest of Georg's
+# history (most frequent first), then these full names.
+# preachers = ["The Rev. Jane Example", "John Example"]
+# preacher_recent_days = 90
 # Told when a service is ready for review and when a job fails for good.
 notify = ["reviewer@example.org"]
 base_url = "https://georg.example.org"

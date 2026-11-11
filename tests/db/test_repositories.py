@@ -251,3 +251,83 @@ def test_services_newest_first(sessions: sessionmaker[Session]) -> None:
             repo.add_discovered(ITEM.model_copy(update={"source_ref": ref, "service_date": day}))
         assert [svc.source_ref for svc in repo.newest_first()] == ["new", "old", "undated"]
         assert [svc.source_ref for svc in repo.newest_first(limit=1)] == ["new"]
+
+
+def _sermon_with(
+    s: Session, ref: str, when: date | None, *preachers: str, meta_date: date | None = None
+) -> tuple[int, list[int]]:
+    """A service dated `when` whose sermon has one revision per preacher name."""
+    service, _ = ServiceRepository(s).add_discovered(
+        ITEM.model_copy(update={"source_ref": ref, "service_date": when})
+    )
+    sermons = SermonRepository(s)
+    sermon = sermons.create(service.id)
+    revisions = [
+        sermons.add_revision(
+            sermon.id,
+            author="system",
+            boundaries=BOUNDS,
+            metadata=SermonMetadata(preacher=name, service_date=meta_date),
+        ).id
+        for name in preachers
+    ]
+    return sermon.id, revisions
+
+
+def test_preacher_suggestions_order_window_and_seeds(sessions: sessionmaker[Session]) -> None:
+    with sessions.begin() as s:
+        current, _ = _sermon_with(s, "now", date(2026, 11, 1), "Being Reviewed")
+        _sermon_with(s, "e1", date(2026, 10, 25), "Pastor Eric")
+        _sermon_with(s, "e2", date(2026, 10, 18), " Pastor Eric ")
+        _sermon_with(s, "n1", date(2026, 11, 15), "Next Week")
+        _sermon_with(s, "s1", date(2026, 10, 11), "Vicar Sarah")
+        _sermon_with(s, "t1", date(2026, 8, 3), "Bishop Tom")  # exactly 90 days before
+        for i, when in enumerate([date(2026, 3, 1), date(2026, 2, 1), date(2026, 1, 4)]):
+            _sermon_with(s, f"o{i}", when, "Old Pastor")
+        _sermon_with(s, "g1", date(2025, 12, 1), "Guest")
+        _sermon_with(s, "g2", date(2025, 11, 1), "pastor eric")
+        _sermon_with(s, "x1", date(2026, 10, 1), "   ")
+        _sermon_with(s, "u1", None, "Undated")
+        # The revision's own service date wins over the service's discovered date.
+        _sermon_with(s, "m1", date(2026, 10, 30), "Moved", meta_date=date(2025, 1, 1))
+    with sessions() as s:
+        repo = SermonRepository(s)
+        seeds = ["  Pastor Eric ", "The Rev. New", "", "The Rev. New", "Guest"]
+        names = repo.preacher_suggestions(
+            date(2026, 11, 1), recent_days=90, seeds=seeds, exclude_sermon_id=current
+        )
+        assert names == [
+            "Pastor Eric", "Next Week", "Vicar Sarah", "Bishop Tom",
+            "Old Pastor", "Guest", "pastor eric", "Moved", "Undated", "The Rev. New",
+        ]  # fmt: skip
+        # Relative to the reviewed service's date, not today.
+        march = repo.preacher_suggestions(date(2026, 3, 15), recent_days=90)
+        assert march[:2] == ["Old Pastor", "Pastor Eric"]  # Guest is 104 days before
+        wider = repo.preacher_suggestions(date(2026, 3, 15), recent_days=110)
+        assert wider[:2] == ["Old Pastor", "Guest"]
+        assert "Being Reviewed" in march
+        assert repo.preacher_suggestions(None, recent_days=90)[0] == "Old Pastor"
+        assert repo.preacher_suggestions(date(2026, 11, 1), recent_days=0)[0] == "Being Reviewed"
+
+
+def test_preacher_suggestions_prefer_approved_then_published(
+    sessions: sessionmaker[Session], user_id: int
+) -> None:
+    with sessions.begin() as s:
+        approved, (first, _) = _sermon_with(s, "a", date(2026, 10, 25), "Approved", "Draft A")
+        published, (pub_rev, _) = _sermon_with(s, "p", date(2026, 10, 18), "Published", "Draft P")
+        _sermon_with(s, "c", date(2026, 10, 11), "Current Only")
+    with sessions.begin() as s:
+        sermons = SermonRepository(s)
+        # Approve the first revision by making it current again for a moment.
+        restored = sermons.restore(first, author="system")
+        sermons.approve(restored.id, approved_by=user_id)
+        sermons.add_revision(
+            approved, author="system", boundaries=BOUNDS, metadata=SermonMetadata(preacher="Later")
+        )
+        pubs = PublicationRepository(s)
+        pub = pubs.prepare(published, "website", pub_rev, "key-p")
+        pubs.mark_published(pub.id, ExternalRef(target="website", external_id="1"))
+    with sessions() as s:
+        names = SermonRepository(s).preacher_suggestions(date(2026, 11, 1), recent_days=90)
+    assert names == ["Approved", "Published", "Current Only"]

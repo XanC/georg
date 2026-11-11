@@ -347,6 +347,16 @@ def create_app(
             "preview": preview,
             "cut_previews": cut_previews,
             "hidden": set(config.review.hidden_fields),
+            "preacher_suggestions": (
+                []
+                if "preacher" in config.review.hidden_fields
+                else sermons.preacher_suggestions(
+                    sermons.metadata(revision).service_date or service.service_date,
+                    recent_days=config.review.preacher_recent_days,
+                    seeds=config.review.preachers,
+                    exclude_sermon_id=sermon_id,
+                )
+            ),
             "seek": seek,
             "rendered": rendered,
             "rendering": bool(renders),
