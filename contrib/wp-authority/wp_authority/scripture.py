@@ -6,10 +6,10 @@ verse ("16-21") and chapter ("2:18-26") continuations stay with the reference be
 them. Anything that doesn't fit that grammar is rejected, never guessed.
 """
 
-import html
 import re
 from dataclasses import dataclass
 
+from georg.modules.processors.metadata.names import clean_name as clean_name
 from georg.modules.processors.metadata.references import BOOK_RE, DASHES, canonical_book
 
 _V = r"\d{1,3}[a-c]?"
@@ -24,21 +24,6 @@ _ZERO = re.compile(r"(?<!\d)0+(?!\d)")
 
 class Unparseable(ValueError):
     """A term that needs a human."""
-
-
-def clean_name(name: str) -> str:
-    """Decode HTML entities (repeatedly) and UTF-8 read as Latin-1/cp1252 (mojibake)."""
-    previous = None
-    while previous != name:
-        previous, name = name, html.unescape(name)
-    if any(ch in name for ch in "\u00c2\u00e2\u00c3"):
-        for codec in ("cp1252", "latin-1"):
-            try:
-                name = name.encode(codec).decode("utf-8")
-                break
-            except (UnicodeEncodeError, UnicodeDecodeError):
-                continue
-    return name.strip()
 
 
 def _ascii(text: str) -> str:

@@ -10,6 +10,17 @@ language = "en"
 [discovery]
 start_date = 2026-11-01
 
+# Day names: an occasion read from a bulletin is replaced by its canonical name when it
+# matches one exactly or as a known alias ("All Saints Sunday" -> "All Saints' Day").
+# Near matches only show as a suggestion on the review page.
+[calendar]
+book = "lsb"                 # the only bundled list (georg/data/calendars/lsb.toml)
+lectionary = "three-year"    # or "one-year" (adds "Nth Sunday after Trinity", ...)
+# Local names and aliases in the same format, merged over the bundled ones:
+#   [canonical]
+#   "Church Anniversary" = ["Anniversary Sunday"]
+# occasions = "/etc/georg/occasions.toml"
+
 [[inputs]]
 name = "drive"
 type = "google_drive"
