@@ -17,13 +17,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install FFmpeg
-        # Static build from GitHub releases: `apt-get install ffmpeg` depends on
-        # the Ubuntu archive mirrors, whose DNS has been failing on the hosted
-        # runners (the step burned ~1 h of retries before erroring).
-        run: |
-          url=https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz
-          curl -fsSL "$url" | sudo tar -xJ -C /usr/local/bin --strip-components=2 --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'
-          ffmpeg -version | head -1
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: uv sync --locked
       - name: Lint
         run: uv run ruff check . && uv run ruff format --check .
