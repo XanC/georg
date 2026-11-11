@@ -61,6 +61,9 @@ class WordPressOptions(BaseModel):
     allow_insecure_http: bool = False
     """Allow an http:// base_url (local testing only)."""
     status: Literal["draft", "private", "publish"] = "draft"
+    full_text: bool = True
+    """Tick Church Content's "Full sermon text provided" box when the transcript is the
+    post content."""
     rendition: str = "sermon"
     filename: str = "sermon_{date}_{slug}.mp3"
     """Audio file name under `uploads/sermons/`; fields {date} (YYYY-MM-DD) and {slug}."""
@@ -215,6 +218,8 @@ class WordPressOutput:
             body["content"] = transcript_html(
                 request.transcript_markdown, self.options.content_prefix
             )
+            if self.options.full_text and request.transcript_markdown.strip():
+                body["full_text"] = True
         if audio_id is not None:
             body["audio_attachment_id"] = audio_id
         return body

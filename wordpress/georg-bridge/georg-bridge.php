@@ -4,7 +4,7 @@
  * Plugin Name:       Georg Bridge
  * Plugin URI:        https://github.com/XanC/georg
  * Description:       REST endpoints that let Georg upload sermon audio and create or update Church Content sermons.
- * Version:           0.2.1
+ * Version:           0.3.0
  * Requires at least: 5.6
  * Requires PHP:      7.4
  * License:           AGPL-3.0-only
@@ -19,12 +19,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 require_once __DIR__ . '/includes/signing.php';
+require_once __DIR__ . '/includes/sermon.php';
 
 define( 'GEORG_BRIDGE_NAMESPACE', 'georg/v1' );
 define( 'GEORG_BRIDGE_KEY_META', '_georg_publication_key' );
 define( 'GEORG_BRIDGE_SHA256_META', '_georg_sha256' );
 define( 'GEORG_BRIDGE_POST_TYPE', 'ctc_sermon' );
 define( 'GEORG_BRIDGE_AUDIO_META', '_ctc_sermon_audio' );
+define( 'GEORG_BRIDGE_FULL_TEXT_META', '_ctc_sermon_has_full_text' );
 define( 'GEORG_BRIDGE_UPLOAD_SUBDIR', 'sermons' );
 define( 'GEORG_BRIDGE_KEY_PATTERN', '[A-Za-z0-9:._-]{1,190}' );
 define( 'GEORG_BRIDGE_LOCK_SECONDS', 300 );
@@ -121,6 +123,10 @@ function georg_bridge_register_routes() {
 						),
 						'audio_attachment_id' => array(
 							'type'     => 'integer',
+							'required' => false,
+						),
+						'full_text'           => array(
+							'type'     => 'boolean',
 							'required' => false,
 						),
 					)
@@ -799,6 +805,13 @@ function georg_bridge_put_sermon( $request ) {
 				$set->add_data( array( 'status' => 500 ) );
 				return $set;
 			}
+		}
+
+		$full_text = georg_bridge_full_text_action( $request['full_text'] );
+		if ( 'set' === $full_text ) {
+			update_post_meta( $post_id, GEORG_BRIDGE_FULL_TEXT_META, '1' );
+		} elseif ( 'delete' === $full_text ) {
+			delete_post_meta( $post_id, GEORG_BRIDGE_FULL_TEXT_META );
 		}
 
 		if ( null !== $audio_id ) {

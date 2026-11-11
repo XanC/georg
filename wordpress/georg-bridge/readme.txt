@@ -4,7 +4,7 @@ Tags: sermons, church, rest-api
 Requires at least: 5.6
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.2.1
+Stable tag: 0.3.0
 License: AGPL-3.0-only
 License URI: https://www.gnu.org/licenses/agpl-3.0.html
 
@@ -33,7 +33,9 @@ sermons. This plugin is its WordPress side. It adds the REST namespace `georg/v1
 * `PUT /wp-json/georg/v1/sermons/<publication_key>` - JSON body with `title`, optional
   `content`, `status` (`draft`, `private`, `publish`; default `draft`), `date`,
   `date_gmt`, `terms` (taxonomy => list of names; missing terms are created) and
-  `audio_attachment_id`. Creates the sermon or updates the one with this key, sets
+  `audio_attachment_id`, and optional boolean `full_text` (true ticks Church Content's
+  "Full sermon text provided" box, i.e. post meta `_ctc_sermon_has_full_text` = `1`; false
+  clears it; absent leaves it alone). Creates the sermon or updates the one with this key, sets
   `_ctc_sermon_audio` to the attachment URL and attaches the audio to the post. An update
   asking for `draft` leaves a sermon that has since been published, scheduled, or made
   private in that status; `private` and `publish` are always applied.
@@ -67,6 +69,10 @@ than five minutes are refused). PHP's `upload_max_filesize` and `post_max_size` 
 exceed the largest sermon MP3.
 
 == Changelog ==
+
+= 0.3.0 =
+* Optional `full_text` on the sermon PUT sets or clears `_ctc_sermon_has_full_text`
+  (Church Content's "Full sermon text provided" checkbox).
 
 = 0.2.1 =
 * Delete the temporary upload with unlink() so media plugins hooking wp_delete_file (e.g. WebP Express) do not log errors.

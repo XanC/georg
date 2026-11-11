@@ -271,6 +271,7 @@ def sermon_state(post_id: int) -> dict[str, Any]:
             'type' => $p->post_type, 'status' => $p->post_status, 'title' => $p->post_title,
             'content' => $p->post_content, 'date' => $p->post_date, 'date_gmt' => $p->post_date_gmt,
             'key' => get_post_meta($p->ID, '_georg_publication_key', true), 'terms' => $terms,
+            'full_text' => get_post_meta($p->ID, '_ctc_sermon_has_full_text', true),
             'audio' => $audio, 'att' => $att,
             'att_type' => $a ? $a->post_type : null, 'att_mime' => $a ? $a->post_mime_type : null,
             'att_parent' => $a ? $a->post_parent : null, 'att_guid' => $a ? $a->guid : null,
@@ -313,6 +314,7 @@ def check_sermon(
         state["date_gmt"] == "2026-11-01 16:30:00", "post_date_gmt is UTC (CST)", state["date_gmt"]
     )
     check(state["key"] == key, "sermon _georg_publication_key", state["key"])
+    check(state["full_text"] == "1", "_ctc_sermon_has_full_text is 1", state["full_text"])
     expected_terms = {
         "ctc_sermon_speaker": ["Rev. Jane O'Neil & Guest"],
         "ctc_sermon_book": ["Matthew 5:1-12"],
