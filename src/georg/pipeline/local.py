@@ -36,7 +36,7 @@ from georg.core.types import (
 )
 from georg.media import ffmpeg, mastering
 from georg.modules.processors.classify import segments_from_json, segments_to_json
-from georg.pipeline.registry import Processors
+from georg.pipeline.registry import Processors, release_models
 
 log = logging.getLogger(__name__)
 
@@ -225,6 +225,7 @@ def run_local(
             segments_from_json,
         ),
     )
+    release_models(p.classifier)
     transcript: Transcript = timed(
         "transcribe",
         lambda: _parse(
@@ -236,6 +237,8 @@ def run_local(
             Transcript.model_validate_json,
         ),
     )
+    if not transcribe_sermon or p.sermon_transcriber not in (None, p.transcriber):
+        release_models(p.transcriber)
 
     start = time.monotonic()
     proposal = p.detector.detect(segments, duration_ms, transcript)
@@ -281,6 +284,7 @@ def run_local(
                 exc,
             )
             sermon_transcript = transcript.within(chosen.sermon)
+        release_models(sermon_processor)
     else:
         sermon_transcript = transcript.within(chosen.sermon)
 
@@ -326,6 +330,7 @@ def run_local(
                 FormattedTranscript.model_validate_json,
             ),
         )
+    release_models(p.metadata, p.formatter)
     transcript_md = out_dir / "transcript.md"
     transcript_md.write_text(
         formatted.markdown if formatted else _plain_markdown(sermon_transcript), encoding="utf-8"

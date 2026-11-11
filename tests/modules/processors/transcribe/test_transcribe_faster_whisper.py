@@ -162,6 +162,17 @@ def test_transcribe_defaults_and_each_new_option(tmp_path: Path) -> None:
     }
 
 
+def test_released_model_reloads_on_next_use(tmp_path: Path) -> None:
+    t, loads = make(FakeModel([Segment(0.0, 1.0, " Amen.", -0.1)]))
+    t.release()
+    assert loads == []
+    t.transcribe(tmp_path / "a.flac", "en")
+    t.release()
+    assert t._model is None
+    assert t.transcribe(tmp_path / "b.flac", "en").text == "Amen."
+    assert len(loads) == 2
+
+
 def test_version_reflects_parameters() -> None:
     a, _ = make(FakeModel([]))
     b, _ = make(FakeModel([]), model="small", compute_type="float16")

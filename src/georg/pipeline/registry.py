@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Maps configured module `type` names to implementations, importing them lazily."""
 
+import ctypes
+import ctypes.util
 import importlib
 import inspect
+import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -23,6 +26,8 @@ from georg.core.contracts import (
     TranscriptFormatter,
 )
 from georg.core.errors import ConfigError
+
+log = logging.getLogger(__name__)
 
 Role = Literal["classifier", "detector", "transcriber", "formatter", "metadata"]
 
@@ -104,6 +109,46 @@ class Processors:
     metadata: MetadataGenerator
     sermon_transcriber: Transcriber | None = None
     sermon_transcribe_pad_ms: int = 2_000
+
+    def release(self) -> None:
+        """Free every module's loaded model; each reloads on its next use."""
+        release_models(
+            self.classifier,
+            self.detector,
+            self.transcriber,
+            self.sermon_transcriber,
+            self.metadata,
+            self.formatter,
+        )
+
+
+def release_models(*modules: object) -> None:
+    """Call each module's optional `release()` (once per module), so a loaded model's
+    memory is freed before the next model-heavy step. Failures are logged, not raised."""
+    seen: set[int] = set()
+    for module in modules:
+        if module is None or id(module) in seen:
+            continue
+        seen.add(id(module))
+        release = getattr(module, "release", None)
+        if not callable(release):
+            continue
+        try:
+            release()
+        except Exception:
+            log.warning("could not release %s", type(module).__name__, exc_info=True)
+    if seen:
+        _trim_heap()
+
+
+def _trim_heap() -> None:
+    """Return freed heap pages to the OS (glibc keeps them otherwise; no-op elsewhere)."""
+    name = ctypes.util.find_library("c")
+    try:
+        libc = ctypes.CDLL(name)
+        libc.malloc_trim(0)
+    except (OSError, AttributeError, TypeError):
+        pass
 
 
 def build_processors(

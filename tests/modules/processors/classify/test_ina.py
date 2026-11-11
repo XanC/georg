@@ -2,8 +2,10 @@
 import importlib.util
 import shutil
 import subprocess
+import sys
 from collections.abc import Iterable
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -98,6 +100,30 @@ def test_segmenter_failure_is_wrapped(tmp_path: Path) -> None:
     c = InaSpeechSegmenterClassifier(segmenter_factory=boom)
     with pytest.raises(ModuleError, match="decode failed"):
         c.classify(silent_audio(tmp_path / "a.flac", 1))
+
+
+def test_release_clears_keras_session_and_reloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cleared: list[None] = []
+    keras = SimpleNamespace(backend=SimpleNamespace(clear_session=lambda: cleared.append(None)))
+    monkeypatch.setitem(sys.modules, "tensorflow", SimpleNamespace(keras=keras))
+    loads: list[InaOptions] = []
+    fake = FakeSegmenter([("speech", 0.0, 2.0)])
+
+    def factory(options: InaOptions) -> FakeSegmenter:
+        loads.append(options)
+        return fake
+
+    c = InaSpeechSegmenterClassifier(segmenter_factory=factory)
+    audio = silent_audio(tmp_path / "a.flac", 2)
+    c.release()
+    assert cleared == []
+    c.classify(audio)
+    c.release()
+    assert cleared == [None]
+    c.classify(audio)
+    assert len(loads) == 2
 
 
 def test_options_are_validated_and_in_version() -> None:

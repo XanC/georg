@@ -7,6 +7,9 @@ from the project's GitHub releases on first use and cached under `$KERAS_HOME`
 (default `~/.keras`).
 """
 
+import gc
+import logging
+import sys
 from collections.abc import Callable, Iterable
 from importlib import metadata
 from pathlib import Path
@@ -19,6 +22,8 @@ from georg.core.types import AudioSegment, SegmentLabel
 from georg.media import probe
 from georg.media.ffmpeg import FFMPEG
 from georg.modules.processors.classify.segments import normalize_segments
+
+log = logging.getLogger(__name__)
 
 TYPE_NAME = "ina_speech_segmenter"
 _REVISION = 1
@@ -121,6 +126,14 @@ class InaSpeechSegmenterClassifier:
             raw.extend(_map(found))
         return normalize_segments(raw, duration_ms)
 
+    def release(self) -> None:
+        """Free the loaded segmenter and TensorFlow's graph state; `classify` reloads it."""
+        if self._segmenter is None:
+            return
+        self._segmenter = None
+        _clear_keras_session()
+        gc.collect()
+
     def _windows(self, duration_ms: int) -> list[tuple[float | None, float | None]]:
         chunk = self.options.chunk_s
         if chunk is None or duration_ms <= chunk * 1000:
@@ -138,3 +151,14 @@ def _map(found: Iterable[tuple[str, float, float]]) -> list[tuple[SegmentLabel, 
             raise ModuleError(f"inaSpeechSegmenter returned unknown label {label!r}") from None
         out.append((mapped, round(start * 1000), round(end * 1000)))
     return out
+
+
+def _clear_keras_session() -> None:
+    """Drop Keras's global graph, which keeps the CNN weights alive after the segmenter."""
+    tf = sys.modules.get("tensorflow")
+    if tf is None:
+        return
+    try:
+        tf.keras.backend.clear_session()
+    except Exception as exc:
+        log.warning("could not clear the Keras session: %s", exc)

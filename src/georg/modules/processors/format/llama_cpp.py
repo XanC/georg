@@ -19,6 +19,7 @@ at `retry_temperature`; if that fails too its original text is used unformatted 
 warning is added to `discrepancies`.
 """
 
+import gc
 import os
 import re
 import threading
@@ -200,6 +201,23 @@ def shared_model[O: LlamaModelOptions](
         return model
 
 
+def release_shared_model[O: LlamaModelOptions](
+    options: O, factory: Callable[[O], LlamaLike] | None = None
+) -> None:
+    """Close the process's loaded copy of this model, if any; `shared_model` reloads it.
+
+    Context reservations are kept, so the reload again fits every module that uses it.
+    """
+    key = _shared_key(options, factory or load_model)
+    with _shared_lock:
+        current = _loaded.pop(key, None)
+        if current is None:
+            return
+        _close(current[1])
+        del current
+    gc.collect()
+
+
 def release_shared_models() -> None:
     """Drop every shared model and reservation (e.g. between tests)."""
     with _shared_lock:
@@ -274,6 +292,10 @@ class LlamaCppFormatter:
             f"-p{o.paragraph_words}"
             f"-nt{int(o.disable_thinking)}"
         )
+
+    def release(self) -> None:
+        """Free the shared model (also used by Scripture detection) until next use."""
+        release_shared_model(self.options, self._factory)
 
     def format(self, transcript: Transcript, ctx: FormatContext) -> FormattedTranscript:
         o = self.options

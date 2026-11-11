@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from georg.modules.processors.format.llama_cpp import (
     LlamaLike,
     LlamaModelOptions,
+    release_shared_model,
     reserve_context,
     shared_model,
 )
@@ -185,6 +186,11 @@ class ScriptureDetector:
             if llm
             else "-nollm"
         )
+
+    def release(self) -> None:
+        """Free the shared model (also used by the llama_cpp formatter) until next use."""
+        if self.options.llm_enabled:
+            release_shared_model(self.options.llm, self._factory)
 
     def readings(self, documents: Mapping[str, str]) -> list[Reading]:
         """The readings of the first document (in the given order) that lists any."""

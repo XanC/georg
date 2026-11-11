@@ -175,6 +175,22 @@ def test_failed_job_is_recorded(config: GeorgConfig, engine: Engine) -> None:
     assert job.last_error is not None and "gone" in job.last_error
 
 
+def test_worker_releases_models_after_every_job(config: GeorgConfig, engine: Engine) -> None:
+    sessions = session_factory(engine)
+    queue = JobQueue(engine)
+    [service_id] = discover(config, sessions, queue)
+    with sessions.begin() as s:
+        ServiceRepository(s).get(service_id).hints = {"input": "gone"}
+    procs = processors()
+    released: list[str] = []
+    for role in ("classifier", "transcriber", "metadata", "formatter"):
+        getattr(procs, role).release = lambda role=role: released.append(role)
+    worker = Worker(config, engine, queue=queue, processors=procs, worker_id="w")
+    assert worker.run_once()
+    assert queue.list()[0].status == "failed"
+    assert released == ["classifier", "transcriber", "metadata", "formatter"]
+
+
 class FakeOutput:
     def __init__(self, name: str, renditions: set[str], fail: Exception | None = None) -> None:
         self.name, self.renditions, self.fail = name, frozenset(renditions), fail
