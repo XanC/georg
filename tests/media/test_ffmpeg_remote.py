@@ -312,21 +312,27 @@ def test_truncated_stream_fails_retryable(server: _Server, tmp_path: Path) -> No
     assert not list(tmp_path.glob("*.flac")) and not list(tmp_path.glob(".*partial*"))
 
 
-def test_single_body_request_and_tail_request(server: _Server, tmp_path: Path) -> None:
-    """A full extraction reads the body through one stream + one tail range."""
-    big = tmp_path / "big.mp4"  # > TAIL_BYTES so the body stream is exercised
+def _big_mp4(tmp_path: Path, seconds: int = 45) -> bytes:
+    """A high-bitrate moov-at-end mp4 larger than TAIL_BYTES (16 MiB)."""
+    big = tmp_path / "big.mp4"
     subprocess.run(
         ["ffmpeg", "-loglevel", "error", "-y",
-         "-f", "lavfi", "-i", "testsrc2=size=640x480:rate=30:duration=20",
-         "-f", "lavfi", "-i", "sine=frequency=660:sample_rate=48000:duration=20",
-         "-t", "20", "-c:v", "libx264", "-b:v", "8M",
+         "-f", "lavfi", "-i", f"testsrc2=size=640x480:rate=30:duration={seconds}",
+         "-f", "lavfi", "-i", f"sine=frequency=660:sample_rate=48000:duration={seconds}",
+         "-t", str(seconds), "-c:v", "libx264", "-b:v", "8M",
          "-c:a", "aac", "-b:a", "128k", str(big)],
         check=True,
     )  # fmt: skip
-    server.contents["big.mp4"] = big.read_bytes()
-    assert len(server.contents["big.mp4"]) > 8 << 20
+    data = big.read_bytes()
+    assert len(data) > 16 << 20
+    return data
+
+
+def test_single_body_request_and_tail_request(server: _Server, tmp_path: Path) -> None:
+    """A full extraction reads the body through one stream + one tail range."""
+    server.contents["big.mp4"] = _big_mp4(tmp_path)
     out = extract_audio([remote(server, "big.mp4")], tmp_path / "s.flac", sleep=lambda _: None)
-    assert abs(probe(out).duration_ms - 20 * 1000) < 500
+    assert abs(probe(out).duration_ms - 45 * 1000) < 500
     ranges = [r.headers.get("Range", "") for r in server.requests]
     assert all(re.fullmatch(r"bytes=\d+-\d+", value) for value in ranges)
     # Each ffmpeg call = one tail fetch + one body stream; ffmpeg's re-read
@@ -349,7 +355,7 @@ def test_quota_latch_stops_upstream_traffic(server: _Server, tmp_path: Path) -> 
 
 def test_forward_seek_discards_from_one_stream(server: _Server) -> None:
     """A forward seek does not open another body request."""
-    data = (bytes(range(256)) * ((12 << 20) // 256))[: 12 << 20]
+    data = (bytes(range(256)) * ((20 << 20) // 256))[: 20 << 20]
     server.contents["big.bin"] = data
     with serve_remote(remote(server, "big.bin")) as url:
         first = httpx.get(url, headers={"Range": "bytes=0-1023"})
@@ -465,7 +471,7 @@ def test_retry_refreshes_token_for_error_lookup(server: _Server, tmp_path: Path)
 
 def test_resume_starts_at_exact_next_byte(server: _Server) -> None:
     """A dropped body stream resumes with the next byte and no corruption."""
-    data = (bytes(range(256)) * ((12 << 20) // 256))[: 12 << 20]
+    data = (bytes(range(256)) * ((20 << 20) // 256))[: 20 << 20]
     server.contents["big.bin"] = data
     server.drop_after = (3 << 20) + 65536  # mid-chunk, past a few full chunks
     with serve_remote(remote(server, "big.bin")) as url:
@@ -475,3 +481,49 @@ def test_resume_starts_at_exact_next_byte(server: _Server) -> None:
     ranges = [r.headers.get("Range", "") for r in server.requests]
     assert len(ranges) == 3  # tail, dropped body, and one exact resume
     assert ranges[-1].startswith(f"bytes={3 << 20}-")  # next recorded byte
+
+
+def test_seek_request_preempts_a_stalled_client(server: _Server, tmp_path: Path) -> None:
+    """A new request never waits on another connection's stalled write.
+
+    With a tiny proxy send buffer, ffmpeg's first connection backs up fast;
+    the moov-at-end seek it opens next must preempt it — the deadlock this
+    regresses hung the proxy forever in production.
+    """
+    server.contents["big.mp4"] = _big_mp4(tmp_path)
+    with serve_remote(remote(server, "big.mp4"), send_buffer=8 << 10) as url:
+        proc = subprocess.run(
+            [
+                "ffmpeg",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                url,
+                "-map",
+                "0:a:0",
+                "-c:a",
+                "flac",
+                str(tmp_path / "out.flac"),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    assert proc.returncode == 0, proc.stderr[-500:]
+    assert abs(probe(tmp_path / "out.flac").duration_ms - 45 * 1000) < 500
+    ranges = [r.headers.get("Range", "") for r in server.requests]
+    assert all(re.fullmatch(r"bytes=\d+-\d+", value) for value in ranges)
+    assert len(ranges) <= 4  # tail + body (+ a resumed/reopened stream at most)
+
+
+def test_stalled_upstream_fails_the_attempt(server: _Server) -> None:
+    """No progress for `stall_seconds` ends the request instead of hanging."""
+    data = (bytes(range(256)) * ((20 << 20) // 256))[: 20 << 20]
+    server.contents["big.bin"] = data
+    server.latency = 2.0
+    started = time.monotonic()
+    with serve_remote(remote(server, "big.bin"), stall_seconds=1.0) as url:
+        response = httpx.get(url, headers={"Range": "bytes=0-1023"}, timeout=60)
+    assert response.status_code >= 400
+    assert time.monotonic() - started < 60
