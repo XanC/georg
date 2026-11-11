@@ -30,7 +30,14 @@ from georg.db.repositories import (
 )
 from georg.jobs.queue import JobQueue
 from georg.media import ffmpeg
-from georg.pipeline.local import PREVIEW, LocalRunResult, StageCache, run_local
+from georg.pipeline.local import (
+    CUT_PREVIEWS,
+    PREVIEW,
+    LocalRunResult,
+    StageCache,
+    cut_preview_sources,
+    run_local,
+)
 from georg.pipeline.registry import Processors, build_input, build_output
 from georg.storage.local import LocalStore
 
@@ -170,7 +177,9 @@ def render_revision(
             and revision.transcript_markdown == parent.transcript_markdown
         )
         service_id = sermons.get(revision.sermon_id).service_id
-        if _renditions_for(session, service_id, boundaries):
+        expected = {spec.name for spec in config.renditions}
+        expected |= cut_preview_sources(config.renditions).keys()
+        if expected <= _rendered_names(session, service_id, boundaries):
             return
         repo = ServiceRepository(session)
         service = repo.get(service_id)
@@ -225,7 +234,7 @@ def render_revision(
                 rendered.id,
                 result.timings,
             )
-        elif sermon_audio_id:
+        elif sermon_audio_id and current.sermon_audio_artifact_id is None:
             sermons.attach_sermon_audio(revision_id, sermon_audio_id)
     shutil.rmtree(out_dir, ignore_errors=True)
     if not replace_transcript:
@@ -289,6 +298,7 @@ def _store_files(
 ) -> int | None:
     """Store a run's files as artifacts; return the sermon audio's artifact ID."""
     spans = {spec.name: spec.span for spec in config.renditions}
+    preview_spans = {name: span for span, name in CUT_PREVIEWS.items()}
     files = [(n, p) for n, p in result.files.items() if transcript or n != "transcript"]
     if transcript:
         files.append(("report", out_dir / "report.json"))
@@ -304,6 +314,11 @@ def _store_files(
             kind = "rendition"
             ref = ref.model_copy(update={"duration_ms": ffmpeg.probe(path).duration_ms})
             meta["span"] = "recording"
+        elif name in preview_spans:
+            kind = "rendition"
+            ref = ref.model_copy(update={"duration_ms": ffmpeg.probe(path).duration_ms})
+            meta.update(span=preview_spans[name], preview=True)
+            meta["boundaries"] = _bounds_key(result.boundaries)
         elif name == "transcript":
             kind = "transcript_formatted" if result.formatted else "transcript_raw"
         elif name == "report":
@@ -322,16 +337,30 @@ def _is_preview(artifact: Artifact) -> bool:
     return artifact.kind == "rendition" and artifact.meta.get("name") == PREVIEW
 
 
+def _rendered_names(session: Session, service_id: int, boundaries: ServiceBoundaries) -> set[str]:
+    """Names of everything already cut at these boundaries, cut previews included."""
+    key = _bounds_key(boundaries)
+    return {
+        str(a.meta.get("name"))
+        for a in ArtifactRepository(session).for_service(service_id)
+        if a.kind in ("rendition", "sermon_audio") and a.meta.get("boundaries") == key
+    }
+
+
 def _renditions_for(
     session: Session, service_id: int, boundaries: ServiceBoundaries
 ) -> dict[str, Artifact]:
-    """The newest stored rendition of each name cut at exactly these boundaries."""
+    """The newest stored rendition of each name cut at exactly these boundaries.
+
+    Cut previews are left out: outputs never publish them.
+    """
     key = _bounds_key(boundaries)
     found: dict[str, Artifact] = {}
     for artifact in ArtifactRepository(session).for_service(service_id):
         if (
             artifact.kind in ("rendition", "sermon_audio")
             and artifact.meta.get("boundaries") == key
+            and not artifact.meta.get("preview")
         ):
             name = str(artifact.meta.get("name"))
             if name not in found or artifact.id > found[name].id:

@@ -65,6 +65,9 @@ options = { folder_id = "env:GEORG_ARCHIVE_FOLDER_ID" }
 
 [review]
 require_approval = true
+# Optional metadata fields left off the review form; saving keeps their values.
+# Any of: series, summary, occasion, scripture, service_time.
+# hidden_fields = ["series", "summary"]
 # Told when a service is ready for review and when a job fails for good.
 notify = ["reviewer@example.org"]
 base_url = "https://georg.example.org"

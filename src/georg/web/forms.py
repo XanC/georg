@@ -2,7 +2,7 @@
 """The review form: rendering a revision as form values and parsing edits back."""
 
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Final
@@ -37,6 +37,11 @@ _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 def format_hms(ms: int) -> str:
     seconds = ms // 1000
     return f"{seconds // 3600}:{seconds // 60 % 60:02d}:{seconds % 60:02d}"
+
+
+def format_tenths(ms: int) -> str:
+    """H:MM:SS.s, truncated to tenths of a second."""
+    return f"{format_hms(ms)}.{ms // 100 % 10}"
 
 
 def parse_hms(value: str) -> int:
@@ -98,11 +103,13 @@ def parse_edit(
     boundaries: ServiceBoundaries,
     metadata: SermonMetadata,
     transcript: str | None,
+    hidden: Collection[str] = (),
 ) -> ReviewEdit:
     """Apply submitted form values to a revision's content.
 
     A boundary whose text is unchanged keeps its exact millisecond value, since the
-    form shows whole seconds.
+    form shows whole seconds. `hidden` metadata fields are not on the form and keep
+    their current values.
     """
     errors: list[str] = []
     current_ms = _boundary_ms(boundaries)
@@ -133,7 +140,7 @@ def parse_edit(
     except ValueError:
         errors.append(f"Service date: {raw_date!r} is not a date like 2026-11-01")
     raw_time = _text(form, "service_time")
-    if raw_time and not _HHMM.match(raw_time):
+    if raw_time and "service_time" not in hidden and not _HHMM.match(raw_time):
         errors.append(f"Service time: {raw_time!r} is not a time like 10:30")
     updates["service_time"] = raw_time or None
     updates["scripture"] = tuple(
@@ -141,6 +148,7 @@ def parse_edit(
     )
     if errors:
         raise FormError(errors)
+    updates.update({name: getattr(metadata, name) for name in hidden})
 
     new_metadata = metadata.model_copy(update=updates)
     new_transcript: str | None = form.get("transcript", "").replace("\r\n", "\n")

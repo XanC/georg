@@ -26,6 +26,7 @@ from georg.core.types import (
 from georg.media import ffmpeg
 from georg.media.ffmpeg import FFMPEG, probe
 from georg.pipeline import Processors, StageCache, build_processor, build_processors, run_local
+from georg.pipeline.local import cut_preview_sources
 
 PROPOSED = ServiceBoundaries(
     service_start_ms=1_000, sermon_start_ms=4_000, sermon_end_ms=8_000, service_end_ms=11_000
@@ -194,6 +195,14 @@ def test_preview_is_the_whole_recording_cached_by_source(tmp_path: Path, parts: 
     assert second.files["preview"] == preview
     assert second.timings["preview"] == 0.0
     assert preview.stat().st_mtime_ns == mtime
+
+
+def test_cut_previews_come_from_the_best_rendition_of_each_span() -> None:
+    assert cut_preview_sources(default_renditions()) == {
+        "sermon_preview": "sermon", "service_preview": "service_hq"
+    }  # fmt: skip
+    phone_only = [r for r in default_renditions() if r.name == "service_phone"]
+    assert cut_preview_sources(phone_only) == {"service_preview": "service_phone"}
 
 
 def test_remote_probe_cache_uses_hashed_key(

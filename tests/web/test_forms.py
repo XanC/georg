@@ -2,7 +2,14 @@
 import pytest
 
 from georg.core.types import SermonMetadata, ServiceBoundaries
-from georg.web.forms import FormError, form_values, format_hms, parse_edit, parse_hms
+from georg.web.forms import (
+    FormError,
+    form_values,
+    format_hms,
+    format_tenths,
+    parse_edit,
+    parse_hms,
+)
 
 BOUNDS = ServiceBoundaries(
     service_start_ms=1_400,
@@ -52,6 +59,25 @@ def test_edits_are_reported_by_origin_key() -> None:
     assert edit.boundaries.service_start_ms == 1_400
     assert edit.metadata.scripture == ("Matthew 5:1-12",)
     assert edit.changed == ["boundaries", "service_date", "scripture", "transcript"]
+
+
+def test_hidden_fields_keep_their_values() -> None:
+    meta = META.model_copy(
+        update={"series": "Beatitudes", "summary": "Blessed.", "service_time": "10:30"}
+    )
+    form = form_values(BOUNDS, meta, "text")
+    for name in ("series", "summary", "service_time"):
+        del form[name]  # not on the form
+    form["title"] = "All Saints"
+    edit = parse_edit(form, BOUNDS, meta, "text", hidden=("series", "summary", "service_time"))
+    assert edit.metadata.series == "Beatitudes"
+    assert edit.metadata.summary == "Blessed."
+    assert edit.metadata.service_time == "10:30"
+    assert edit.changed == ["title"]
+
+
+def test_format_tenths() -> None:
+    assert format_tenths(1_757_349) == "0:29:17.3"
 
 
 def test_invalid_values_are_all_reported() -> None:

@@ -10,7 +10,7 @@ import os
 import tomllib
 from datetime import date
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -92,6 +92,12 @@ class SmtpConfig(_Section):
     """From address, e.g. "Georg <georg@example.org>"."""
 
 
+HideableField = Literal["series", "summary", "occasion", "scripture", "service_time"]
+
+RESERVED_RENDITIONS: Final = ("preview", "sermon_preview", "service_preview")
+"""Names of the built-in review previews."""
+
+
 class ReviewConfig(_Section):
     require_approval: bool = True
     notify: tuple[str, ...] = ()
@@ -99,6 +105,8 @@ class ReviewConfig(_Section):
     base_url: str | None = None
     """Public address of the review web app, used for links in notices."""
     smtp: SmtpConfig | None = None
+    hidden_fields: tuple[HideableField, ...] = ()
+    """Optional metadata fields left off the review form; saving keeps their values."""
 
 
 class DiscoveryConfig(_Section):
@@ -133,8 +141,11 @@ class GeorgConfig(_Section):
             if len(names) != len(set(names)):
                 raise ValueError(f"duplicate names: {names}")
         known = {r.name for r in self.renditions}
-        if "preview" in known:
-            raise ValueError("rendition name 'preview' is reserved for the built-in preview")
+        reserved = known.intersection(RESERVED_RENDITIONS)
+        if reserved:
+            raise ValueError(
+                f"rendition names {sorted(reserved)} are reserved for built-in previews"
+            )
         for out in self.outputs:
             missing = set(out.renditions) - known
             if missing:

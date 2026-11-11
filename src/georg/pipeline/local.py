@@ -15,6 +15,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import Final
 
 from georg.core.config import RenditionSpec
 from georg.core.types import (
@@ -47,6 +48,23 @@ PREVIEW_SPEC = RenditionSpec(
     name=PREVIEW, span="service", channels=1, sample_rate=22050, bitrate_kbps=40
 )
 """Encoding only (CBR so browsers seek accurately); never cut, so `span` is unused."""
+CUT_PREVIEWS: Final = {"sermon": "sermon_preview", "service": "service_preview"}
+"""Built-in low-quality copy of each span's cut, by span; for the review page only."""
+_LAME_VBR_KBPS: Final = (245, 225, 190, 175, 165, 130, 115, 100, 85, 65)
+
+
+def _approx_kbps(spec: RenditionSpec) -> tuple[int, int, int]:
+    kbps = spec.bitrate_kbps if spec.vbr_quality is None else _LAME_VBR_KBPS[spec.vbr_quality]
+    return kbps or 0, spec.channels, spec.sample_rate
+
+
+def cut_preview_sources(renditions: Sequence[RenditionSpec]) -> dict[str, str]:
+    """Each cut preview's name -> the highest-bitrate rendition of its span it is encoded from."""
+    best: dict[str, RenditionSpec] = {}
+    for spec in renditions:
+        if spec.span not in best or _approx_kbps(spec) > _approx_kbps(best[spec.span]):
+            best[spec.span] = spec
+    return {CUT_PREVIEWS[span]: spec.name for span, spec in best.items()}
 
 
 class StageCache:
@@ -295,6 +313,10 @@ def run_local(
     timings["master"] = round(time.monotonic() - start, 1)
 
     files = {PREVIEW: preview, **{name: ref.path for name, ref in refs.items()}}
+    start = time.monotonic()
+    for name, rendition in cut_preview_sources(renditions).items():
+        files[name] = ffmpeg.encode_mp3(refs[rendition].path, out_dir / f"{name}.mp3", PREVIEW_SPEC)
+    timings["cut_previews"] = round(time.monotonic() - start, 1)
     files["transcript"] = transcript_md
     result = LocalRunResult(
         proposal, chosen, metadata, formatted, files, duration_ms, timings, transcript
