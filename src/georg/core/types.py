@@ -215,6 +215,8 @@ class RemoteMedia:
     headers: MediaHeaders
     quota_retry_after: timedelta | None = None
     """Minimum retry delay when the server reports a quota or rate limit."""
+    size: int | None = None
+    """Total bytes, when the input knows it; the range proxy resolves it otherwise."""
 
 
 MediaInput = Path | RemoteMedia

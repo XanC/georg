@@ -28,11 +28,21 @@ SECONDS = 8
 class _Handler(BaseHTTPRequestHandler):
     server: "_Server"
 
+    def _quota(self) -> None:
+        status, body = QUOTA_403
+        payload = json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(payload)
+
     def _authorized(self) -> bool:
         return self.headers.get("Authorization") == f"Bearer {self.server.token}"
 
-    def _send(self, start: int, end: int, *, head: bool = False) -> None:
-        data = self.server.content
+    def _send(self, start: int, end: int, *, head: bool = False, data: bytes | None = None) -> None:
+        data = self.server.content if data is None else data
         if self.server.truncate is not None:
             data = data[: self.server.truncate]
         total = len(data)
@@ -64,12 +74,19 @@ class _Handler(BaseHTTPRequestHandler):
             if not head:
                 self.wfile.write(payload)
             return
-        start, end = 0, len(self.server.content) - 1
+        data = self.server.contents.get(self.path.lstrip("/"), self.server.content)
+        if self.server.require_closed is not None:
+            # Like Drive under quota: only closed, small-enough ranges are served.
+            m = re.fullmatch(r"bytes=(\d+)-(\d+)", self.headers.get("Range", ""))
+            if not m or int(m[2]) - int(m[1]) + 1 > self.server.require_closed:
+                self._quota()
+                return
+        start, end = 0, len(data) - 1
         if m := re.fullmatch(r"bytes=(\d+)-(\d*)", self.headers.get("Range", "")):
             start = int(m[1])
             if m[2]:
                 end = int(m[2])
-        self._send(start, end, head=head)
+        self._send(start, end, head=head, data=data)
 
     def do_GET(self) -> None:
         self._handle(head=False)
@@ -84,8 +101,12 @@ class _Handler(BaseHTTPRequestHandler):
 class _Server(ThreadingHTTPServer):
     token = "good-token"
     content: bytes
+    contents: dict[str, bytes]
+    """Alternative payloads keyed by request path (e.g. a moov-at-end file)."""
     truncate: int | None = None
     """Serve only this many leading bytes, as if Drive closed the stream early."""
+    require_closed: int | None = None
+    """When set, only closed `Range`s no longer than this get a 206; else 403."""
     requests: list[BaseHTTPRequestHandler]
     errors: dict[str, tuple[int, dict[str, object]]]
 
@@ -113,10 +134,17 @@ def server(tmp_path: Path) -> Iterator[_Server]:
          "-movflags", "+faststart", str(video)],
         check=True,
     )  # fmt: skip
+    tail = tmp_path / "tail.mp4"  # same recording, moov atom at the end
+    subprocess.run(
+        ["ffmpeg", "-loglevel", "error", "-y", "-i", str(video), "-c", "copy", str(tail)],
+        check=True,
+    )
     httpd = _Server(("127.0.0.1", 0), _Handler)
     httpd.content = video.read_bytes()
+    httpd.contents = {"tail.mp4": tail.read_bytes()}
     httpd.requests = []
     httpd.errors = {}
+    httpd.require_closed = None
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield httpd
     httpd.shutdown()
@@ -215,6 +243,38 @@ def test_truncated_stream_fails_retryable(server: _Server, tmp_path: Path) -> No
         extract_audio([remote(server)], tmp_path / "s.flac", attempts=2, sleep=lambda _: None)
     assert exc.value.retryable
     assert not list(tmp_path.glob("*.flac")) and not list(tmp_path.glob(".*partial*"))
+
+
+def test_only_closed_ranges_reach_upstream(server: _Server, tmp_path: Path) -> None:
+    """Drive refuses open-ended ranges under quota; the proxy still extracts.
+
+    The served file has its moov atom at the end, so ffmpeg must seek — every
+    upstream request still has to be a closed range of at most `chunk_bytes`.
+    """
+    chunk = 64 << 10
+    server.require_closed = chunk
+    out = extract_audio(
+        [remote(server, "tail.mp4")], tmp_path / "s.flac",
+        sleep=lambda _: None, chunk_bytes=chunk,
+    )  # fmt: skip
+    assert abs(probe(out).duration_ms - SECONDS * 1000) < 500
+    assert server.requests
+    for request in server.requests:
+        m = re.fullmatch(r"bytes=(\d+)-(\d+)", request.headers.get("Range", ""))
+        assert m, f"open-ended upstream request: {request.headers.get('Range')!r}"
+        assert int(m[2]) - int(m[1]) + 1 <= chunk
+
+
+def test_quota_on_closed_range_is_retryable(server: _Server, tmp_path: Path) -> None:
+    """downloadQuotaExceeded on a closed range keeps its retryable retry_after."""
+    server.require_closed = 1 << 20
+    server.errors["tail.mp4"] = QUOTA_403
+    with pytest.raises(MediaError) as exc:
+        extract_audio([remote(server, "tail.mp4")], tmp_path / "s.flac",
+                      attempts=1, sleep=lambda _: None)  # fmt: skip
+    assert exc.value.retryable
+    assert "downloadQuotaExceeded" in str(exc.value)
+    assert exc.value.retry_after == ffmpeg.DEFAULT_QUOTA_RETRY_AFTER
 
 
 def test_retry_recovers_when_stream_restored(server: _Server, tmp_path: Path) -> None:
