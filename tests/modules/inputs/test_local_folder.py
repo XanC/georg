@@ -68,3 +68,13 @@ def test_missing_root_is_retryable(tmp_path: Path) -> None:
 )  # fmt: skip
 def test_folder_date(name: str, expected: date | None) -> None:
     assert folder_date(name) == expected
+
+
+def test_fetch_document_uses_files_in_place(tmp_path: Path) -> None:
+    touch(tmp_path / "SPX 11.01.26" / "a.mp4")
+    doc = touch(tmp_path / "SPX 11.01.26" / "bulletin.docx")
+    source = LocalFolderInput.from_options({"root": tmp_path, "folder_pattern": "SPX *"})
+    [item] = source.discover(None)
+    assert source.fetch_document(item, "bulletin.docx", tmp_path / "unused") == doc.resolve()
+    assert source.fetch_document(item, "missing.docx", tmp_path) is None
+    assert source.fetch_document(item, "../SPX 11.01.26/bulletin.docx", tmp_path) is None

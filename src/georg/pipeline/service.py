@@ -4,14 +4,20 @@
 import logging
 import mimetypes
 import shutil
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
 
 from georg.core.config import GeorgConfig, NamedModuleConfig
-from georg.core.contracts import MediaInputSource, OutputTarget
+from georg.core.contracts import (
+    DocumentInputSource,
+    ExplainingMetadataGenerator,
+    InputSource,
+    MediaInputSource,
+    OutputTarget,
+)
 from georg.core.errors import ModuleError
 from georg.core.types import (
     ArtifactRef,
@@ -28,6 +34,7 @@ from georg.db.repositories import (
     SermonRepository,
     ServiceRepository,
 )
+from georg.documents import extract_text, is_supported
 from georg.jobs.queue import JobQueue
 from georg.media import ffmpeg
 from georg.pipeline.local import (
@@ -135,7 +142,7 @@ def process_service(
             boundaries=result.boundaries,
             metadata=result.metadata,
             transcript_markdown=result.files["transcript"].read_text(encoding="utf-8"),
-            field_origins={"boundaries": processors.detector.version},
+            field_origins={"boundaries": processors.detector.version, **result.metadata_origins},
             sermon_audio_artifact_id=sermon_audio_id,
         )
         service = ServiceRepository(session).get(service_id)
@@ -266,6 +273,14 @@ def _run(
         parts = source.fetch(item, work / "parts")
     out_dir = work / "out"
     shutil.rmtree(out_dir, ignore_errors=True)
+    document_texts: Mapping[str, str] = {}
+    generator = processors.metadata
+    if (
+        metadata_override is None
+        and isinstance(generator, ExplainingMetadataGenerator)
+        and generator.uses_documents
+    ):
+        document_texts = _document_texts(source, item, cache.root / "documents")
     result = run_local(
         parts,
         out_dir,
@@ -274,12 +289,43 @@ def _run(
         renditions=config.renditions,
         language=config.language,
         source=item,
+        document_texts=document_texts,
         boundaries=boundaries,
         metadata_override=metadata_override,
         transcribe_sermon=transcribe_sermon,
         format_transcript=format_transcript,
     )
     return result, out_dir
+
+
+def _document_texts(source: InputSource, item: SourceItem, dest_dir: Path) -> dict[str, str]:
+    """Text of the item's readable companion documents; problems are only logged."""
+    names = item.hints.get("documents") or []
+    if not isinstance(source, DocumentInputSource):
+        if names:
+            log.info(
+                "input %s cannot fetch documents", getattr(source, "name", type(source).__name__)
+            )
+        return {}
+    texts: dict[str, str] = {}
+    for name in names if isinstance(names, list | tuple) else []:
+        if not isinstance(name, str):
+            continue
+        if not is_supported(name):
+            log.info("skipping document %r: only .docx and .txt are read", name)
+            continue
+        try:
+            path = source.fetch_document(item, name, dest_dir)
+        except Exception as exc:
+            log.warning("could not fetch document %r: %s", name, exc)
+            continue
+        if path is None:
+            log.warning("document %r is no longer in the service folder", name)
+            continue
+        text = extract_text(path, name)
+        if text:
+            texts[name] = text
+    return texts
 
 
 def _bounds_key(b: ServiceBoundaries) -> list[int]:

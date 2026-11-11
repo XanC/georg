@@ -108,6 +108,7 @@
     <div class="stack">
       <label>Title <input name="title" value="{{ values.title }}"></label>
       {% if "occasion" not in hidden %}<label>Occasion <input name="occasion" value="{{ values.occasion }}"></label>{% endif %}
+      {% set why = revision.field_origins.get("occasion") %}{% if why and why != "user" and "occasion" not in hidden %}<p class="hint">Occasion from {{ why }}</p>{% endif %}
       <label>Preacher <input name="preacher" value="{{ values.preacher }}"></label>
       <div class="pair">
         <label>Service date <input name="service_date" type="date" value="{{ values.service_date }}"></label>
@@ -115,6 +116,7 @@
       </div>
       {% if "series" not in hidden %}<label>Series <input name="series" value="{{ values.series }}"></label>{% endif %}
       {% if "scripture" not in hidden %}<label>Scripture (one reference per line) <textarea name="scripture" rows="3">{{ values.scripture }}</textarea></label>{% endif %}
+      {% set why = revision.field_origins.get("scripture") %}{% if why and why != "user" and "scripture" not in hidden %}<p class="hint">Scripture from {{ why }}</p>{% endif %}
       {% if "summary" not in hidden %}<label>Summary <textarea name="summary" rows="3">{{ values.summary }}</textarea></label>{% endif %}
     </div>
   </fieldset>

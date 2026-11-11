@@ -260,3 +260,11 @@ class MetadataContext(Model):
     transcript: Transcript | None
     defaults: SermonMetadata
     """Configured defaults, e.g. the usual preacher and service time."""
+    documents: dict[str, str] = Field(default_factory=dict)
+    """Plain text of companion documents by name, if the generator asked for them."""
+
+
+class MetadataProposal(Model):
+    metadata: SermonMetadata
+    origins: dict[str, str] = Field(default_factory=dict)
+    """Field name -> "<module version>/<method>: <one-line reason>", for derived fields."""

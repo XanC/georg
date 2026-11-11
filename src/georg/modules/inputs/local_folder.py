@@ -101,3 +101,10 @@ class LocalFolderInput:
         if missing:
             raise ModuleError(f"recording files are gone: {', '.join(missing)}")
         return paths
+
+    def fetch_document(self, item: SourceItem, name: str, dest_dir: Path) -> Path | None:
+        """Companion documents are used in place, like the parts."""
+        if Path(name).name != name:
+            return None
+        path = Path(item.source_ref) / name
+        return path if path.is_file() else None

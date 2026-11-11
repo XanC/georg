@@ -21,6 +21,7 @@ from georg.core.types import (
     FormattedTranscript,
     MediaInput,
     MetadataContext,
+    MetadataProposal,
     PublicationRequest,
     SermonMetadata,
     SourceItem,
@@ -60,6 +61,19 @@ class MediaInputSource(Protocol):
 
         Raise `SourceNotReadyError` if a part changed since discovery.
         """
+        ...
+
+
+@runtime_checkable
+class DocumentInputSource(Protocol):
+    """Optional input capability: local copies of companion documents.
+
+    `name` is one of `SourceItem.hints["documents"]`.
+    """
+
+    def fetch_document(self, item: SourceItem, name: str, dest_dir: Path) -> Path | None:
+        """Return a local copy of the document (reusing one in `dest_dir` if unchanged),
+        or None if it is no longer there."""
         ...
 
 
@@ -110,6 +124,19 @@ class MetadataGenerator(Protocol):
 
     def generate(self, ctx: MetadataContext) -> SermonMetadata:
         """Propose metadata; unknown fields stay None for the reviewer."""
+        ...
+
+
+@runtime_checkable
+class ExplainingMetadataGenerator(Protocol):
+    """Optional metadata capability: say where fields came from, and read documents."""
+
+    version: str
+    uses_documents: bool
+    """True if the pipeline should fill `MetadataContext.documents`."""
+
+    def propose(self, ctx: MetadataContext) -> MetadataProposal:
+        """Like `MetadataGenerator.generate`, plus the origin of derived fields."""
         ...
 
 

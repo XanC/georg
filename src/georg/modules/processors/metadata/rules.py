@@ -4,11 +4,17 @@
 Companion documents in `SourceItem.hints["documents"]` (names as strings, or mappings
 with a "name" key) are parsed by `parse_document_name`. A document is used only if its
 date matches the service date, or if the service date is otherwise unknown.
+
+The pipeline also passes the documents' text (`MetadataContext.documents`). A bulletin
+that starts with the occasion and the date ("Twenty-third Sunday after Trinity",
+"November 8, 2026") gives the occasion, preferred over the one in the file name. With
+the `scripture` option, the sermon's Scripture is detected (see `scripture`).
 """
 
+import logging
 import re
 import string
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -16,7 +22,12 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from georg.core.errors import ConfigError
-from georg.core.types import MetadataContext, SermonMetadata
+from georg.core.types import MetadataContext, MetadataProposal, SermonMetadata
+from georg.modules.processors.format.llama_cpp import LlamaLike, LlamaModelOptions
+from georg.modules.processors.metadata.readings import parse_header
+from georg.modules.processors.metadata.scripture import ScriptureDetector, ScriptureOptions
+
+log = logging.getLogger(__name__)
 
 _EXTENSION = re.compile(r"\.(?:docx?|odt|pdf|rtf|txt|pages|gdoc)$", re.IGNORECASE)
 _NAME = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})(?:[ _]+(?P<rest>.*))?$")
@@ -108,6 +119,11 @@ class MetadataOptions(BaseModel):
     (ISO). Applied only when every referenced field is known and no title is set. A
     leading "The " in the occasion becomes "the " in the title."""
 
+    occasion_from_document_text: bool = True
+    """Prefer the occasion a bulletin's text starts with over the one in its name."""
+    scripture: ScriptureOptions | None = None
+    """Detect the sermon's Scripture (opt-in); see `georg...metadata.scripture`."""
+
     @field_validator("service_time")
     @classmethod
     def _service_time(cls, value: str | None) -> str | None:
@@ -150,40 +166,108 @@ def _title_occasion(occasion: str | None) -> str | None:
 class RulesMetadataGenerator:
     """Module type `rules`."""
 
-    version = "rules-2"
+    version = "rules-3"
 
-    def __init__(self, options: Mapping[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        options: Mapping[str, Any] | None = None,
+        *,
+        model_factory: Callable[[LlamaModelOptions], LlamaLike] | None = None,
+    ) -> None:
         try:
             self.options = MetadataOptions.model_validate(dict(options or {}))
         except ValidationError as exc:
             raise ConfigError(f"metadata options: {exc}") from exc
         self._preachers = {k.casefold(): v for k, v in self.options.preachers.items()}
+        self._scripture = (
+            ScriptureDetector(self.options.scripture, model_factory=model_factory)
+            if self.options.scripture is not None
+            else None
+        )
+        if self._scripture is not None:
+            self.version = f"{type(self).version}+{self._scripture.version}"
+        self.uses_documents = self.options.occasion_from_document_text or bool(self._scripture)
 
     def generate(self, ctx: MetadataContext) -> SermonMetadata:
-        meta = self._from_source(ctx)
-        meta = self._default_service_time(meta)
-        return self._default_title(meta)
+        return self.propose(ctx).metadata
 
-    def _document_hint(self, ctx: MetadataContext) -> DocumentHint | None:
+    def propose(self, ctx: MetadataContext) -> MetadataProposal:
+        origins: dict[str, str] = {}
+        hint, hint_name = self._document_hint(ctx)
+        documents = _ordered_documents(ctx.documents, hint_name)
+        meta = self._from_source(ctx, hint)
+        meta = self._occasion(meta, hint, hint_name, documents, origins)
+        meta = self._default_service_time(meta)
+        meta = self._detect_scripture(meta, ctx, documents, origins)
+        meta = self._default_title(meta)
+        return MetadataProposal(metadata=meta, origins=origins)
+
+    def _document_hint(self, ctx: MetadataContext) -> tuple[DocumentHint | None, str | None]:
         service_date = ctx.source.service_date
         for name in sorted(_document_names(ctx.source.hints)):
             parsed = parse_document_name(name)
             if parsed and (service_date is None or parsed.service_date == service_date):
-                return parsed
-        return None
+                return parsed, name
+        return None, None
 
-    def _from_source(self, ctx: MetadataContext) -> SermonMetadata:
-        hint = self._document_hint(ctx)
+    def _from_source(self, ctx: MetadataContext, hint: DocumentHint | None) -> SermonMetadata:
         service_date = ctx.source.service_date or (hint.service_date if hint else None)
         update: dict[str, Any] = {
             "service_date": service_date or ctx.defaults.service_date,
             "extra": dict(ctx.defaults.extra),
         }
-        if hint is not None and hint.occasion:
-            update["occasion"] = hint.occasion
         if hint is not None and hint.preacher and self.options.preacher_from_documents:
             update["preacher"] = self._preachers.get(hint.preacher.casefold(), hint.preacher)
         return ctx.defaults.model_copy(update=update)
+
+    def _occasion(
+        self,
+        meta: SermonMetadata,
+        hint: DocumentHint | None,
+        hint_name: str | None,
+        documents: Mapping[str, str],
+        origins: dict[str, str],
+    ) -> SermonMetadata:
+        if self.options.occasion_from_document_text:
+            headings = self.options.scripture.headings if self.options.scripture else None
+            for name, text in documents.items():
+                header = parse_header(text, headings)
+                if header is None:
+                    continue
+                if meta.service_date is not None and header.service_date != meta.service_date:
+                    log.warning(
+                        "document %r is dated %s, not %s; its occasion is ignored",
+                        name,
+                        header.service_date,
+                        meta.service_date,
+                    )
+                    continue
+                origins["occasion"] = f"{type(self).version}/document text: {name}"
+                return meta.model_copy(update={"occasion": header.occasion})
+        if hint is not None and hint.occasion:
+            origins["occasion"] = f"{type(self).version}/document name: {hint_name}"
+            return meta.model_copy(update={"occasion": hint.occasion})
+        return meta
+
+    def _detect_scripture(
+        self,
+        meta: SermonMetadata,
+        ctx: MetadataContext,
+        documents: Mapping[str, str],
+        origins: dict[str, str],
+    ) -> SermonMetadata:
+        if self._scripture is None or meta.scripture:
+            return meta
+        transcript = ctx.transcript.text if ctx.transcript is not None else ""
+        try:
+            found = self._scripture.detect(transcript, documents)
+        except Exception as exc:
+            log.warning("scripture detection failed: %s", exc)
+            return meta
+        if found is None:
+            return meta
+        origins["scripture"] = found.origin
+        return meta.model_copy(update={"scripture": found.references})
 
     def _default_service_time(self, meta: SermonMetadata) -> SermonMetadata:
         if meta.service_time or self.options.service_time is None:
@@ -202,3 +286,9 @@ class RulesMetadataGenerator:
         if any(not values[name] for name in template_fields(template)):
             return meta
         return meta.model_copy(update={"title": template.format(**values).strip() or None})
+
+
+def _ordered_documents(documents: Mapping[str, str], first: str | None) -> dict[str, str]:
+    """Document texts with the dated companion document first, then by name."""
+    names = sorted(documents, key=lambda name: (name != first, name))
+    return {name: documents[name] for name in names}

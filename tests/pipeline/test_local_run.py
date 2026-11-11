@@ -342,3 +342,22 @@ def test_unknown_type_is_config_error() -> None:
 def test_parse_boundaries() -> None:
     b = parse_boundaries("0:05,10:00,30:00,1:10:00")
     assert (b.service_start_ms, b.service_end_ms) == (5_000, 4_200_000)
+
+
+def test_run_local_passes_document_texts_and_reports_origins(
+    tmp_path: Path, parts: list[Path]
+) -> None:
+    from georg.modules.processors.metadata import RulesMetadataGenerator
+
+    procs = processors()
+    procs = Processors(**{**procs.__dict__, "metadata": RulesMetadataGenerator()})
+    name = "2026-11-01_All_Saints__Day_-_DS1-Eric.docx"
+    out = tmp_path / "out"
+    result = run_local(parts, out, procs, cache=StageCache(tmp_path / "cache"),
+                       renditions=default_renditions(), service_date=date(2026, 11, 1),
+                       documents=[name],
+                       document_texts={name: "All Saints\nNovember 1, 2026"})  # fmt: skip
+    assert result.metadata.occasion == "All Saints"
+    origins = {"occasion": f"rules-3/document text: {name}"}
+    assert result.metadata_origins == origins
+    assert json.loads((out / "report.json").read_text())["metadata_origins"] == origins

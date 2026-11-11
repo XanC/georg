@@ -511,3 +511,22 @@ def test_htmx_is_served_locally(env: Env) -> None:
     response = env.client.get("/static/htmx.min.js")
     assert response.status_code == 200
     assert "htmx" in response.text
+
+
+def test_review_page_says_where_derived_fields_came_from(env: Env) -> None:
+    with session_factory(env.engine).begin() as s:
+        SermonRepository(s).add_revision(
+            env.sermon_id,
+            author="system",
+            boundaries=BOUNDS,
+            metadata=META.model_copy(update={"occasion": "All Saints' Day"}),
+            transcript_markdown="# Saints",
+            field_origins={
+                "scripture": "scripture-1/llm: local model picked Gospel",
+                "occasion": "rules-3/document text: bulletin.docx",
+            },
+        )
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert "Scripture from scripture-1/llm: local model picked Gospel" in html
+    assert "Occasion from rules-3/document text: bulletin.docx" in html

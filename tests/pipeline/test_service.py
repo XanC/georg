@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
+import dataclasses
 import os
 import time
 from datetime import date, datetime
 from pathlib import Path
 
 import pytest
+from docx_fixture import make_docx
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 from test_local_run import PROPOSED, processors, tone
@@ -23,6 +25,7 @@ from georg.db.repositories import (
 )
 from georg.jobs.queue import JobQueue
 from georg.media.ffmpeg import probe
+from georg.modules.processors.metadata import RulesMetadataGenerator
 from georg.pipeline import Worker, discover, process_service, publish_sermon, render_revision
 from georg.pipeline.service import _renditions_for
 from georg.storage.local import LocalStore
@@ -445,3 +448,28 @@ def test_worker_queues_notice_when_reviewers_configured(
     worker.handlers["notify"] = sent.append
     assert worker.run_once() and worker.run_once()
     assert sent == [{"service_id": 1}]
+
+
+def test_worker_reads_the_bulletin_for_metadata(
+    config: GeorgConfig, engine: Engine, tmp_path: Path
+) -> None:
+    name = "2026-11-01_All_Saints__Day_-_DS1-Eric.docx"
+    doc = make_docx(tmp_path / "drive" / "SPX 11.01.26" / name,
+                    [["Feast of All Saints"], ["November 1, 2026"]])  # fmt: skip
+    old = time.time() - 3600
+    os.utime(doc, (old, old))
+    sessions = session_factory(engine)
+    queue = JobQueue(engine)
+    [service_id] = discover(config, sessions, queue)
+    metadata = RulesMetadataGenerator({"title": "Sermon for {occasion}"})
+    procs = dataclasses.replace(processors(), metadata=metadata)
+    assert Worker(config, engine, queue=queue, processors=procs, worker_id="w").run_once()
+    with sessions() as s:
+        [sermon] = SermonRepository(s).for_service(service_id)
+        revision = SermonRepository(s).current_revision(sermon.id)
+        assert revision is not None
+        meta = SermonRepository.metadata(revision)
+        assert meta.occasion == "Feast of All Saints"
+        assert meta.title == "Sermon for Feast of All Saints"
+        assert revision.field_origins["occasion"] == f"rules-3/document text: {name}"
+        assert "boundaries" in revision.field_origins

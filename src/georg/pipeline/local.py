@@ -11,13 +11,14 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Final
 
 from georg.core.config import RenditionSpec
+from georg.core.contracts import ExplainingMetadataGenerator
 from georg.core.types import (
     AudioSegment,
     BoundaryProposal,
@@ -107,6 +108,8 @@ class LocalRunResult:
     """Seconds per stage; 0 for cache hits."""
     transcript: Transcript | None = None
     """The full-service transcript used by detection and included in the report."""
+    metadata_origins: dict[str, str] = field(default_factory=dict)
+    """Where derived metadata fields came from (`MetadataProposal.origins`)."""
 
 
 def _source_key(parts: Sequence[MediaInput]) -> str:
@@ -133,6 +136,7 @@ def run_local(
     language: str | None = None,
     service_date: date | None = None,
     documents: Sequence[str] = (),
+    document_texts: Mapping[str, str] | None = None,
     source: SourceItem | None = None,
     defaults: SermonMetadata | None = None,
     metadata_override: SermonMetadata | None = None,
@@ -147,7 +151,8 @@ def run_local(
     `report.json` (boundaries, explanation, metadata, timings). Pass
     `boundaries` to render reviewed timestamps instead of the detector's, and
     `source` to give the metadata generator the discovered item (otherwise one is
-    made from the files, `service_date` and `documents`).
+    made from the files, `service_date` and `documents`). `document_texts` (plain text
+    by document name) is passed to a metadata generator that `uses_documents`.
     """
     p = processors
     timings: dict[str, float] = {}
@@ -266,13 +271,23 @@ def run_local(
         hints={"documents": list(documents)},
     )
     defaults = defaults or SermonMetadata(service_date=service_date)
-    metadata = (
-        metadata_override
-        if metadata_override is not None
-        else p.metadata.generate(
-            MetadataContext(source=source, transcript=sermon_transcript, defaults=defaults)
+    origins: dict[str, str] = {}
+    if metadata_override is not None:
+        metadata = metadata_override
+    else:
+        start = time.monotonic()
+        meta_ctx = MetadataContext(
+            source=source,
+            transcript=sermon_transcript,
+            defaults=defaults,
+            documents=dict(document_texts or {}),
         )
-    )
+        if isinstance(p.metadata, ExplainingMetadataGenerator):
+            meta_proposal = p.metadata.propose(meta_ctx)
+            metadata, origins = meta_proposal.metadata, dict(meta_proposal.origins)
+        else:
+            metadata = p.metadata.generate(meta_ctx)
+        timings["metadata"] = round(time.monotonic() - start, 1)
 
     formatted: FormattedTranscript | None = None
     if format_transcript and p.formatter is not None:
@@ -319,7 +334,7 @@ def run_local(
     timings["cut_previews"] = round(time.monotonic() - start, 1)
     files["transcript"] = transcript_md
     result = LocalRunResult(
-        proposal, chosen, metadata, formatted, files, duration_ms, timings, transcript
+        proposal, chosen, metadata, formatted, files, duration_ms, timings, transcript, origins
     )
     _write_report(out_dir / "report.json", result)
     return result
@@ -386,6 +401,7 @@ def _write_report(path: Path, result: LocalRunResult) -> None:
         "boundaries": result.boundaries.model_dump(mode="json"),
         "transcript": result.transcript.model_dump(mode="json") if result.transcript else None,
         "metadata": result.metadata.model_dump(mode="json"),
+        "metadata_origins": result.metadata_origins,
         "words_preserved": result.formatted.words_preserved if result.formatted else None,
         "discrepancies": list(result.formatted.discrepancies) if result.formatted else [],
         "files": {k: str(v) for k, v in result.files.items()},
