@@ -107,7 +107,8 @@
       <label>Title <input name="title" value="{{ values.title }}"></label>
       {% if "occasion" not in hidden %}<label>Occasion <input name="occasion" value="{{ values.occasion }}"></label>{% endif %}
       {% set why = revision.field_origins.get("occasion") %}{% if why and why != "user" and "occasion" not in hidden %}<p class="hint">Occasion from {{ why }}</p>{% endif %}
-      <label>Preacher <input name="preacher" value="{{ values.preacher }}"></label>
+      {% if "preacher" not in hidden %}<label>Preacher <input name="preacher" value="{{ values.preacher }}"{% if preacher_suggestions %} list="preacher-suggestions" autocomplete="off"{% endif %}></label>
+      {% if preacher_suggestions %}<datalist id="preacher-suggestions">{% for name in preacher_suggestions %}<option value="{{ name }}">{% endfor %}</datalist>{% endif %}{% endif %}
       <div class="pair">
         <label>Service date <input name="service_date" type="date" value="{{ values.service_date }}"></label>
         {% if "service_time" not in hidden %}<label>Service time <input name="service_time" type="time" value="{{ values.service_time }}"></label>{% endif %}

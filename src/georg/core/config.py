@@ -92,7 +92,7 @@ class SmtpConfig(_Section):
     """From address, e.g. "Georg <georg@example.org>"."""
 
 
-HideableField = Literal["series", "summary", "occasion", "scripture", "service_time"]
+HideableField = Literal["preacher", "series", "summary", "occasion", "scripture", "service_time"]
 
 RESERVED_RENDITIONS: Final = ("preview", "sermon_preview", "service_preview")
 """Names of the built-in review previews."""
@@ -107,6 +107,10 @@ class ReviewConfig(_Section):
     smtp: SmtpConfig | None = None
     hidden_fields: tuple[HideableField, ...] = ()
     """Optional metadata fields left off the review form; saving keeps their values."""
+    preachers: tuple[str, ...] = ()
+    """Full names always offered as Preacher suggestions, after names from past sermons."""
+    preacher_recent_days: int = Field(default=90, ge=0)
+    """Preachers of sermons within this many days of the reviewed service come first."""
 
 
 class DiscoveryConfig(_Section):

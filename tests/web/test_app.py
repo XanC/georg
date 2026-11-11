@@ -591,3 +591,62 @@ def test_review_page_says_where_derived_fields_came_from(env: Env) -> None:
     html = env.client.get(f"/sermons/{env.sermon_id}").text
     assert "Scripture from scripture-1/llm: local model picked Gospel" in html
     assert "Occasion from rules-3/document text: bulletin.docx" in html
+
+
+def _other_sermon(env: Env, ref: str, when: date, preacher: str) -> None:
+    item = SourceItem(
+        source_type="local_folder",
+        source_ref=ref,
+        parts=(SourcePart(ref=f"{ref}.wav", name="1.wav"),),
+        service_date=when,
+    )
+    with session_factory(env.engine).begin() as s:
+        service, _ = ServiceRepository(s).add_discovered(item)
+        sermons = SermonRepository(s)
+        sermon = sermons.create(service.id)
+        sermons.add_revision(
+            sermon.id,
+            author="system",
+            boundaries=BOUNDS,
+            metadata=SermonMetadata(preacher=preacher),
+        )
+
+
+def test_review_page_without_preacher_suggestions(env: Env) -> None:
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert 'name="preacher" value="Eric">' in html
+    assert "<datalist" not in html
+
+
+@pytest.mark.parametrize(
+    "env", [{"preachers": ["The Rev. Seed", "Pastor Jane", "Eric"]}], indirect=True
+)
+def test_review_page_suggests_preachers(env: Env) -> None:
+    _other_sermon(env, "old", date(2025, 1, 5), "Pastor Old")
+    _other_sermon(env, "jane", date(2026, 10, 25), "Pastor Jane")
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert 'name="preacher" value="Eric" list="preacher-suggestions" autocomplete="off">' in html
+    assert (
+        '<datalist id="preacher-suggestions"><option value="Pastor Jane">'
+        '<option value="Pastor Old"><option value="The Rev. Seed"><option value="Eric">'
+        "</datalist>"
+    ) in html
+
+
+@pytest.mark.parametrize(
+    "env", [{"hidden_fields": ["preacher"], "preachers": ["The Rev. Seed"]}], indirect=True
+)
+def test_hidden_preacher_renders_nothing(env: Env) -> None:
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert 'name="preacher"' not in html and "<datalist" not in html
+    response = env.client.post(
+        f"/sermons/{env.sermon_id}/revisions", data=_form(env, title="All Saints")
+    )
+    assert "Saved revision" in response.text
+    with session_factory(env.engine)() as s:
+        sermons = SermonRepository(s)
+        revision = sermons.current_revision(env.sermon_id)
+        assert revision is not None and sermons.metadata(revision).preacher == "Eric"
