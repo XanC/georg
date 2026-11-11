@@ -25,7 +25,7 @@ nest_under_books = false   # true: parent each reference under a term named for 
 # "1730" = "The Baptism of Our Lord"
 
 [speakers.canonical]
-# "Seminarian Mark DeYoung" = ["Seminarian Mark De Young"]
+"Seminarian Mark De Young" = ["Seminarian Mark DeYoung"]
 
 # Person -> speaker terms. Speakers keep the title they had at the time; these terms are
 # nested under a parent term named for the person, whose archive lists all of them.
