@@ -58,3 +58,5 @@ pre.error { white-space: pre-wrap; margin: 0; font-size: .85rem; }
 .downloads a { white-space: nowrap; }
 .position { font-family: ui-monospace, monospace; font-weight: 600; }
 .explanation { white-space: pre-wrap; }
+.idle-banner { position: sticky; top: 0; z-index: 10; display: flex; gap: .8rem; align-items: center; padding: .6rem .8rem; background: var(--warn); }
+.idle-banner[hidden] { display: none; }

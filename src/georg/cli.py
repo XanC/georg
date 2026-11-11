@@ -174,6 +174,11 @@ def _reprocess(args: argparse.Namespace) -> int:
     return 0
 
 
+WATCHDOG_POLL_SECONDS = 10.0
+"""Upper bound on the idle poll while the watchdog is on, so the browser's one-minute
+shutdown warning is accurate to a few seconds."""
+
+
 def _worker(args: argparse.Namespace) -> int:
     from datetime import timedelta
 
@@ -194,7 +199,8 @@ def _worker(args: argparse.Namespace) -> int:
         while worker.run_once():
             pass
     else:
-        worker.run(poll_seconds=args.poll)
+        poll = args.poll if watchdog is None else min(args.poll, WATCHDOG_POLL_SECONDS)
+        worker.run(poll_seconds=poll)
     return 0
 
 

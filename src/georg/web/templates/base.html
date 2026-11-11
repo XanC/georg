@@ -4,10 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
+  {% if user %}<meta name="csrf-token" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}Georg{% endblock %} · Georg</title>
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
   <script src="{{ url_for('static', path='htmx.min.js') }}" defer></script>
   <script src="{{ url_for('static', path='review.js') }}" defer></script>
+  <script src="{{ url_for('static', path='idle.js') }}" defer></script>
 </head>
 <body>
   <header class="site">
@@ -23,6 +25,12 @@
     </nav>
     {% endif %}
   </header>
+  {% if user %}
+  <div id="idle-banner" class="idle-banner" role="alert" hidden>
+    <span class="idle-message"></span>
+    <button type="button" class="idle-keep">Keep it on</button>
+  </div>
+  {% endif %}
   <main>
     {% for level, message in flashes %}
     <p class="flash {{ level }}" role="{{ 'alert' if level == 'error' else 'status' }}">{{ message }}</p>
