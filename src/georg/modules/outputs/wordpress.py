@@ -44,7 +44,7 @@ DEFAULT_TERM_FIELDS = {
     "scripture": "ctc_sermon_book",
     "occasion": "ctc_sermon_series",
 }
-_DASHES = str.maketrans(dict.fromkeys("\u2011\u2012\u2013\u2014\u2212", "-"))
+_DASH = re.compile("\\s*[-\u2011\u2012\u2013\u2014\u2212]\\s*")
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -72,6 +72,8 @@ class WordPressOptions(BaseModel):
     term_fields: dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_TERM_FIELDS))
     """Georg field -> taxonomy. Fields: preacher, scripture, occasion, series, or a key of
     `SermonMetadata.extra` holding a string or list of strings."""
+    scripture_dash: Literal["-", "\u2013", "\u2014"] = "-"
+    """Dash used in scripture terms; any hyphen or dash in the metadata becomes this."""
     join_terms: dict[str, str] = Field(default_factory=dict)
     """Georg field -> separator: join the field's values into a single term, e.g.
     {"scripture": ", "} gives one "Isaiah 6:1-7, John 3:1-17" term."""
@@ -127,9 +129,9 @@ def transcript_html(markdown: str, prefix: str | None = None) -> str:
     return "\n\n".join(f"<p>{html.escape(p, quote=False)}</p>" for p in paragraphs if p)
 
 
-def normalize_scripture(reference: str) -> str:
-    """Use ASCII hyphens with no spaces around dashes (en/em/figure dash, minus, nb hyphen)."""
-    return re.sub(r"\s*-\s*", "-", reference.translate(_DASHES))
+def normalize_scripture(reference: str, dash: str = "-") -> str:
+    """Replace every hyphen or dash (and the spaces around it) with `dash`."""
+    return _DASH.sub(dash, reference)
 
 
 def _values(raw: Any) -> list[str]:
@@ -230,7 +232,11 @@ class WordPressOutput:
             raw = getattr(meta, field) if field in METADATA_TERM_FIELDS else meta.extra.get(field)
             values = _values(raw)
             if field == "scripture":
-                values = list(dict.fromkeys(normalize_scripture(v) for v in values))
+                values = list(
+                    dict.fromkeys(
+                        normalize_scripture(v, self.options.scripture_dash) for v in values
+                    )
+                )
             separator = self.options.join_terms.get(field)
             if separator is not None and values:
                 values = [separator.join(values)]

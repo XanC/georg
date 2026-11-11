@@ -291,20 +291,30 @@ def test_join_terms_makes_one_scripture_term(
     assert empty["ctc_sermon_book"] == []
 
 
+@pytest.mark.parametrize("dash", ["-", "\u2013"])
 @pytest.mark.parametrize(
-    ("raw", "expected"),
+    "raw",
     [
-        ("Luke 12:35-40", "Luke 12:35-40"),
-        ("Luke 12:35\u201340", "Luke 12:35-40"),
-        ("Luke 12:35 \u2014 40", "Luke 12:35-40"),
-        ("Luke 12:35\u20122:1", "Luke 12:35-2:1"),
-        ("Luke 12:35 \u2212 40", "Luke 12:35-40"),
-        ("Luke 12:35\u201140", "Luke 12:35-40"),
-        ("Luke 12:35 - 40", "Luke 12:35-40"),
+        "Luke 12:35-40",
+        "Luke 12:35 - 40",
+        "Luke 12:35\u201340",
+        "Luke 12:35 \u2014 40",
+        "Luke 12:35\u201240",
+        "Luke 12:35 \u2212 40",
+        "Luke 12:35\u201140",
     ],
 )
-def test_normalize_scripture(raw: str, expected: str) -> None:
-    assert normalize_scripture(raw) == expected
+def test_normalize_scripture(raw: str, dash: str) -> None:
+    assert normalize_scripture(raw, dash) == f"Luke 12:35{dash}40"
+
+
+def test_en_dash_separate_terms(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    out, _ = make_output(FakeBridge(), monkeypatch, scripture_dash="\u2013")
+    request = make_request(
+        tmp_path, scripture=("Isaiah 6:1-7", "John 3:1 \u2014 17", "Isaiah 6:1\u20137")
+    )
+    terms = out.sermon_body(request, audio_id=None)["terms"]
+    assert terms["ctc_sermon_book"] == ["Isaiah 6:1\u20137", "John 3:1\u201317"]
 
 
 def test_content_is_escaped_paragraphs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -443,6 +453,7 @@ def test_rejects_unsafe_publication_key(monkeypatch: pytest.MonkeyPatch) -> None
         {"status": "pending"},
         {"join_terms": {"topics": ", "}},
         {"join_terms": {"scripture": ""}},
+        {"scripture_dash": "~"},
         {"filename": "{date}/{slug}.mp3"},
         {"filename": "{title}.mp3"},
         {"filename": "sermon.wav"},

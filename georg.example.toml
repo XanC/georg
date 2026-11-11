@@ -46,6 +46,7 @@ metadata = { type = "rules" }
 # site's wp-config.php (docs/wordpress.md). Posts are drafts unless status = "publish".
 # To put all scripture references into one ctc_sermon_book term ("Isaiah 6:1-7, John 3:1-17"),
 # add to options: join_terms = { scripture = ", " }
+# Scripture dashes become scripture_dash ("-" by default, or "\u2013" / "\u2014").
 [[outputs]]
 name = "website"
 type = "wordpress"
