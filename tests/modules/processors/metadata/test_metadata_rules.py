@@ -18,7 +18,11 @@ from georg.modules.processors.metadata import (
     ("name", "expected"),
     [
         ("2026-11-01_All_Saints__Day_-_DS1-Eric.docx",
-         DocumentHint(date(2026, 11, 1), "All Saints Day", "DS1", "Eric")),
+         DocumentHint(date(2026, 11, 1), "All Saints' Day", "DS1", "Eric")),
+        ("2026-11-08_Twenty-third_Sunday_after_Trinity_-_DS1-Eric.docx",
+         DocumentHint(date(2026, 11, 8), "Twenty-third Sunday after Trinity", "DS1", "Eric")),
+        ("2026-11-22_Christ_the_King__-_DS2.docx",
+         DocumentHint(date(2026, 11, 22), "Christ the King", "DS2", None)),
         ("2026-11-08_Pentecost_24.docx",
          DocumentHint(date(2026, 11, 8), "Pentecost 24", None, None)),
         ("2026-12-24_Christmas_Eve_-_DS2.docx",
@@ -65,7 +69,7 @@ def test_generate_from_document_and_defaults() -> None:
     assert isinstance(gen, MetadataGenerator)
     meta = gen.generate(ctx(date(2026, 11, 1), ["2026-11-01_All_Saints__Day_-_DS1-Eric.docx"]))
     assert meta.service_date == date(2026, 11, 1)
-    assert meta.occasion == "All Saints Day"
+    assert meta.occasion == "All Saints' Day"
     assert meta.preacher == "Eric"
     assert meta.service_time == "10:30"
     assert meta.extra == {"k": 1}
@@ -100,3 +104,65 @@ def test_no_hints_returns_defaults() -> None:
 def test_bad_options() -> None:
     with pytest.raises(ConfigError):
         RulesMetadataGenerator({"preacher_map": {}})
+
+
+def test_preacher_from_documents_disabled() -> None:
+    gen = RulesMetadataGenerator({"preacher_from_documents": False})
+    doc = "2026-11-01_All_Saints__Day_-_DS1-Eric.docx"
+    meta = gen.generate(ctx(date(2026, 11, 1), [doc]))
+    assert meta.preacher == "Pastor Default" and meta.occasion == "All Saints' Day"
+    source = ctx(date(2026, 11, 1), [doc]).source
+    bare = MetadataContext(source=source, transcript=None, defaults=SermonMetadata())
+    assert gen.generate(bare).preacher is None
+
+
+def test_service_time_default_fills_only_missing_time() -> None:
+    gen = RulesMetadataGenerator({"service_time": "09:15"})
+    source = ctx(date(2026, 11, 1)).source
+    empty = MetadataContext(source=source, transcript=None, defaults=SermonMetadata())
+    assert gen.generate(empty).service_time == "09:15"
+    assert gen.generate(ctx(date(2026, 11, 1))).service_time == "10:30"
+
+
+@pytest.mark.parametrize("value", ["9:15", "24:00", "10:60", "10:30:00", "ten", ""])
+def test_invalid_service_time_rejected(value: str) -> None:
+    with pytest.raises(ConfigError, match="service_time"):
+        RulesMetadataGenerator({"service_time": value})
+
+
+def test_title_template_with_occasion() -> None:
+    gen = RulesMetadataGenerator(
+        {"title": "Sermon for {occasion}", "preachers": {"eric": "Pastor Eric"}}
+    )
+    doc = "2026-11-01_All_Saints__Day_-_DS1-Eric.docx"
+    assert gen.generate(ctx(date(2026, 11, 1), [doc])).title == "Sermon for All Saints' Day"
+    gen = RulesMetadataGenerator({"title": "{date}: {occasion} ({preacher})"})
+    assert gen.generate(ctx(date(2026, 11, 1), [doc])).title == (
+        "2026-11-01: All Saints' Day (Eric)"
+    )
+
+
+def test_title_stays_empty_without_occasion() -> None:
+    gen = RulesMetadataGenerator({"title": "Sermon for {occasion}"})
+    meta = gen.generate(ctx(date(2026, 11, 1), ["Bulletin.docx"]))
+    assert meta.title is None and meta.occasion is None
+
+
+def test_existing_title_kept() -> None:
+    gen = RulesMetadataGenerator({"title": "Sermon for {occasion}"})
+    source = ctx(date(2026, 11, 1), ["2026-11-01_All_Saints__Day_-_DS1-Eric.docx"]).source
+    defaults = SermonMetadata(title="Blessed Are")
+    meta = gen.generate(MetadataContext(source=source, transcript=None, defaults=defaults))
+    assert meta.title == "Blessed Are" and meta.occasion == "All Saints' Day"
+
+
+@pytest.mark.parametrize(
+    "template", ["Sermon for {title}", "{occasion!r}", "{occasion:>9}", "{}", "{occasion"]
+)
+def test_invalid_title_template_rejected(template: str) -> None:
+    with pytest.raises(ConfigError, match="title"):
+        RulesMetadataGenerator({"title": template})
+
+
+def test_version_bumped_for_new_options() -> None:
+    assert RulesMetadataGenerator.version == "rules-2"

@@ -38,6 +38,11 @@ formatter = { type = "llama_cpp", options = { cache_dir = "/var/lib/georg/models
 # Hosted alternative (OpenAI or any OpenAI-compatible chat API):
 # formatter = { type = "openai_chat", options = { model = "gpt-4o-mini", api_key = "env:OPENAI_API_KEY" } }
 metadata = { type = "rules" }
+# Optional defaults: service_time ("HH:MM", used when nothing else sets one), a title
+# template with {occasion}, {preacher} and {date} (ISO; applied only when every field is
+# known and no title is set), and whether the name at the end of document names is the
+# preacher (preacher_from_documents, default true; `preachers` maps it to display names).
+# metadata = { type = "rules", options = { service_time = "12:00", title = "Sermon for {occasion}", preacher_from_documents = false } }
 
 # Renditions default to sermon, service_hq and service_phone. A built-in whole-recording
 # `preview` (for the review page's player) is always made; that name is reserved.
