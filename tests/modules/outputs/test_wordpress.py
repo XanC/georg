@@ -19,6 +19,7 @@ from georg.core.types import ArtifactRef, PublicationRequest, SermonMetadata
 from georg.modules.outputs.wordpress import (
     PUBLICATION_KEY_PATTERN,
     WordPressOutput,
+    normalize_scripture,
     slugify,
     transcript_html,
 )
@@ -267,6 +268,55 @@ def test_status_and_custom_term_fields(tmp_path: Path, monkeypatch: pytest.Monke
     assert "audio_attachment_id" not in body
 
 
+def test_scripture_terms_not_joined_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out, _ = make_output(FakeBridge(), monkeypatch)
+    request = make_request(tmp_path, scripture=("Isaiah 6:1-7", "John 3:1-17"))
+    terms = out.sermon_body(request, audio_id=None)["terms"]
+    assert terms["ctc_sermon_book"] == ["Isaiah 6:1-7", "John 3:1-17"]
+
+
+def test_join_terms_makes_one_scripture_term(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out, _ = make_output(FakeBridge(), monkeypatch, join_terms={"scripture": ", "})
+    request = make_request(
+        tmp_path, scripture=("Isaiah 6:1\u20137", "John 3:1 \u2014 17", "Isaiah 6:1-7")
+    )
+    terms = out.sermon_body(request, audio_id=None)["terms"]
+    assert terms["ctc_sermon_book"] == ["Isaiah 6:1-7, John 3:1-17"]
+    assert terms["ctc_sermon_speaker"] == ["Rev. Richard Mittwede"]
+    empty = out.sermon_body(make_request(tmp_path, scripture=()), audio_id=None)["terms"]
+    assert empty["ctc_sermon_book"] == []
+
+
+@pytest.mark.parametrize("dash", ["-", "\u2013"])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "Luke 12:35-40",
+        "Luke 12:35 - 40",
+        "Luke 12:35\u201340",
+        "Luke 12:35 \u2014 40",
+        "Luke 12:35\u201240",
+        "Luke 12:35 \u2212 40",
+        "Luke 12:35\u201140",
+    ],
+)
+def test_normalize_scripture(raw: str, dash: str) -> None:
+    assert normalize_scripture(raw, dash) == f"Luke 12:35{dash}40"
+
+
+def test_en_dash_separate_terms(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    out, _ = make_output(FakeBridge(), monkeypatch, scripture_dash="\u2013")
+    request = make_request(
+        tmp_path, scripture=("Isaiah 6:1-7", "John 3:1 \u2014 17", "Isaiah 6:1\u20137")
+    )
+    terms = out.sermon_body(request, audio_id=None)["terms"]
+    assert terms["ctc_sermon_book"] == ["Isaiah 6:1\u20137", "John 3:1\u201317"]
+
+
 def test_content_is_escaped_paragraphs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out, _ = make_output(FakeBridge(), monkeypatch, content_prefix="[Machine transcription]")
     body = out.sermon_body(make_request(tmp_path), audio_id=5)
@@ -401,6 +451,9 @@ def test_rejects_unsafe_publication_key(monkeypatch: pytest.MonkeyPatch) -> None
     "options",
     [
         {"status": "pending"},
+        {"join_terms": {"topics": ", "}},
+        {"join_terms": {"scripture": ""}},
+        {"scripture_dash": "~"},
         {"filename": "{date}/{slug}.mp3"},
         {"filename": "{title}.mp3"},
         {"filename": "sermon.wav"},

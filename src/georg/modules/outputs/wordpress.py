@@ -44,6 +44,7 @@ DEFAULT_TERM_FIELDS = {
     "scripture": "ctc_sermon_book",
     "occasion": "ctc_sermon_series",
 }
+_DASH = re.compile("\\s*[-\u2011\u2012\u2013\u2014\u2212]\\s*")
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -71,6 +72,11 @@ class WordPressOptions(BaseModel):
     term_fields: dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_TERM_FIELDS))
     """Georg field -> taxonomy. Fields: preacher, scripture, occasion, series, or a key of
     `SermonMetadata.extra` holding a string or list of strings."""
+    scripture_dash: Literal["-", "\u2013", "\u2014"] = "-"
+    """Dash used in scripture terms; any hyphen or dash in the metadata becomes this."""
+    join_terms: dict[str, str] = Field(default_factory=dict)
+    """Georg field -> separator: join the field's values into a single term, e.g.
+    {"scripture": ", "} gives one "Isaiah 6:1-7, John 3:1-17" term."""
     content_prefix: str | None = None
     """Optional first paragraph of the post, e.g. "[Machine transcription]"."""
     timeout_s: float = Field(default=300.0, gt=0)
@@ -93,6 +99,15 @@ class WordPressOptions(BaseModel):
             raise ValueError("base_url must be https:// (allow_insecure_http is for local tests)")
         return self
 
+    @model_validator(mode="after")
+    def _join_terms(self) -> "WordPressOptions":
+        unknown = set(self.join_terms) - set(self.term_fields)
+        if unknown:
+            raise ValueError(f"join_terms fields not in term_fields: {sorted(unknown)}")
+        if any(not sep for sep in self.join_terms.values()):
+            raise ValueError("join_terms separators must not be empty")
+        return self
+
     @field_validator("service_time")
     @classmethod
     def _service_time(cls, value: str) -> str:
@@ -112,6 +127,11 @@ def transcript_html(markdown: str, prefix: str | None = None) -> str:
     blocks += re.split(r"\n\s*\n", markdown)
     paragraphs = (" ".join(block.split()) for block in blocks)
     return "\n\n".join(f"<p>{html.escape(p, quote=False)}</p>" for p in paragraphs if p)
+
+
+def normalize_scripture(reference: str, dash: str = "-") -> str:
+    """Replace every hyphen or dash (and the spaces around it) with `dash`."""
+    return _DASH.sub(dash, reference)
 
 
 def _values(raw: Any) -> list[str]:
@@ -210,8 +230,18 @@ class WordPressOutput:
         terms: dict[str, list[str]] = {}
         for field, taxonomy in self.options.term_fields.items():
             raw = getattr(meta, field) if field in METADATA_TERM_FIELDS else meta.extra.get(field)
+            values = _values(raw)
+            if field == "scripture":
+                values = list(
+                    dict.fromkeys(
+                        normalize_scripture(v, self.options.scripture_dash) for v in values
+                    )
+                )
+            separator = self.options.join_terms.get(field)
+            if separator is not None and values:
+                values = [separator.join(values)]
             merged = terms.setdefault(taxonomy, [])
-            merged += [v for v in _values(raw) if v not in merged]
+            merged += [v for v in values if v not in merged]
         return terms
 
     def _upload(self, request: PublicationRequest, artifact: ArtifactRef) -> int:
