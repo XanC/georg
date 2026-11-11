@@ -105,7 +105,8 @@ class MetadataOptions(BaseModel):
     """Local "HH:MM", used when neither the defaults nor a rule provide a time."""
     title: str | None = None
     """Template such as "Sermon for {occasion}"; fields: {occasion}, {preacher}, {date}
-    (ISO). Applied only when every referenced field is known and no title is set."""
+    (ISO). Applied only when every referenced field is known and no title is set. A
+    leading "The " in the occasion becomes "the " in the title."""
 
     @field_validator("service_time")
     @classmethod
@@ -137,6 +138,13 @@ def template_fields(template: str) -> set[str]:
             raise ValueError("title template fields cannot have format specs or conversions")
         fields.add(name)
     return fields
+
+
+def _title_occasion(occasion: str | None) -> str | None:
+    """Lowercase a leading article for use mid-title: "Sermon for the Holy Trinity"."""
+    if occasion and occasion.startswith("The "):
+        return "the " + occasion[4:]
+    return occasion
 
 
 class RulesMetadataGenerator:
@@ -187,7 +195,7 @@ class RulesMetadataGenerator:
         if meta.title or template is None:
             return meta
         values = {
-            "occasion": meta.occasion,
+            "occasion": _title_occasion(meta.occasion),
             "preacher": meta.preacher,
             "date": meta.service_date.isoformat() if meta.service_date else None,
         }

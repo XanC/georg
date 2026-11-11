@@ -142,6 +142,23 @@ def test_title_template_with_occasion() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("doc", "occasion", "title"),
+    [
+        ("2026-05-31_The_Holy_Trinity.docx", "The Holy Trinity", "Sermon for the Holy Trinity"),
+        ("2026-05-24_The_Day_of_Pentecost_-_DS1.docx", "The Day of Pentecost",
+         "Sermon for the Day of Pentecost"),
+        ("2026-09-20_Fifteenth_Sunday_after_Trinity.docx", "Fifteenth Sunday after Trinity",
+         "Sermon for Fifteenth Sunday after Trinity"),
+        ("2026-05-14_Theophany.docx", "Theophany", "Sermon for Theophany"),
+    ],
+)  # fmt: skip
+def test_title_lowercases_leading_the(doc: str, occasion: str, title: str) -> None:
+    gen = RulesMetadataGenerator({"title": "Sermon for {occasion}"})
+    meta = gen.generate(ctx(None, [doc]))
+    assert meta.occasion == occasion and meta.title == title
+
+
 def test_title_stays_empty_without_occasion() -> None:
     gen = RulesMetadataGenerator({"title": "Sermon for {occasion}"})
     meta = gen.generate(ctx(date(2026, 11, 1), ["Bulletin.docx"]))
