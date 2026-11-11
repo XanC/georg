@@ -138,7 +138,8 @@ class _SequentialBody:
             previous = self._owner
             self._owner = client
         if previous is not None and previous is not client:
-            log.info("%s: new client request preempts the previous one", self.server.part.name)
+            self.server.preempts += 1
+            log.debug("%s: new client request preempts the previous one", self.server.part.name)
             with suppress(OSError):
                 previous.shutdown(socket.SHUT_RDWR)
             with suppress(OSError):
@@ -278,6 +279,7 @@ class _Proxy(ThreadingHTTPServer):
     upstream_bytes: int
     served_bytes: int
     resumes: int
+    preempts: int
     backward_seeks: int
     tail_view: tuple[int, bytes]
     tail_lock: threading.Lock
@@ -462,6 +464,7 @@ def serve_remote(
     server.upstream_bytes = 0
     server.served_bytes = 0
     server.resumes = 0
+    server.preempts = 0
     server.backward_seeks = 0
     server.client = httpx.Client(
         timeout=httpx.Timeout(None, connect=30.0, read=stall_seconds),
@@ -487,12 +490,13 @@ def serve_remote(
         server.client.close()
         log.info(
             "%s: %d upstream requests, %d upstream bytes, %d bytes served, "
-            "%d resumes, %d backward seeks",
+            "%d resumes, %d preempts, %d backward seeks",
             part.name,
             server.upstream_requests,
             server.upstream_bytes,
             server.served_bytes,
             server.resumes,
+            server.preempts,
             server.backward_seeks,
         )
 
