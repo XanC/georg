@@ -339,7 +339,9 @@ def extract_audio(
             )
         except MediaError as exc:
             tmp.unlink(missing_ok=True)
-            if not exc.retryable or attempt == tries:
+            # A quota/rate-limit failure (retry_after set) is not retried within
+            # the call: it fails fast so the job queue waits `retry_after`.
+            if not exc.retryable or attempt == tries or exc.retry_after is not None:
                 raise
             sleep(min(2.0**attempt, 30.0))
             continue
