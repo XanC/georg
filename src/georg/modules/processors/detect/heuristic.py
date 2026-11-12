@@ -95,6 +95,13 @@ class HeuristicDetectorParams(BaseModel):
     """Added after closing speech to keep the end of announcements."""
     end_trailing_gap_ms: int = Field(default=30_000, ge=0)
     """Include later substantial speech or music within this gap of the current end."""
+    end_noise_after_music: bool = Field(default=True)
+    """Follow `noise` that continues a closing music segment (the classifier often
+    labels organ postlude fades as noise). Noise after speech never counts, and
+    noise alone never selects the end. A noise segment longer than
+    `end_trailing_gap_ms` stops the chain, so after-service chatter is not pulled in."""
+    end_noise_gap_ms: int = Field(default=1_000, ge=0)
+    """A noise segment continues closing music only if it starts within this gap."""
 
     probe_fractions: tuple[float, ...] = Field(default=(5 / 12, 6 / 12, 4 / 12), min_length=1)
     """Positions within the service probed for a speech-only region, in order."""
@@ -178,7 +185,7 @@ class HeuristicBoundaryDetector:
     """`BoundaryDetector` (type "heuristic") porting the legacy timing script."""
 
     type_name = "heuristic"
-    version = "heuristic-3"
+    version = "heuristic-4"
 
     def __init__(self, params: HeuristicDetectorParams | None = None) -> None:
         self.params = params or HeuristicDetectorParams()
@@ -379,21 +386,38 @@ class _Run:
         if selected is not None:
             included = [selected]
             current_end = selected.end
+            noise_continuations = 0
             for s in candidates:
-                if (
-                    s.start < current_end
-                    or s.start > current_end + p.end_trailing_gap_ms
-                    or s.label not in ("speech", "music")
-                    or s.duration < p.end_ignore_shorter_ms
-                ):
+                if s.start < current_end:
+                    continue
+                gap = s.start - current_end
+                if s.label in ("speech", "music"):
+                    if gap > p.end_trailing_gap_ms or s.duration < p.end_ignore_shorter_ms:
+                        continue
+                elif s.label == "noise":
+                    if not (
+                        p.end_noise_after_music
+                        and included[-1].label == "music"
+                        and gap <= p.end_noise_gap_ms
+                    ):
+                        continue
+                    if s.duration > p.end_trailing_gap_ms:
+                        break
+                    noise_continuations += 1
+                else:
                     continue
                 included.append(s)
                 current_end = s.end
             last = included[-1]
-            tail = p.end_music_tail_ms if last.label == "music" else p.end_speech_tail_ms
+            tail = p.end_speech_tail_ms if last.label == "speech" else p.end_music_tail_ms
             end = min(last.end + tail, self.duration)
             inclusion_note = (
                 f"; included {len(included) - 1} trailing speech/music segment(s)"
+                + (
+                    f", {noise_continuations} continuing the postlude as noise"
+                    if noise_continuations
+                    else ""
+                )
                 if len(included) > 1
                 else ""
             )

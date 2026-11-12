@@ -88,7 +88,7 @@ def test_satisfies_protocol() -> None:
     det = HeuristicBoundaryDetector()
     assert isinstance(det, BoundaryDetector)
     assert det.type_name == "heuristic"
-    assert det.version == "heuristic-3"
+    assert det.version == "heuristic-4"
 
 
 def test_typical_service_without_transcript() -> None:
@@ -320,6 +320,91 @@ def test_sermon_start_padding_respects_previous_word() -> None:
         transcript,
     )
     assert run.sermon_start(1_000_000, 1_000_500, 0) == 1_000_400
+
+
+def _tail_segments(rows: list[tuple[SegmentLabel, int, int]]) -> list[AudioSegment]:
+    return [
+        AudioSegment(range=TimeRange(start_ms=a, end_ms=b), label=label) for label, a, b in rows
+    ]
+
+
+def test_service_end_follows_noise_continuing_closing_music() -> None:
+    """Real classifier tail from a service whose organ postlude was partly `noise`.
+
+    Previously the end stopped at the last music segment plus the 10 s tail
+    (5982020); the postlude actually runs to the end of the recording.
+    """
+    segments = _tail_segments(
+        [
+            ("speech", 0, 5_892_080),
+            ("speech", 5_892_080, 5_893_080),
+            ("music", 5_893_080, 5_899_380),
+            ("noise", 5_899_380, 5_903_480),
+            ("music", 5_903_480, 5_907_860),
+            ("noise", 5_907_860, 5_922_960),
+            ("music", 5_922_960, 5_929_460),
+            ("noise", 5_929_460, 5_943_560),
+            ("music", 5_943_560, 5_949_840),
+            ("noise", 5_949_840, 5_962_900),
+            ("music", 5_962_900, 5_972_020),
+            ("noise", 5_972_020, 5_996_075),
+        ]
+    )
+    p = detect(segments, 5_996_075)
+    assert p.boundaries.service_end_ms == 5_996_075
+    assert "continuing the postlude as noise" in p.explanation
+
+
+def test_service_end_ignores_noise_after_closing_speech() -> None:
+    segments = _tail_segments(
+        [
+            ("speech", 0, 600_000),
+            ("noise", 600_000, 640_000),
+        ]
+    )
+    p = detect(segments, 640_000)
+    assert p.boundaries.service_end_ms == 602_000
+
+
+def test_service_end_noise_continuation_without_reaching_the_end() -> None:
+    """Short noise continuing the postlude extends the end by the noise plus tail."""
+    segments = _tail_segments(
+        [
+            ("speech", 0, 60_000),
+            ("music", 60_000, 100_000),
+            ("noise", 100_000, 125_000),
+            ("silence", 125_000, 400_000),
+        ]
+    )
+    p = detect(segments, 400_000)
+    assert p.boundaries.service_end_ms == 135_000
+
+
+def test_service_end_long_noise_stops_the_chain() -> None:
+    """Noise longer than `end_trailing_gap_ms` is after-service sound, not postlude."""
+    segments = _tail_segments(
+        [
+            ("speech", 0, 60_000),
+            ("music", 60_000, 100_000),
+            ("noise", 100_000, 400_000),
+        ]
+    )
+    p = detect(segments, 400_000)
+    assert p.boundaries.service_end_ms == 110_000
+
+
+def test_service_end_noise_continuation_can_be_disabled() -> None:
+    segments = _tail_segments(
+        [
+            ("speech", 0, 60_000),
+            ("music", 60_000, 100_000),
+            ("noise", 100_000, 125_000),
+            ("silence", 125_000, 400_000),
+        ]
+    )
+    det = HeuristicBoundaryDetector(HeuristicDetectorParams(end_noise_after_music=False))
+    p = det.detect(segments, 400_000, None)
+    assert p.boundaries.service_end_ms == 110_000
 
 
 def test_service_end_includes_chained_short_closing_speech() -> None:
