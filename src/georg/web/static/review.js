@@ -29,6 +29,12 @@
     var update = function () { readout.textContent = formatHms(positionMs(p)); };
     ["timeupdate", "seeked", "loadedmetadata"].forEach(function (e) { p.audio.addEventListener(e, update); });
   });
+  // Media events don't bubble, so capture: one player at a time, including htmx-inserted ones.
+  document.addEventListener("play", function (event) {
+    document.querySelectorAll("audio, video").forEach(function (media) {
+      if (media !== event.target && !media.paused) media.pause();
+    });
+  }, true);
   document.addEventListener("click", function (event) {
     var button = event.target.closest("button.play-from");
     if (!button) return;
