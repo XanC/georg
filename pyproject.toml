@@ -79,7 +79,7 @@ packages = ["georg", "wp_authority"]
 mypy_path = "src:contrib/wp-authority"
 
 [[tool.mypy.overrides]]
-module = ["inaSpeechSegmenter", "inaSpeechSegmenter.*", "faster_whisper", "faster_whisper.*", "numpy", "numpy.*", "google", "google.*", "llama_cpp", "llama_cpp.*", "huggingface_hub", "huggingface_hub.*"]
+module = ["inaSpeechSegmenter", "inaSpeechSegmenter.*", "faster_whisper", "faster_whisper.*", "numpy", "numpy.*", "google", "google.*", "llama_cpp", "llama_cpp.*", "huggingface_hub", "huggingface_hub.*", "tensorflow", "tensorflow.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

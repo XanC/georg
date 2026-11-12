@@ -33,7 +33,10 @@ Role = Literal["classifier", "detector", "transcriber", "formatter", "metadata"]
 
 _P = "georg.modules.processors"
 PROCESSOR_TYPES: dict[Role, dict[str, str]] = {
-    "classifier": {"ina_speech_segmenter": f"{_P}.classify:InaSpeechSegmenterClassifier"},
+    "classifier": {
+        "ina_speech_segmenter": f"{_P}.classify:InaSpeechSegmenterClassifier",
+        "ina_yamnet": f"{_P}.classify:InaYamnetClassifier",
+    },
     "detector": {"heuristic": f"{_P}.detect:HeuristicBoundaryDetector"},
     "transcriber": {
         "faster_whisper": f"{_P}.transcribe:FasterWhisperTranscriber",
