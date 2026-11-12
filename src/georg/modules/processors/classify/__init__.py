@@ -7,10 +7,13 @@ from georg.modules.processors.classify.segments import (
     segments_from_json,
     segments_to_json,
 )
+from georg.modules.processors.classify.yamnet import YamnetClassifier, YamnetOptions
 
 __all__ = [
     "InaOptions",
     "InaSpeechSegmenterClassifier",
+    "YamnetClassifier",
+    "YamnetOptions",
     "normalize_segments",
     "segments_from_json",
     "segments_to_json",
