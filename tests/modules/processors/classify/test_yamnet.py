@@ -2,7 +2,7 @@
 import shutil
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 import pytest
@@ -10,30 +10,31 @@ import pytest
 from georg.core.contracts import AudioClassifier
 from georg.core.errors import ConfigError, ModuleError
 from georg.core.types import SegmentLabel
-from georg.modules.processors.classify import YamnetClassifier, YamnetOptions, yamnet
+from georg.modules.processors.classify import (
+    InaYamnetClassifier,
+    InaYamnetOptions,
+    yamnet,
+)
+from georg.modules.processors.classify.yamnet import YamnetOptions
 
 pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
-CLASSES = [
-    "Speech",
-    "Chatter",
-    "Music",
-    "Organ",
-    "Hymn",
-    "Silence",
-    "Dog bark",
-    "Wind",
-]
+# Fake class map: indices score the groups; names match only where needed.
+SPEECH, MUSIC, SILENCE, BARK, CHATTER = 0, 132, 300, 400, 401
+CLASS_NAMES = [""] * 521
+CLASS_NAMES[SPEECH] = "Speech"
+CLASS_NAMES[MUSIC] = "Music"
+CLASS_NAMES[SILENCE] = "Silence"
+CLASS_NAMES[BARK] = "Dog bark"
+CLASS_NAMES[CHATTER] = "Chatter"  # deliberately not in the speech group
 
 
-def row(**groups: float) -> list[float]:
-    """One score row: `groups` maps a group name to a score for its classes."""
-    scores = [0.0] * len(CLASSES)
-    for group, value in groups.items():
-        for i, name in enumerate(CLASSES):
-            if name in getattr(yamnet, f"{group.upper()}_CLASSES"):
-                scores[i] = value
-    return scores
+def row(scores: dict[int, float]) -> list[float]:
+    """One YAMNet score row: class index -> score."""
+    out = [0.0] * len(CLASS_NAMES)
+    for index, value in scores.items():
+        out[index] = value
+    return out
 
 
 class FakeYamnet:
@@ -41,19 +42,38 @@ class FakeYamnet:
 
     def __init__(self, calls: list[list[list[float]]]) -> None:
         self.calls = list(calls)
-        self.class_names = list(CLASSES)
-        self.sample_lengths: list[int] = []
+        self.class_names = list(CLASS_NAMES)
 
     def __call__(self, samples: Sequence[float]) -> Sequence[Sequence[float]]:
-        self.sample_lengths.append(len(samples))
         if not self.calls:
             raise AssertionError("model called more times than scripted")
         return self.calls.pop(0)
 
 
-def classifier(fake: FakeYamnet, **options: object) -> tuple[YamnetClassifier, list[YamnetOptions]]:
+Raw = list[tuple[str, float, float]]
+
+
+class FakeSegmenter:
+    def __init__(self, result: Raw) -> None:
+        self.result = result
+
+    def __call__(
+        self, medianame: str, start_sec: float | None = None, stop_sec: float | None = None
+    ) -> Iterable[tuple[str, float, float]]:
+        lo = start_sec or 0.0
+        hi = stop_sec if stop_sec is not None else float("inf")
+        return [(lab, max(a, lo), min(b, hi)) for lab, a, b in self.result if b > lo and a < hi]
+
+
+def classifier(
+    ina: FakeSegmenter, model: FakeYamnet, **options: object
+) -> tuple[InaYamnetClassifier, list[YamnetOptions]]:
     calls: list[YamnetOptions] = []
-    c = YamnetClassifier(dict(options), model_factory=lambda opts: (calls.append(opts), fake)[1])
+    c = InaYamnetClassifier(
+        dict(options),
+        segmenter_factory=lambda _opts: ina,
+        model_factory=lambda opts: (calls.append(opts), model)[1],
+    )
     return c, calls
 
 
@@ -67,113 +87,129 @@ def tone(path: Path, seconds: float) -> Path:
     return path
 
 
-def silent(path: Path, seconds: float) -> Path:
-    subprocess.run(
-        ["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
-         "-i", f"anullsrc=r=16000:cl=mono:d={seconds}", "-c:a", "flac", str(path)],
-        check=True,
-    )  # fmt: skip
-    return path
-
-
-def spans(c: YamnetClassifier, audio: Path) -> list[tuple[SegmentLabel, int, int]]:
-    return [(s.label, s.range.start_ms, s.range.end_ms) for s in c.classify(audio)]
+def spans(segments: Iterable[object]) -> list[tuple[SegmentLabel, int, int]]:
+    return [(s.label, s.range.start_ms, s.range.end_ms) for s in segments]  # type: ignore[attr-defined]
 
 
 def test_satisfies_protocol() -> None:
-    c = YamnetClassifier({"chunk_s": 120, "min_segment_s": 2.0})
+    c = InaYamnetClassifier(
+        {"music_fraction": 0.7, "ina": {"vad_engine": "sm"}, "yamnet": {"chunk_s": 120}}
+    )
     assert isinstance(c, AudioClassifier)
-    assert c.type_name == "yamnet"
-    assert "c120" in c.version and "m2.0" in c.version
-    assert YamnetClassifier({"smooth_window_s": 5.0}).version != c.version
+    assert c.type_name == "ina_yamnet"
+    assert "f0.7" in c.version and "ina" in c.version
+    assert "c120" in c.version and c.options.yamnet.url_key() in c.version
+    assert InaYamnetClassifier().version != c.version
 
 
-def test_maps_audioset_groups(tmp_path: Path) -> None:
-    rows = (
-        [row(music=0.9)] * 10
-        + [row(speech=0.9)] * 20  # Speech and Chatter both score the speech group
-        + [row(silence=0.9)] * 5
-        + [row()] * 5
-    )
-    for r in rows[35:]:
-        r[CLASSES.index("Dog bark")] = 0.9  # not in any group -> noise
-    c, _ = classifier(
-        FakeYamnet([rows]), smooth_window_s=0.5, min_group_score=0.5, min_segment_s=1.0
-    )
-    assert spans(c, tone(tmp_path / "a.flac", 20)) == [
-        ("music", 0, 4800),
-        ("speech", 4800, 14400),
-        ("silence", 14400, 16800),
-        ("noise", 16800, 20000),
+def test_relabels_ina_noise_to_music(tmp_path: Path) -> None:
+    ina = FakeSegmenter([("speech", 0.0, 5.0), ("noise", 5.0, 20.0), ("speech", 20.0, 25.0)])
+    # 5-20 s -> frames ~10-41; every frame scores Music.
+    yam = FakeYamnet([[row({MUSIC: 0.9})] * 60])
+    c, _ = classifier(ina, yam, yamnet={"majority_frames": 1})
+    result = c.classify(tone(tmp_path / "a.flac", 25))
+    assert spans(result) == [
+        ("speech", 0, 5000),
+        ("music", 5000, 20000),
+        ("speech", 20000, 25000),
     ]
 
 
-def test_organ_and_hymn_count_as_music(tmp_path: Path) -> None:
-    scores = [0.0] * len(CLASSES)
-    scores[CLASSES.index("Organ")] = 0.4
-    scores[CLASSES.index("Hymn")] = 0.4
-    scores[CLASSES.index("Dog bark")] = 0.5
-    c, _ = classifier(FakeYamnet([[scores] * 5]), smooth_window_s=0.5)
-    assert spans(c, tone(tmp_path / "a.flac", 3)) == [("music", 0, 3000)]
+def test_noise_scoring_as_speech_stays_noise(tmp_path: Path) -> None:
+    """Congregation chatter: ina says noise, YAMNet says speech -> stays noise."""
+    ina = FakeSegmenter([("music", 0.0, 5.0), ("noise", 5.0, 15.0)])
+    yam = FakeYamnet([[row({SPEECH: 0.9})] * 40])
+    c, _ = classifier(ina, yam, yamnet={"majority_frames": 1})
+    assert spans(c.classify(tone(tmp_path / "a.flac", 15))) == [
+        ("music", 0, 5000),
+        ("noise", 5000, 15000),
+    ]
 
 
-def test_smoothing_suppresses_single_frame_flicker(tmp_path: Path) -> None:
-    rows = [row(music=0.9)] * 20
-    rows[10] = row(speech=0.9)
-    c, _ = classifier(FakeYamnet([rows]), smooth_window_s=2.4, min_segment_s=4.0)
-    assert spans(c, tone(tmp_path / "a.flac", 11)) == [("music", 0, 11000)]
+def test_music_fraction_threshold(tmp_path: Path) -> None:
+    ina = FakeSegmenter([("speech", 0.0, 5.0), ("noise", 5.0, 15.0)])
+    # 40% music inside the noise segment.
+    frames = [row({BARK: 0.9})] * 40
+    for i in range(11, 20):
+        frames[i] = row({MUSIC: 0.9})
+    below, _ = classifier(ina, FakeYamnet([list(frames)]), yamnet={"majority_frames": 1})
+    assert spans(below.classify(tone(tmp_path / "a.flac", 15)))[1][0] == "noise"
+    above, _ = classifier(
+        ina,
+        FakeYamnet([list(frames)]),
+        music_fraction=0.4,
+        yamnet={"majority_frames": 1},
+    )
+    assert spans(above.classify(tone(tmp_path / "a.flac", 15)))[1][0] == "music"
 
 
-def test_min_segment_merges_short_island(tmp_path: Path) -> None:
-    rows = [row(music=0.9)] * 30
-    rows[10:12] = [row(speech=0.9)] * 2  # 0.96 s speech island
-    c, _ = classifier(FakeYamnet([rows]), smooth_window_s=0.5, min_segment_s=4.0)
-    assert spans(c, tone(tmp_path / "a.flac", 15)) == [("music", 0, 15000)]
+def test_no_noise_segments_skips_yamnet(tmp_path: Path) -> None:
+    ina = FakeSegmenter([("speech", 0.0, 5.0), ("music", 5.0, 10.0)])
+    c, calls = classifier(ina, FakeYamnet([]))
+    assert spans(c.classify(tone(tmp_path / "a.flac", 10))) == [
+        ("speech", 0, 5000),
+        ("music", 5000, 10000),
+    ]
+    assert calls == []
 
 
-def test_min_segment_disabled_keeps_island(tmp_path: Path) -> None:
-    rows = [row(music=0.9)] * 30
-    rows[10:12] = [row(speech=0.9)] * 2
-    c, _ = classifier(FakeYamnet([rows]), smooth_window_s=0.5, min_segment_s=0.0)
-    labels = [label for label, _, _ in spans(c, tone(tmp_path / "a.flac", 15))]
-    assert labels == ["music", "speech", "music"]
-
-
-def test_low_rms_is_silence(tmp_path: Path) -> None:
-    c, _ = classifier(FakeYamnet([[row(music=0.9)] * 10]), smooth_window_s=0.5)
-    assert spans(c, silent(tmp_path / "a.flac", 5)) == [("silence", 0, 5000)]
-
-
-def test_chunks_stitch_at_boundaries(tmp_path: Path) -> None:
-    keep = 60_000 // yamnet.HOP_MS  # frames kept from the first chunk
-    calls = [[row(music=0.9)] * (keep + 4), [row(speech=0.9)] * 10]
-    c, _ = classifier(FakeYamnet(calls), chunk_s=60, overlap_s=2.0, smooth_window_s=0.5)
-    result = spans(c, tone(tmp_path / "a.flac", 65))
-    assert result[0] == ("music", 0, 60_000)
-    assert result[1][0] == "speech"
-    assert result[-1][2] == 65_000
-
-
-def test_release_reloads_the_model(tmp_path: Path) -> None:
-    fake = FakeYamnet([[row(music=0.9)] * 5, [row(music=0.9)] * 5])
-    c, calls = classifier(fake)
-    c.classify(tone(tmp_path / "a.flac", 3))
+def test_release_frees_both_models(tmp_path: Path) -> None:
+    ina = FakeSegmenter([("noise", 0.0, 10.0)])
+    calls = [[row({MUSIC: 0.9})] * 25, [row({MUSIC: 0.9})] * 25]
+    c, yam_calls = classifier(ina, FakeYamnet(calls))
+    audio = tone(tmp_path / "a.flac", 10)
+    c.classify(audio)
     c.release()
-    c.classify(tone(tmp_path / "a.flac", 3))
-    assert len(calls) == 2
+    c.classify(audio)
+    assert len(yam_calls) == 2
 
 
 def test_missing_tensorflow_is_a_module_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setitem(sys.modules, "tensorflow", None)
-    c = YamnetClassifier()
+    c = InaYamnetClassifier(segmenter_factory=lambda _o: FakeSegmenter([("noise", 0.0, 5.0)]))
     with pytest.raises(ModuleError, match="classify"):
-        c.classify(tone(tmp_path / "a.flac", 3))
+        c.classify(tone(tmp_path / "a.flac", 5))
 
 
 def test_invalid_options() -> None:
     with pytest.raises(ConfigError):
-        YamnetClassifier({"no_such_option": 1})
+        InaYamnetClassifier({"no_such_option": 1})
     with pytest.raises(ConfigError):
-        YamnetClassifier({"chunk_s": 10})
+        InaYamnetClassifier({"music_fraction": 1.5})
+    opts = InaYamnetOptions.model_validate({"ina": {"chunk_s": 120}})
+    assert opts.ina.chunk_s == 120
+
+
+def test_frame_label_groups() -> None:
+    assert yamnet.frame_label(CLASS_NAMES, row({MUSIC: 0.4}), 0.1) == "music"
+    assert yamnet.frame_label(CLASS_NAMES, row({SPEECH: 0.4}), 0.1) == "speech"
+    assert yamnet.frame_label(CLASS_NAMES, row({SILENCE: 0.4}), 0.1) == "silence"
+    # Unmapped classes never win: dominant bark -> noise.
+    assert yamnet.frame_label(CLASS_NAMES, row({BARK: 0.9}), 0.1) == "noise"
+    # Below the noise threshold even when a group is the argmax.
+    assert yamnet.frame_label(CLASS_NAMES, row({MUSIC: 0.05}), 0.1) == "noise"
+    # Chatter is not speech.
+    assert yamnet.frame_label(CLASS_NAMES, row({CHATTER: 0.9}), 0.1) == "noise"
+
+
+def test_majority_filter_suppresses_flicker() -> None:
+    labels: list[SegmentLabel] = ["music"] * 20
+    labels[10] = "speech"
+    assert set(yamnet._majority(labels, 5)) == {"music"}
+    # A real run survives.
+    labels[9:13] = ["speech"] * 4
+    out = yamnet._majority(labels, 5)
+    assert out[10] == "speech" and out[0] == "music"
+
+
+def test_frame_labels_stitch_across_chunks(tmp_path: Path) -> None:
+    keep = 60_000 // yamnet.HOP_MS
+    calls = [[row({MUSIC: 0.9})] * (keep + 4), [row({SPEECH: 0.9})] * 10]
+    model = FakeYamnet(calls)
+    opts = YamnetOptions.model_validate({"chunk_s": 60, "majority_frames": 1})
+    labels = yamnet.frame_labels(tone(tmp_path / "a.flac", 65), 65_000, model, opts)
+    assert len(labels) == keep + 10
+    assert set(labels[:keep]) == {"music"}
+    assert set(labels[keep:]) == {"speech"}
