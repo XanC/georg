@@ -19,11 +19,12 @@ Runtime Python dependencies are checked against an allow-list in CI (`scripts/ch
 
 ## Optional extra `classify`
 
-Installed with `uv sync --extra classify` (or `pip install georg[classify]`). Needed only by the `ina_speech_segmenter` audio classifier, which imports it lazily; the base install, type check, and tests work without it.
+Installed with `uv sync --extra classify` (or `pip install georg[classify]`). Needed only by the audio classifiers (`ina_yamnet`, the default, and `ina_speech_segmenter`), which import it lazily; the base install, type check, and tests work without it.
 
 | Dependency | Use | License | Notes |
 |---|---|---|---|
 | inaSpeechSegmenter | Speech/music/noise/silence segmentation (CNNs) | MIT | Model weights (`keras_speech_music_noise_cnn.hdf5` etc., MIT, same project) are downloaded from the project's GitHub releases on first use and cached in `$KERAS_HOME` (default `~/.keras`). Pre-populate that directory for offline hosts. |
+| YAMNet | `ina_yamnet` rechecks ina `noise` segments for music (AudioSet SavedModel `google/yamnet/1`) | Apache-2.0 | Loaded with `tf.saved_model.load`; the SavedModel archive is downloaded once from tfhub.dev into `$KERAS_HOME/models` (pre-populate for offline hosts). No `tensorflow_hub`. |
 | TensorFlow, Keras | Neural-network runtime | Apache-2.0 | CPU only. |
 | numpy, scipy, pandas, scikit-image, matplotlib, soundfile, h5py, Pyro4, pytextgrid, pyannote.core, namex, and other transitive packages | inaSpeechSegmenter / TensorFlow dependencies | BSD, MIT, Apache-2.0, PSF, MPL-2.0 | `namex` (Apache-2.0) and `pyannote.core` (MIT) omit license metadata; `scripts/check_licenses.py` lists them after checking their LICENSE files. |
 
