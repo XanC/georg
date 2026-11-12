@@ -66,8 +66,11 @@ def _key(b: ServiceBoundaries) -> list[int]:
 
 
 def _config(tmp_path: Path, review: dict[str, object] | None = None) -> GeorgConfig:
+    review = dict(review or {})
+    outputs = review.pop("outputs", ())
     return GeorgConfig.model_validate({
-        "review": review or {},
+        "review": review,
+        "outputs": outputs,
         "instance": "test",
         "data_dir": tmp_path / "data",
         "inputs": [{"name": "drive", "type": "local_folder", "options": {"root": tmp_path}}],
@@ -186,7 +189,7 @@ def test_login_list_and_logout(env: Env) -> None:
     page = env.client.get("/")
     assert page.status_code == 200
     assert "SPX 11.01.26" in page.text
-    assert "needs review" in page.text
+    assert "Needs review" in page.text
     token = _csrf(env.client, "/")
     assert env.client.post("/logout", data={"csrf_token": token}).status_code == 200
     assert env.client.get("/", follow_redirects=False).status_code == 303
@@ -452,7 +455,7 @@ def test_approve_enqueues_publish(env: Env) -> None:
         assert approval is not None
         assert approval.revision_id == env.revision_id
     assert _jobs(env, "publish") == [{"sermon_id": env.sermon_id}]
-    assert "approved (revision 1)" in env.client.get("/").text
+    assert f'data-status="{env.service_id}">Approved<' in env.client.get("/").text
 
 
 def _publication(env: Env, target: str, *, error: str | None = None) -> None:
@@ -505,6 +508,62 @@ def test_publish_again_does_not_flash_a_contradicting_message(env: Env) -> None:
     assert "queued" not in response.text
     assert "Publishing…" in response.text
     assert _jobs(env, "publish") == [{"sermon_id": env.sermon_id}]
+
+
+OUTPUTS = {"outputs": [{"name": "website", "type": "unused"}, {"name": "phone", "type": "unused"}]}
+
+
+def _status(env: Env) -> str:
+    match = re.search(rf'data-status="{env.service_id}">([^<]*)<', env.client.get("/").text)
+    assert match is not None
+    return match.group(1)
+
+
+@pytest.mark.parametrize("env", [OUTPUTS], indirect=True)
+def test_services_list_status_follows_review_and_publication(env: Env) -> None:
+    _login(env)
+    html = env.client.get("/").text
+    assert '<th scope="col">Sermon</th>' not in html
+    assert "awaiting review" not in html
+    assert _status(env) == "Needs review"
+
+    _approve(env)
+    assert _status(env) == "Approved"
+    job_id = env.queue.enqueue("publish", {"sermon_id": env.sermon_id})
+    assert _status(env) == "Publishing"
+    assert env.queue.lease("w") is not None
+    env.queue.complete(job_id, "w")
+
+    _publication(env, "website")
+    with session_factory(env.engine).begin() as s:
+        PublicationRepository(s).prepare(env.sermon_id, "phone", env.revision_id, "key-phone")
+    assert _status(env) == "Publishing"
+    _publication(env, "phone", error="SFTP refused")
+    assert _status(env) == "Publish failed (phone)"
+    _publication(env, "phone")
+    assert _status(env) == "Published"
+    review = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert '<span class="badge">Published</span>' in review
+
+    env.client.post(f"/sermons/{env.sermon_id}/revisions", data=_form(env, title="Newer"))
+    assert _status(env) == "Edited since approval"
+
+
+def test_service_without_a_revision_keeps_its_processing_status(env: Env) -> None:
+    item = SourceItem(
+        source_type="local_folder",
+        source_ref="SPX 11.15.26",
+        parts=(SourcePart(ref="2.wav", name="2.wav", size=1, checksum="y"),),
+        title="SPX 11.15.26",
+        service_date=date(2026, 11, 15),
+    )
+    with session_factory(env.engine).begin() as s:
+        service, _ = ServiceRepository(s).add_discovered(item)
+        service.status_summary = "transcribing"
+        service_id = service.id
+    _login(env)
+    assert f'data-status="{service_id}">transcribing<' in env.client.get("/").text
+    assert "Status: transcribing." in env.client.get(f"/services/{service_id}").text
 
 
 def test_approving_a_stale_revision_is_refused(env: Env) -> None:

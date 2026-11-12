@@ -210,7 +210,7 @@ Execution: the worker claims jobs from the `jobs` table (`UPDATE … RETURNING` 
 3. Approving a later revision of an already-published sermon re-publishes as an **update** of the same external object, never a new post.
 4. Failures are retried with backoff and surfaced with "Retry publish" in the UI.
 
-Status visible to the reviewer per service: *processing* (per-stage), *review* (needs review / approved rev N / edited since approval), *publication* (per target).
+Status visible to the reviewer per service: one line computed live by the web layer. Before a sermon revision exists it is the processing stage (`status_summary`); then *Needs review*, *Edited since approval* (the current revision is newer than the approved one), and for the approved revision *Approved*, *Publishing*, *Published* (every configured output) or *Publish failed (outputs)*. Per-target publication detail is on the review page.
 
 ### 5.4 WordPress / ChurchThemes specifics
 

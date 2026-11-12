@@ -24,7 +24,7 @@ from georg.core.config import GeorgConfig
 from georg.core.errors import ConfigError
 from georg.core.types import ServiceBoundaries
 from georg.db.engine import session_factory
-from georg.db.models import Artifact, Publication, Sermon, SermonRevision
+from georg.db.models import Artifact, Publication, SermonRevision, Service
 from georg.db.repositories import (
     ArtifactRepository,
     NotCurrentRevisionError,
@@ -279,13 +279,18 @@ def create_app(
 
     # --- services -----------------------------------------------------------------
 
+    def statuses(session: Session, services: Sequence[Service]) -> dict[int, str]:
+        sermons = SermonRepository(session)
+        pubs = PublicationRepository(session)
+        publishing = {j.payload.get("sermon_id") for j in active_jobs(PUBLISH)}
+        configured = [o.name for o in config.outputs]
+        return {s.id: _service_status(s, sermons, pubs, configured, publishing) for s in services}
+
     @app.get("/", response_class=HTMLResponse)
     def services(request: Request, user: User, session: DB) -> HTMLResponse:
-        sermons = SermonRepository(session)
-        rows = []
-        for service in ServiceRepository(session).newest_first(limit=200):
-            found = sermons.for_service(service.id)
-            rows.append({"service": service, "review": _review_state(sermons, found)})
+        found = ServiceRepository(session).newest_first(limit=200)
+        status = statuses(session, found)
+        rows = [{"service": service, "status": status[service.id]} for service in found]
         return render(request, "services.html", {"rows": rows}, user=user)
 
     @app.get("/services/{service_id}", response_class=HTMLResponse)
@@ -294,7 +299,8 @@ def create_app(
         found = SermonRepository(session).for_service(service_id)
         if found and found[0].current_revision_id is not None:
             return _redirect(f"/sermons/{found[0].id}")
-        return render(request, "service.html", {"service": service}, user=user)
+        context = {"service": service, "status": statuses(session, [service])[service.id]}
+        return render(request, "service.html", context, user=user)
 
     # --- sermon review ----------------------------------------------------------------
 
@@ -365,7 +371,7 @@ def create_app(
             "revisions": list(reversed(revisions)),
             "approved_ids": {a.revision_id for a in approvals},
             "approval": sermons.current_approval(sermon_id),
-            "review_state": _review_state(sermons, [sermon]),
+            "status": statuses(session, [service])[service.id],
             "outputs": _output_states(
                 [o.name for o in config.outputs], publications, revision.id, publishing
             ),
@@ -565,16 +571,44 @@ def _add_user_revision(
     )
 
 
-def _review_state(sermons: SermonRepository, found: Any) -> str:
-    sermon: Sermon | None = found[0] if found else None
+def _service_status(
+    service: Service,
+    sermons: SermonRepository,
+    pubs: PublicationRepository,
+    configured: list[str],
+    publishing: set[Any],
+) -> str:
+    """One live status line for a service, from its sermon's approval and publications."""
+    found = sermons.for_service(service.id)
+    sermon = found[0] if found else None
     if sermon is None or sermon.current_revision_id is None:
-        return "no sermon yet"
+        return service.status_summary or "processing"
     approval = sermons.current_approval(sermon.id)
-    if approval is not None:
-        return f"approved (revision {sermons.revision(approval.revision_id).number})"
-    if sermons.approvals(sermon.id):
-        return "edited since approval"
-    return "needs review"
+    if approval is None:
+        return "Edited since approval" if sermons.approvals(sermon.id) else "Needs review"
+    approved = approval.revision_id
+    states = [
+        s
+        for s in _output_states(
+            configured, pubs.for_sermon(sermon.id), approved, sermon.id in publishing
+        )
+        if s.name in configured
+    ]
+    failed = [s.name for s in states if s.status == "failed"]
+    if failed:
+        return f"Publish failed ({', '.join(failed)})"
+    if states and all(
+        s.status == "published" and s.publication and s.publication.revision_id == approved
+        for s in states
+    ):
+        return "Published"
+    if any(
+        s.status == "publishing"
+        or (s.publication and s.publication.status in ("pending", "publishing"))
+        for s in states
+    ):
+        return "Publishing"
+    return "Approved"
 
 
 def _author_name(users: UserRepository, author: str) -> str:
