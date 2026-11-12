@@ -3,8 +3,8 @@
 {% block content %}
 <h1>{{ values.title or service.title or service.source_ref }}</h1>
 <p class="meta">
-  Service {{ service.service_date or "date unknown" }} · {{ service.status_summary or "processing" }} ·
-  revision {{ revision.number }} by {{ author_name(revision.author) }} · <span class="badge">{{ review_state }}</span>
+  Service {{ service.service_date or "date unknown" }} · <span class="badge">{{ status }}</span> ·
+  revision {{ revision.number }} by {{ author_name(revision.author) }}
 </p>
 
 {% if errors %}
