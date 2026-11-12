@@ -25,7 +25,7 @@ type = "google_drive"
 options = { folder_id = "env:GEORG_DRIVE_FOLDER_ID", credentials_file = "env:GOOGLE_APPLICATION_CREDENTIALS", folder_pattern = "SPX *" }
 
 [processors]
-classifier = { type = "ina_speech_segmenter" }
+classifier = { type = "ina_yamnet", options = { yamnet = { cache_dir = "/var/lib/georg/models" } } }
 detector = { type = "heuristic" }
 # Local Whisper (needs the `whisper` extra); no API key or subscription.
 transcriber = { type = "faster_whisper", options = { model = "large-v3-turbo", compute_type = "int8", language = "en" } }
