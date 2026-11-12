@@ -574,6 +574,17 @@ def test_htmx_is_served_locally(env: Env) -> None:
     assert "htmx" in response.text
 
 
+def test_review_page_plays_one_player_at_a_time(env: Env) -> None:
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert '<script src="http://testserver/static/review.js" defer></script>' in html
+    script = env.client.get("/static/review.js")
+    assert script.status_code == 200
+    assert 'document.addEventListener("play", function (event) {' in script.text
+    assert 'querySelectorAll("audio, video")' in script.text
+    assert "}, true);" in script.text
+
+
 def test_review_page_says_where_derived_fields_came_from(env: Env) -> None:
     with session_factory(env.engine).begin() as s:
         SermonRepository(s).add_revision(
