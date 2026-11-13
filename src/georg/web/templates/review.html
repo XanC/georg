@@ -145,7 +145,7 @@
   {% include "_website_update.html" %}
 </section>
 
-{% if user.is_admin %}
+{% if user.is_admin and can_reprocess %}
 <section aria-labelledby="reprocess-h">
   <h2 id="reprocess-h">Reprocess</h2>
   <p class="hint">

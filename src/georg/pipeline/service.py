@@ -128,7 +128,8 @@ def process_service(
             return None
         if reprocess:
             publications = PublicationRepository(session)
-            if any(publications.for_sermon(sermon.id) for sermon in existing):
+            published = any(publications.for_sermon(sermon.id) for sermon in existing)
+            if published and service.purged_at is None:
                 raise ModuleError(f"service {service_id} has a publication; refusing to reprocess")
     if not included:
         raise ModuleError(f"service {service_id} has no included recording parts")

@@ -1122,3 +1122,20 @@ def test_purged_service_page_hides_audio_and_publishing(env: Env) -> None:
     assert 'id="purged"' in html and "Files removed after 60 days" in html
     assert "<audio" not in html and "and publish</button>" not in html
     assert f'data-purged="{env.service_id}"' in env.client.get("/?all=1").text
+
+
+def test_reprocess_button_only_where_it_works(env: Env) -> None:
+    _login(env, username="root")
+    with session_factory(env.engine).begin() as s:
+        PublicationRepository(s).prepare(env.sermon_id, "website", env.revision_id, "georg:t:k")
+    assert "Reprocess this service" not in env.client.get(f"/sermons/{env.sermon_id}").text
+    token = _csrf(env.client, f"/sermons/{env.sermon_id}")
+    response = env.client.post(f"/sermons/{env.sermon_id}/reprocess", data={"csrf_token": token})
+    assert "reprocessing would replace it" in response.text
+    assert _jobs(env, "process") == []
+    with session_factory(env.engine).begin() as s:
+        ServiceRepository(s).get(env.service_id).purged_at = utcnow()
+    assert "Reprocess this service" in env.client.get(f"/sermons/{env.sermon_id}").text
+    token = _csrf(env.client, f"/sermons/{env.sermon_id}")
+    env.client.post(f"/sermons/{env.sermon_id}/reprocess", data={"csrf_token": token})
+    assert len(_jobs(env, "process")) == 1
