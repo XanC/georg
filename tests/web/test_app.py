@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 import json
+import os
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
@@ -728,12 +731,13 @@ WORDPRESS = {"outputs": [{"name": "website", "type": "wordpress", "options": {}}
 class _FakeSite:
     def __init__(self, posts: list[dict[str, str]] | None) -> None:
         self.posts = posts
+        self.calls: list[tuple[date, date]] = []
 
-    def sermons_on(self, day: date) -> list[dict[str, str]]:
+    def sermons_between(self, first: date, last: date) -> list[dict[str, str]]:
+        self.calls.append((first, last))
         if self.posts is None:
             raise ModuleError("site unreachable")
-        assert day == date(2026, 11, 1)
-        return self.posts
+        return [{"date": "2026-11-01", **p} for p in self.posts]
 
 
 @pytest.mark.parametrize("env", [WORDPRESS], indirect=True)
@@ -781,3 +785,142 @@ def test_review_without_wordpress_output_does_no_lookup(
     monkeypatch.setattr("georg.web.app.build_output", fail)
     _login(env)
     assert "already has a sermon" not in env.client.get(f"/sermons/{env.sermon_id}").text
+
+
+def _add_service(env: Env, day: date, ref: str) -> int:
+    item = SourceItem(
+        source_type="local_folder",
+        source_ref=ref,
+        parts=(SourcePart(ref=f"{ref}.wav", name=f"{ref}.wav", size=1, checksum=ref),),
+        title=ref,
+        service_date=day,
+    )
+    with session_factory(env.engine).begin() as s:
+        service, _ = ServiceRepository(s).add_discovered(item)
+        return service.id
+
+
+@pytest.mark.parametrize("env", [WORDPRESS], indirect=True)
+def test_services_list_marks_dates_the_website_already_has(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = _add_service(env, date(2026, 10, 25), "SPX 10.25.26")
+    site = _FakeSite([{"id": "8216", "title": "Old sermon", "link": "https://church.example/old/"}])
+    monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: site)
+    _login(env)
+    html = env.client.get("/").text
+    marker = f'href="https://church.example/old/" data-same-date="{env.service_id}"'
+    assert f'<a class="badge warning" {marker}' in html
+    assert "The website already has a sermon for this date: Old sermon" in html
+    assert f'data-same-date="{other}"' not in html
+    assert site.calls == [(date(2026, 10, 25), date(2026, 11, 1))]
+
+    env.client.get("/")
+    env.client.get(f"/sermons/{env.sermon_id}")
+    assert len(site.calls) == 2  # the list reload is cached; the review page asks for its day
+
+
+@pytest.mark.parametrize("env", [WORDPRESS], indirect=True)
+def test_services_list_renders_without_markers_when_the_site_is_unreachable(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    site = _FakeSite(None)
+    monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: site)
+    _login(env)
+    for _ in range(2):
+        response = env.client.get("/")
+        assert response.status_code == 200
+        assert "data-same-date" not in response.text
+        assert "SPX 11.01.26" in response.text
+    assert len(site.calls) == 1  # the failure is cached too
+
+
+@pytest.mark.parametrize("env", [WORDPRESS], indirect=True)
+def test_service_page_warns_about_another_sermon_on_the_date(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service_id = _add_service(env, date(2026, 11, 1), "SPX 11.01.26 second")
+    posts = [{"id": "8216", "title": "Old sermon", "link": "https://church.example/old/"}]
+    monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: _FakeSite(posts))
+    _login(env)
+    html = env.client.get(f"/services/{service_id}").text
+    assert "The website already has a sermon for this date:" in html
+    assert '<a href="https://church.example/old/">Old sermon</a>' in html
+
+
+def test_review_page_guards_approve_against_unsaved_edits(env: Env) -> None:
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert '<button type="button" id="revert-form" disabled>Revert</button>' in html
+    assert 'id="unsaved-note" role="status" hidden' in html
+    assert "Save or revert your changes first" in html
+    assert '<button type="submit" data-needs-saved>Approve revision 1 and publish</button>' in html
+    script = env.client.get("/static/review.js").text
+    assert "defaultValue" in script and "data-needs-saved" in script
+
+    _approve(env)
+    fragment = env.client.get(f"/sermons/{env.sermon_id}/publish-status").text
+    assert '<button type="submit" data-needs-saved >Publish again</button>' in fragment
+
+
+def test_approve_ignores_unsaved_form_fields(env: Env) -> None:
+    _login(env)
+    token = _csrf(env.client, f"/sermons/{env.sermon_id}")
+    env.client.post(
+        f"/sermons/{env.sermon_id}/approve",
+        data={"csrf_token": token, "revision_id": str(env.revision_id), "preacher": "Unsaved"},
+    )
+    with session_factory(env.engine).begin() as s:
+        sermons = SermonRepository(s)
+        revision = sermons.current_revision(env.sermon_id)
+        assert revision is not None and revision.id == env.revision_id
+        assert sermons.metadata(revision).preacher != "Unsaved"
+        approval = sermons.current_approval(env.sermon_id)
+        assert approval is not None and approval.revision_id == env.revision_id
+
+
+def test_unsaved_edits_disable_approve_in_a_browser(env: Env) -> None:
+    """Drives review.js in headless Chromium (needs Playwright, e.g.
+    `uv run --with playwright pytest -k browser`; GEORG_TEST_CHROME picks the binary)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    _login(env)
+    base = "http://testserver"  # the host TestClient renders into static URLs
+
+    def serve(route: Any) -> None:
+        url = urlsplit(route.request.url)
+        response = env.client.get(url.path + (f"?{url.query}" if url.query else ""))
+        route.fulfill(
+            status=response.status_code, headers=dict(response.headers), body=response.content
+        )
+
+    with sync_api.sync_playwright() as pw:
+        try:
+            browser = pw.chromium.launch(executable_path=os.environ.get("GEORG_TEST_CHROME"))
+        except sync_api.Error as exc:
+            pytest.skip(f"no Chromium for Playwright: {exc}")
+        page = browser.new_page()
+        page.route("**/*", serve)
+        page.goto(f"{base}/sermons/{env.sermon_id}")
+        approve = page.locator("button[data-needs-saved]")
+        revert = page.locator("#revert-form")
+        note = page.locator("#unsaved-note")
+        preacher = page.locator("input[name=preacher]")
+        original = preacher.input_value()
+        assert approve.is_enabled() and revert.is_disabled() and note.is_hidden()
+
+        preacher.fill("Someone else")
+        assert approve.is_disabled() and revert.is_enabled() and note.is_visible()
+        preacher.fill(original)
+        assert approve.is_enabled() and revert.is_disabled() and note.is_hidden()
+
+        service_date = page.locator("input[name=service_date]").input_value()
+        page.locator("input[name=title]").fill("Edited")
+        page.locator("#f-transcript").fill("New words")
+        page.locator("input[name=service_date]").fill("2026-11-02")
+        assert approve.is_disabled()
+        revert.click()
+        assert page.locator("input[name=title]").input_value() != "Edited"
+        assert page.locator("#f-transcript").input_value() != "New words"
+        assert page.locator("input[name=service_date]").input_value() == service_date
+        assert approve.is_enabled() and note.is_hidden()
+        browser.close()

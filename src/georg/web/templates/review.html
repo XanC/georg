@@ -121,19 +121,18 @@
   </fieldset>
   <label for="f-transcript">Transcript (Markdown)</label>
   <textarea id="f-transcript" name="transcript" rows="20" class="transcript">{{ values.transcript }}</textarea>
-  <button type="submit">Save as new revision</button>
+  <div class="actions">
+    <button type="submit">Save as new revision</button>
+    <button type="button" id="revert-form" disabled>Revert</button>
+  </div>
 </form>
 
 <section aria-labelledby="approve-h">
   <h2 id="approve-h">Approval and publishing</h2>
-  {% if same_date and (same_date.posts or same_date.failed) %}
-  <div class="warning" id="same-date" role="status">
-    {% for post in same_date.posts %}
-    <p>The website already has a sermon for this date: <a href="{{ post.link }}">{{ post.title }}</a></p>
-    {% endfor %}
-    {% if same_date.failed %}<p>Couldn't check the website for another sermon on this date.</p>{% endif %}
-  </div>
-  {% endif %}
+  {% include "_same_date.html" %}
+  <p class="flash warning" id="unsaved-note" role="status" hidden>
+    You have unsaved changes. Save or revert your changes first, then approve and publish.
+  </p>
   {% include "_publish_status.html" %}
 </section>
 

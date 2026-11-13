@@ -635,3 +635,42 @@ def test_sermons_on_failure_is_a_module_error(monkeypatch: pytest.MonkeyPatch) -
     out, _ = make_output(lambda request: httpx.Response(503), monkeypatch)
     with pytest.raises(ModuleError, match="lookup by date failed"):
         out.sermons_on(date(2026, 9, 6))
+
+
+def test_sermons_between_pages_through_the_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        page = int(request.url.params["page"])
+        count = 100 if page == 1 else 1
+        rows = [
+            {
+                "id": page * 1000 + i,
+                "link": f"https://church.example/{page}-{i}/",
+                "title": {"rendered": "A &amp; B"},
+                "date": "2026-09-06T10:30:00",
+            }
+            for i in range(count)
+        ]
+        return httpx.Response(200, json=rows, headers={"X-WP-TotalPages": "2"})
+
+    out, _ = make_output(handler, monkeypatch)
+    posts = out.sermons_between(date(2026, 8, 30), date(2026, 9, 6))
+    assert len(posts) == 101
+    assert posts[0] == {
+        "id": "1000",
+        "title": "A & B",
+        "link": "https://church.example/1-0/",
+        "date": "2026-09-06",
+    }
+    assert [r.url.params["page"] for r in seen] == ["1", "2"]
+    assert seen[0].url.params["after"] == "2026-08-29T23:59:59"
+    assert seen[0].url.params["before"] == "2026-09-07T00:00:00"
+    assert "X-Georg-Signature" not in seen[0].headers
+
+
+def test_sermons_between_failure_is_a_module_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    out, _ = make_output(lambda request: httpx.Response(503), monkeypatch)
+    with pytest.raises(ModuleError, match="lookup by date failed"):
+        out.sermons_between(date(2026, 9, 1), date(2026, 9, 6))

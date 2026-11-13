@@ -39,6 +39,8 @@ from georg.modules.outputs.wordpress_signing import (
 PUBLICATION_KEY_PATTERN = re.compile(r"^[A-Za-z0-9:._-]{1,190}$")
 FILENAME_FIELDS = frozenset({"date", "slug"})
 METADATA_TERM_FIELDS = frozenset({"preacher", "scripture", "occasion", "series"})
+SERMON_LIST_PAGE_SIZE = 100
+SERMON_LIST_MAX_PAGES = 20
 DEFAULT_TERM_FIELDS = {
     "preacher": "ctc_sermon_speaker",
     "scripture": "ctc_sermon_book",
@@ -217,6 +219,46 @@ class WordPressOutput:
                 }
                 for row in rows
             ]
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            raise ModuleError(f"{self.name}: sermon lookup by date failed: {exc}") from exc
+
+    def sermons_between(self, first: date, last: date) -> list[dict[str, Any]]:
+        """Published ctc_sermon posts dated `first`..`last` inclusive (site time): id, title,
+        link and date (YYYY-MM-DD). One paginated listing, for many services at once."""
+        start = datetime.combine(first, datetime.min.time())
+        end = datetime.combine(last, datetime.min.time()) + timedelta(days=1)
+        posts: list[dict[str, Any]] = []
+        try:
+            for page in range(1, SERMON_LIST_MAX_PAGES + 1):
+                response = self._client.get(
+                    self._rest + "/wp/v2/ctc_sermon",
+                    params={
+                        "after": (start - timedelta(seconds=1)).isoformat(),
+                        "before": end.isoformat(),
+                        "_fields": "id,link,title,date",
+                        "per_page": SERMON_LIST_PAGE_SIZE,
+                        "page": page,
+                        "orderby": "date",
+                        "order": "desc",
+                    },
+                    headers={"Accept": "application/json"},
+                    timeout=min(self.options.timeout_s, 5.0),
+                )
+                response.raise_for_status()
+                rows = response.json()
+                posts += [
+                    {
+                        "id": str(int(row["id"])),
+                        "title": html.unescape(str(row["title"]["rendered"])),
+                        "link": str(row["link"]),
+                        "date": str(row["date"])[:10],
+                    }
+                    for row in rows
+                ]
+                pages = int(response.headers.get("X-WP-TotalPages") or page)
+                if page >= pages or len(rows) < SERMON_LIST_PAGE_SIZE:
+                    break
+            return posts
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             raise ModuleError(f"{self.name}: sermon lookup by date failed: {exc}") from exc
 

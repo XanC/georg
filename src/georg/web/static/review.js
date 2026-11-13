@@ -29,6 +29,39 @@
     var update = function () { readout.textContent = formatHms(positionMs(p)); };
     ["timeupdate", "seeked", "loadedmetadata"].forEach(function (e) { p.audio.addEventListener(e, update); });
   });
+  // Approve/publish only what is saved: compare every form field against the loaded
+  // revision (its defaultValue) on each edit, so changing a field back re-enables them.
+  function editableFields(form) {
+    return Array.prototype.filter.call(form.elements, function (el) {
+      return el.name && "defaultValue" in el && el.type !== "hidden";
+    });
+  }
+  function normalized(text) { return text.replace(/\r\n?/g, "\n"); }
+  function trackUnsaved() {
+    var form = document.getElementById("review-form");
+    if (!form) return;
+    var fields = editableFields(form);
+    var revert = document.getElementById("revert-form");
+    var update = function () {
+      var dirty = fields.some(function (el) { return normalized(el.value) !== normalized(el.defaultValue); });
+      var note = document.getElementById("unsaved-note");
+      if (note) note.hidden = !dirty;
+      if (revert) revert.disabled = !dirty;
+      document.querySelectorAll("button[data-needs-saved]").forEach(function (button) {
+        button.disabled = dirty || button.hasAttribute("data-busy");
+      });
+    };
+    form.addEventListener("input", update);
+    form.addEventListener("change", update);
+    if (revert) revert.addEventListener("click", function () {
+      fields.forEach(function (el) { el.value = el.defaultValue; });
+      update();
+    });
+    document.body.addEventListener("htmx:afterSwap", update);
+    update();
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", trackUnsaved);
+  else trackUnsaved();
   // Media events don't bubble, so capture: one player at a time, including htmx-inserted ones.
   document.addEventListener("play", function (event) {
     document.querySelectorAll("audio, video").forEach(function (media) {
