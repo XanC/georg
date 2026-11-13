@@ -11,7 +11,9 @@
     <tr>
       <td>{{ row.service.service_date or "—" }}</td>
       <td><a href="/services/{{ row.service.id }}">{{ row.service.title or row.service.source_ref }}</a></td>
-      <td><span class="badge" data-status="{{ row.service.id }}">{{ row.status }}</span></td>
+      <td><span class="badge" data-status="{{ row.service.id }}">{{ row.status }}</span>
+        {% for post in row.same_date %}<a class="badge warning" href="{{ post.link }}" data-same-date="{{ row.service.id }}"
+          title="The website already has a sermon for this date: {{ post.title }}">Already on website</a>{% endfor %}</td>
     </tr>
   {% endfor %}
   </tbody>

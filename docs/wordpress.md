@@ -149,3 +149,8 @@ only) for sermons dated on the service date. Any post that isn't this sermon's o
 publication is shown above the Publish button ("The website already has a sermon for this
 date: …"). Publishing is not blocked. If the site can't be reached, the page still loads
 with a note that the check couldn't be done.
+
+The same warning appears on a service page before a sermon is proposed, and the Services
+list shows an "Already on website" badge linking to the existing post. The list makes one
+paginated request for the date range of all listed services. Lookups, including failures,
+are cached in the web process for 60 s. If the lookup fails, the list shows no badges.

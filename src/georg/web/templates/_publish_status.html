@@ -4,14 +4,14 @@
   <p>Revision {{ revision.number }} is approved{% if approval.note %} ({{ approval.note }}){% endif %}.</p>
   <form method="post" action="/sermons/{{ sermon.id }}/publish">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button type="submit" {% if publishing %}disabled{% endif %}>{{ "Publishing…" if publishing else "Publish again" }}</button>
+    <button type="submit" data-needs-saved {% if publishing %}disabled data-busy{% endif %}>{{ "Publishing…" if publishing else "Publish again" }}</button>
   </form>
   {% else %}
   <form method="post" action="/sermons/{{ sermon.id }}/approve" class="stack narrow">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="revision_id" value="{{ revision.id }}">
     <label>Note (optional) <input name="note"></label>
-    <button type="submit">Approve revision {{ revision.number }} and publish</button>
+    <button type="submit" data-needs-saved>Approve revision {{ revision.number }} and publish</button>
   </form>
   {% endif %}
   {% if outputs %}

@@ -3,9 +3,10 @@
 
 import json
 import os
+import time
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Final
 
@@ -20,7 +21,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
 
 from georg import __version__
-from georg.core.config import GeorgConfig
+from georg.core.config import GeorgConfig, OutputConfig
 from georg.core.errors import ConfigError
 from georg.core.types import ServiceBoundaries
 from georg.db.engine import session_factory
@@ -71,6 +72,7 @@ PROCESS: Final = "process"
 ACTIVE_STATUSES: Final = ("queued", "running")
 SEEK_RENDITION: Final = "service_hq"
 PREVIEW_RENDITION: Final = "preview"
+WEBSITE_CACHE_S: Final = 60.0
 CUT_PREVIEW_LABELS: Final = {"sermon_preview": "Sermon", "service_preview": "Service"}
 """Built-in low-quality copies of the cuts (`georg.pipeline.local.CUT_PREVIEWS`)."""
 AUDIO_KINDS: Final = ("sermon_audio", "rendition")
@@ -280,6 +282,73 @@ def create_app(
 
     # --- services -----------------------------------------------------------------
 
+    website_cache: dict[tuple[str, date, date], tuple[float, list[dict[str, Any]] | None]] = {}
+
+    def website_sermons(target: OutputConfig, first: date, last: date) -> list[dict[str, Any]]:
+        """The target's published sermons dated first..last, cached (failures too) for
+        WEBSITE_CACHE_S so reloading a page doesn't ask the website again."""
+        key = (target.name, first, last)
+        now = time.monotonic()
+        hit = website_cache.get(key)
+        if hit is None or now - hit[0] >= WEBSITE_CACHE_S:
+            for stale in [k for k, (t, _) in website_cache.items() if now - t >= WEBSITE_CACHE_S]:
+                del website_cache[stale]
+            posts: list[dict[str, Any]] | None
+            try:
+                lookup = getattr(
+                    build_output(target, timezone=config.timezone), "sermons_between", None
+                )
+                posts = list(lookup(first, last)) if callable(lookup) else []
+            except Exception:
+                posts = None
+            hit = website_cache[key] = (now, posts)
+        if hit[1] is None:
+            raise LookupError(f"{target.name}: sermon lookup failed")
+        return hit[1]
+
+    def same_date_posts(session: Session, services: Sequence[Service]) -> dict[int, dict[str, Any]]:
+        """Per service id: the posts the website already has on the sermon's date that
+        aren't its own publication, and the targets whose lookup failed (never raised).
+        One lookup per wordpress target covers every service's date."""
+        targets = [o for o in config.outputs if o.type == "wordpress"]
+        if not targets:
+            return {}
+        sermons = SermonRepository(session)
+        pubs = PublicationRepository(session)
+        days: dict[int, date] = {}
+        own: dict[int, set[tuple[str, str | None]]] = {}
+        for service in services:
+            found = sermons.for_service(service.id)
+            revision = sermons.current_revision(found[0].id) if found else None
+            meta_day = sermons.metadata(revision).service_date if revision else None
+            day = meta_day or service.service_date
+            if day is None:
+                continue
+            days[service.id] = day
+            own[service.id] = {
+                (p.target_name, p.external_id) for s in found for p in pubs.for_sermon(s.id)
+            }
+        if not days:
+            return {}
+        first, last = min(days.values()), max(days.values())
+        result: dict[int, dict[str, Any]] = {
+            sid: {"date": day, "posts": [], "failed": []} for sid, day in days.items()
+        }
+        for target in targets:
+            try:
+                posts = website_sermons(target, first, last)
+            except LookupError:
+                for row in result.values():
+                    row["failed"].append(target.name)
+                continue
+            for sid, day in days.items():
+                result[sid]["posts"] += [
+                    p
+                    for p in posts
+                    if p.get("date") == day.isoformat() and (target.name, p["id"]) not in own[sid]
+                ]
+        return result
+
     def statuses(session: Session, services: Sequence[Service]) -> dict[int, str]:
         sermons = SermonRepository(session)
         pubs = PublicationRepository(session)
@@ -291,7 +360,15 @@ def create_app(
     def services(request: Request, user: User, session: DB) -> HTMLResponse:
         found = ServiceRepository(session).newest_first(limit=200)
         status = statuses(session, found)
-        rows = [{"service": service, "status": status[service.id]} for service in found]
+        same_date = same_date_posts(session, found)
+        rows = [
+            {
+                "service": service,
+                "status": status[service.id],
+                "same_date": same_date.get(service.id, {}).get("posts", []),
+            }
+            for service in found
+        ]
         return render(request, "services.html", {"rows": rows}, user=user)
 
     @app.get("/services/{service_id}", response_class=HTMLResponse)
@@ -300,7 +377,11 @@ def create_app(
         found = SermonRepository(session).for_service(service_id)
         if found and found[0].current_revision_id is not None:
             return _redirect(f"/sermons/{found[0].id}")
-        context = {"service": service, "status": statuses(session, [service])[service.id]}
+        context = {
+            "service": service,
+            "status": statuses(session, [service])[service.id],
+            "same_date": same_date_posts(session, [service]).get(service.id),
+        }
         return render(request, "service.html", context, user=user)
 
     # --- sermon review ----------------------------------------------------------------
@@ -386,31 +467,10 @@ def create_app(
     @app.get("/sermons/{sermon_id}", response_class=HTMLResponse)
     def review(request: Request, sermon_id: int, user: User, session: DB) -> HTMLResponse:
         context = review_context(session, sermon_id)
-        context["same_date"] = same_date_sermons(session, context)
+        context["same_date"] = same_date_posts(session, [context["service"]]).get(
+            context["service"].id
+        )
         return render(request, "review.html", context, user=user)
-
-    def same_date_sermons(session: Session, context: dict[str, Any]) -> dict[str, Any] | None:
-        """Posts the website already has on this sermon's date that aren't its own
-        publication; a failed lookup is reported, never raised."""
-        targets = [o for o in config.outputs if o.type == "wordpress"]
-        meta = SermonRepository(session).metadata(context["revision"])
-        day = meta.service_date or context["service"].service_date
-        if not targets or day is None:
-            return None
-        own = {
-            (p.target_name, p.external_id)
-            for p in PublicationRepository(session).for_sermon(context["sermon"].id)
-        }
-        posts: list[dict[str, Any]] = []
-        failed: list[str] = []
-        for target in targets:
-            try:
-                lookup = getattr(build_output(target, timezone=config.timezone), "sermons_on", None)
-                if callable(lookup):
-                    posts += [p for p in lookup(day) if (target.name, p["id"]) not in own]
-            except Exception:
-                failed.append(target.name)
-        return {"date": day, "posts": posts, "failed": failed}
 
     @app.get("/sermons/{sermon_id}/render-status", response_class=HTMLResponse)
     def render_status(request: Request, sermon_id: int, user: User, session: DB) -> HTMLResponse:
