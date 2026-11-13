@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
-from datetime import timedelta
+from collections.abc import Sequence
+from datetime import datetime, timedelta
 
 
 class GeorgError(Exception):
@@ -36,3 +37,21 @@ class SourceNotReadyError(ModuleError):
 
     def __init__(self, message: str) -> None:
         super().__init__(message, retryable=True)
+
+
+class PublicationConflictError(ModuleError):
+    """The published object was edited at the target since Georg wrote it; writing these
+    fields needs a reviewer's decision, so the job is not retried."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        fields: Sequence[str],
+        modified_by: str | None = None,
+        modified_at: datetime | None = None,
+    ) -> None:
+        super().__init__(message, retryable=False)
+        self.fields = list(fields)
+        self.modified_by = modified_by
+        self.modified_at = modified_at

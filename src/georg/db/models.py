@@ -36,7 +36,14 @@ NAMING_CONVENTION: Final = {
 
 USER_ROLES: Final = ("admin", "reviewer")
 RUN_STATUSES: Final = ("queued", "running", "succeeded", "failed", "cancelled")
-PUBLICATION_STATUSES: Final = ("pending", "publishing", "published", "failed", "superseded")
+PUBLICATION_STATUSES: Final = (
+    "pending",
+    "publishing",
+    "published",
+    "failed",
+    "superseded",
+    "conflict",
+)
 ARTIFACT_KINDS: Final = (
     "source_media",
     "service_audio",
@@ -267,4 +274,10 @@ class Publication(Base):
     external_url: Mapped[str | None]
     attempts: Mapped[int] = mapped_column(default=0)
     last_error: Mapped[str | None] = mapped_column(Text)
+    published_revision_id: Mapped[int | None] = mapped_column(ForeignKey("sermon_revisions.id"))
+    """The revision the target last accepted; `revision_id` is the one being published."""
+    conflict_fields: Mapped[list[str] | None] = mapped_column(JSON)
+    """Fields edited at the target that a "conflict" publication would overwrite."""
+    conflict_by: Mapped[str | None]
+    conflict_at: Mapped[datetime | None]
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)

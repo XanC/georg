@@ -250,6 +250,13 @@ class PublicationRequest(Model):
     files: dict[str, ArtifactRef] = Field(default_factory=dict)
     """Renditions keyed by rendition name, limited to those the output requested."""
     existing: ExternalRef | None = None
+    previous: "PublicationRequest | None" = None
+    """What this output last published successfully (None for a first publish), so an
+    output can send only what changed."""
+    skip: frozenset[str] = frozenset()
+    """Output field names not to send: the reviewer kept the version edited at the target."""
+    overwrite: frozenset[str] = frozenset()
+    """Output field names to send even though they were edited at the target."""
 
 
 class FormatContext(Model):

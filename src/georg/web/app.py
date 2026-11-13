@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Final
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
@@ -39,6 +40,7 @@ from georg.db.types import utcnow
 from georg.idle import EXEMPT_PATHS, ActivityMarker, idle_state
 from georg.jobs.queue import JobInfo, JobQueue
 from georg.pipeline.registry import build_output
+from georg.pipeline.service import pending_request
 from georg.storage.base import ArtifactNotFoundError
 from georg.storage.local import LocalStore
 from georg.web.auth import (
@@ -386,6 +388,67 @@ def create_app(
 
     # --- sermon review ----------------------------------------------------------------
 
+    def publish_payload(session: Session, sermon_id: int) -> dict[str, Any] | None:
+        """The publish job for an approval: once a website holds the sermon, it is only
+        updated through "Update website…", so edits made there are not overwritten unseen.
+        None if no output is left to publish."""
+        held = _held_websites(config, PublicationRepository(session).for_sermon(sermon_id))
+        if not held:
+            return {"sermon_id": sermon_id}
+        targets = [o.name for o in config.outputs if o.name not in held]
+        return {"sermon_id": sermon_id, "targets": targets} if targets else None
+
+    def website_updates(session: Session, sermon_id: int) -> list[dict[str, Any]]:
+        """Per website already holding the sermon: the fields an update would send, and
+        those edited on the website since Georg wrote them, from the bridge's status
+        route (falling back to a recorded conflict if the website can't be reached)."""
+        pubs = PublicationRepository(session).for_sermon(sermon_id)
+        held = _held_websites(config, pubs)
+        updates = []
+        for pub in pubs:
+            if pub.target_name not in held:
+                continue
+            target = next(o for o in config.outputs if o.name == pub.target_name)
+            edited = set(pub.conflict_fields or [])
+            by, at = pub.conflict_by, pub.conflict_at
+            failed = False
+            try:
+                site: Any = build_output(
+                    target.model_copy(update={"options": {**target.options, "attempts": 1}}),
+                    timezone=config.timezone,
+                )
+                request = pending_request(config, session, sermon_id, site, store=store)
+                sending = site.fields_to_send(request) if request else frozenset()
+                status = site.site_status(pub.publication_key)
+                labels = {f: site.field_label(f) for f in {*(sending or ()), *edited}}
+                if status is not None:
+                    edited = set(status["edited"])
+                    by, at = status["modified_by"], status["modified_at"]
+                    labels |= {f: site.field_label(f) for f in edited}
+            except Exception:
+                failed, sending, labels = True, set(pub.conflict_fields or []), {}
+            fields = sorted(sending) if sending is not None else ["everything"]
+            conflict = sorted(edited & set(fields)) or (
+                sorted(edited) if pub.status == "conflict" else []
+            )
+            when = (
+                [at.astimezone(ZoneInfo(config.timezone)).strftime("%b %-d, %Y %-I:%M %p")]
+                if at
+                else []
+            )
+            updates.append(
+                {
+                    "name": pub.target_name,
+                    "fields": [(f, labels.get(f, f)) for f in fields],
+                    "conflict": [(f, labels.get(f, f)) for f in conflict],
+                    "note": "Content was edited on the website ("
+                    + ", ".join([*when, *([f"by {by}"] if by else [])])
+                    + ")",
+                    "failed": failed,
+                }
+            )
+        return updates
+
     def review_context(session: Session, sermon_id: int) -> dict[str, Any]:
         sermons = SermonRepository(session)
         sermon = sermons.get(sermon_id)
@@ -458,6 +521,7 @@ def create_app(
                 [o.name for o in config.outputs], publications, revision.id, publishing
             ),
             "revision_numbers": numbers,
+            "published_once": any(p.published_revision_id for p in publications),
             "author_name": lambda author: _author_name(users, author),
             "publishing": publishing,
             "errors": [],
@@ -470,6 +534,7 @@ def create_app(
         context["same_date"] = same_date_posts(session, [context["service"]]).get(
             context["service"].id
         )
+        context["website_updates"] = website_updates(session, sermon_id)
         return render(request, "review.html", context, user=user)
 
     @app.get("/sermons/{sermon_id}/render-status", response_class=HTMLResponse)
@@ -563,10 +628,12 @@ def create_app(
                     raise NotFoundError(f"revision {revision_id} not found")
                 sermons.approve(revision_id, approved_by=user.id, note=note.strip() or None)
                 number = sermons.revision(revision_id).number
+                payload = publish_payload(session, sermon_id)
         except NotCurrentRevisionError:
             _flash(request, "A newer revision exists; review it before approving.", "error")
             return _redirect(f"/sermons/{sermon_id}")
-        queue.enqueue(PUBLISH, {"sermon_id": sermon_id})
+        if payload:
+            queue.enqueue(PUBLISH, payload)
         _flash(request, f"Approved revision {number}.")
         return _redirect(f"/sermons/{sermon_id}")
 
@@ -583,11 +650,35 @@ def create_app(
         return _redirect(f"/sermons/{sermon_id}")
 
     @app.post("/sermons/{sermon_id}/publish")
-    def publish(request: Request, sermon_id: int, user: User, session: DB) -> Response:
+    def publish(
+        request: Request,
+        sermon_id: int,
+        user: User,
+        session: DB,
+        website: Annotated[str, Form()] = "",
+        decision: Annotated[str, Form()] = "",
+        fields: Annotated[list[str] | None, Form()] = None,
+        confirm: Annotated[str, Form()] = "",
+    ) -> Response:
+        """Publish again, or (with `website`) update a website that already holds the
+        sermon, skipping or overwriting `fields` edited there if the reviewer decided so."""
+        payload: dict[str, Any] | None
         if not SermonRepository(session).is_approved(sermon_id):
             _flash(request, "Approve the current revision before publishing.", "error")
+            return _redirect(f"/sermons/{sermon_id}")
+        if not website:
+            payload = publish_payload(session, sermon_id)
+        elif website not in {o.name for o in config.outputs if o.type == "wordpress"}:
+            raise NotFoundError(f"no website output {website!r}")
+        elif decision == "overwrite" and confirm != "yes":
+            _flash(request, "Confirm that the website's edits may be overwritten.", "error")
+            return _redirect(f"/sermons/{sermon_id}")
         else:
-            queue.enqueue(PUBLISH, {"sermon_id": sermon_id})
+            payload = {"sermon_id": sermon_id, "targets": [website]}
+            if decision in ("skip", "overwrite") and fields:
+                payload[decision] = sorted(set(fields))
+        if payload:
+            queue.enqueue(PUBLISH, payload)
         return _redirect(f"/sermons/{sermon_id}")
 
     # --- artifacts --------------------------------------------------------------------
@@ -757,6 +848,17 @@ class OutputState:
     publication: Publication | None
 
 
+def _held_websites(config: GeorgConfig, publications: Sequence[Publication]) -> set[str]:
+    """Website outputs that already hold some revision of the sermon (or wait for a
+    decision on one): updated only when a reviewer asks."""
+    websites = {o.name for o in config.outputs if o.type == "wordpress"}
+    return {
+        p.target_name
+        for p in publications
+        if p.target_name in websites and (p.published_revision_id or p.status == "conflict")
+    }
+
+
 def _output_states(
     configured: list[str],
     publications: Sequence[Publication],
@@ -779,6 +881,8 @@ def _output_states(
             states.append(OutputState(name, "published", "Published", pub))
         elif pub.status == "failed":
             states.append(OutputState(name, "failed", f"Failed: {pub.last_error}", pub))
+        elif pub.status == "conflict":
+            states.append(OutputState(name, "conflict", "Website edited: needs decision", pub))
         else:
             states.append(OutputState(name, "", "Not finished", pub))
     return states

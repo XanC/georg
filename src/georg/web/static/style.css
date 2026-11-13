@@ -44,7 +44,7 @@ pre.error { white-space: pre-wrap; margin: 0; font-size: .85rem; }
 .badge { display: inline-block; padding: .05rem .5rem; border-radius: 999px; background: #eceff1; font-size: .875rem; }
 .badge.published, .badge.succeeded { background: #d5f5dd; }
 .badge.failed { background: var(--err); }
-.badge.running, .badge.publishing, .badge.warning { background: var(--warn); }
+.badge.running, .badge.publishing, .badge.warning, .badge.conflict { background: var(--warn); }
 .actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .player { margin: .5rem 0 1rem; }
 .player figcaption { font-weight: 600; }

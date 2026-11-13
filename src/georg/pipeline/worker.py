@@ -89,7 +89,12 @@ class Worker:
                 self.config, self.sessions, int(payload["revision_id"]), self.processors
             ),
             PUBLISH: lambda payload: publish_sermon(
-                self.config, self.sessions, int(payload["sermon_id"])
+                self.config,
+                self.sessions,
+                int(payload["sermon_id"]),
+                only=payload.get("targets"),
+                skip=payload.get("skip") or (),
+                overwrite=payload.get("overwrite") or (),
             ),
         }
 

@@ -4,9 +4,12 @@
 `publish` uploads the sermon audio to `POST /georg/v1/audio` (stored as a media-library
 attachment under `uploads/sermons/`), then creates or updates the sermon post with
 `PUT /georg/v1/sermons/<publication_key>`. Both calls are idempotent by publication key,
-so a retried or repeated publication updates the same attachment and post. Every request
-is signed with HMAC-SHA256 (see `wordpress_signing` and docs/wordpress.md). The plugin
-lives in `wordpress/georg-bridge/` in this repository.
+so a retried or repeated publication updates the same attachment and post. A republish
+sends only the fields that changed since the last one (`PublicationRequest.previous`); the
+bridge refuses fields edited on the website (409) unless they are in `overwrite`, which
+becomes a `PublicationConflictError`. Every request is signed with HMAC-SHA256 (see
+`wordpress_signing` and docs/wordpress.md). The plugin lives in `wordpress/georg-bridge/`
+in this repository.
 """
 
 import html
@@ -24,7 +27,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from georg.core.config import OutputConfig, resolve_secret
-from georg.core.errors import ConfigError, ModuleError
+from georg.core.errors import ConfigError, ModuleError, PublicationConflictError
 from georg.core.types import ArtifactRef, ExternalRef, PublicationRequest, SermonMetadata
 from georg.llm.http import request_json
 from georg.modules.outputs.wordpress_signing import (
@@ -137,6 +140,16 @@ def transcript_html(markdown: str, prefix: str | None = None) -> str:
 def normalize_scripture(reference: str, dash: str = "-") -> str:
     """Replace every hyphen or dash (and the spaces around it) with `dash`."""
     return _DASH.sub(dash, reference)
+
+
+def _timestamp(raw: Any) -> datetime | None:
+    if not isinstance(raw, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def _values(raw: Any) -> list[str]:
@@ -264,15 +277,95 @@ class WordPressOutput:
 
     def publish(self, request: PublicationRequest) -> ExternalRef:
         route = self._sermon_route(request.publication_key)
-        audio = self._upload(request, self._artifact(request))
+        fields = self.fields_to_send(request)
+        artifact = self._artifact(request)
+        audio = self._upload(request, artifact) if fields is None or "audio" in fields else None
         body = self.sermon_body(request, audio_id=audio)
+        overwrite = set(request.overwrite)
+        if fields is not None:
+            body["fields"] = sorted(fields)
+            overwrite &= fields
+        if overwrite:
+            body["overwrite"] = sorted(overwrite)
         data = self._call(
             "PUT",
             route,
             content=json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode(),
             headers={"Content-Type": "application/json"},
+            none_on=frozenset({409}),
         )
+        if data is None:
+            raise self._conflict(request, fields)
         return self._ref(data)
+
+    def fields_to_send(self, request: PublicationRequest) -> frozenset[str] | None:
+        """Bridge fields that differ from `request.previous`, minus `request.skip`; None
+        (send everything) for a first publish."""
+        now = self._comparable(request)
+        if request.previous is None:
+            return frozenset(now) - request.skip if request.skip else None
+        before = self._comparable(request.previous)
+        changed = {f for f, v in now.items() if v != before.get(f)}
+        return frozenset(changed) - request.skip
+
+    def _comparable(self, request: PublicationRequest) -> dict[str, Any]:
+        body = self.sermon_body(request, audio_id=None)
+        values: dict[str, Any] = {"title": body["title"], "date": (body["date"], body["date_gmt"])}
+        if "content" in body:
+            values["content"] = body["content"]
+            values["full_text"] = (body["content"], body.get("full_text", False))
+        values |= {f"terms:{t}": sorted(names) for t, names in body["terms"].items()}
+        artifact = request.files.get(self.options.rendition)
+        values["audio"] = artifact.sha256 if artifact else None
+        return values
+
+    def site_status(self, publication_key: str) -> dict[str, Any] | None:
+        """The bridge's view of the published sermon: id, link, `edited` (fields changed on
+        the website since Georg wrote them), `modified_at` and `modified_by`; None if the
+        website has no sermon with this key."""
+        data = self._call(
+            "GET", self._sermon_route(publication_key) + "/status", none_on=frozenset({404})
+        )
+        if data is None:
+            return None
+        edited = data.get("edited")
+        if not isinstance(edited, list) or not all(isinstance(f, str) for f in edited):
+            raise ModuleError(f"{self.name}: bridge status has no edited fields")
+        by = data.get("modified_by")
+        return {
+            "id": data.get("id"),
+            "link": data.get("link"),
+            "edited": edited,
+            "modified_at": _timestamp(data.get("modified_gmt")),
+            "modified_by": by if isinstance(by, str) else None,
+            "version": data.get("version"),
+        }
+
+    def field_label(self, field: str) -> str:
+        """Reviewer-facing name of a bridge field, e.g. "terms:ctc_sermon_book" -> "scripture"."""
+        if field.startswith("terms:"):
+            taxonomy = field.removeprefix("terms:")
+            names = [f for f, t in self.options.term_fields.items() if t == taxonomy]
+            return " and ".join(names) if names else taxonomy.removeprefix("ctc_sermon_")
+        return {"content": "transcript", "full_text": "full-text flag"}.get(field, field)
+
+    def _conflict(
+        self, request: PublicationRequest, fields: frozenset[str] | None
+    ) -> PublicationConflictError:
+        status = self.site_status(request.publication_key) or {}
+        edited = set(status.get("edited") or [])
+        conflicting = edited if fields is None else edited & fields
+        conflicting -= request.overwrite
+        names = sorted(conflicting or edited)
+        by = status.get("modified_by")
+        return PublicationConflictError(
+            f"{self.name}: edited on the website"
+            + (f" by {by}" if by else "")
+            + f": {', '.join(self.field_label(f) for f in names) or 'unknown fields'}",
+            fields=names,
+            modified_by=by,
+            modified_at=status.get("modified_at"),
+        )
 
     def sermon_body(self, request: PublicationRequest, *, audio_id: int | None) -> dict[str, Any]:
         meta = request.metadata

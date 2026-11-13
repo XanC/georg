@@ -1,0 +1,39 @@
+{% for w in website_updates or [] %}
+<details class="website-update" id="website-update-{{ w.name }}" {% if w.conflict %}open{% endif %}>
+  <summary>Update website…{% if website_updates|length > 1 %} ({{ w.name }}){% endif %}</summary>
+  {% if w.failed %}<p>Couldn't check the website for edits.</p>{% endif %}
+  {% if not w.fields %}
+  <p>The website already has everything in revision {{ revision.number }}.</p>
+  {% else %}
+  <p>Would send: {% for f, label in w.fields %}{{ label }}{{ ", " if not loop.last }}{% endfor %}.</p>
+  {% if not approval %}
+  <p>Approve revision {{ revision.number }} first.</p>
+  {% elif w.conflict %}
+  <div class="warning" role="status" data-conflict="{{ w.name }}">
+    <p>{{ w.note }}: {% for f, label in w.conflict %}{{ label }}{{ ", " if not loop.last }}{% endfor %}.</p>
+  </div>
+  <form method="post" action="/sermons/{{ sermon.id }}/publish">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="website" value="{{ w.name }}">
+    <input type="hidden" name="decision" value="skip">
+    {% for f, _ in w.conflict %}<input type="hidden" name="fields" value="{{ f }}">{% endfor %}
+    <button type="submit" data-needs-saved>Skip these fields</button>
+  </form>
+  <form method="post" action="/sermons/{{ sermon.id }}/publish" class="stack narrow">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="website" value="{{ w.name }}">
+    <input type="hidden" name="decision" value="overwrite">
+    {% for f, _ in w.conflict %}<input type="hidden" name="fields" value="{{ f }}">{% endfor %}
+    <label><input type="checkbox" name="confirm" value="yes" required> Replace the edits made on the website</label>
+    <button type="submit" data-needs-saved>Overwrite on website</button>
+  </form>
+  {% else %}
+  <form method="post" action="/sermons/{{ sermon.id }}/publish">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="website" value="{{ w.name }}">
+    <button type="submit" data-needs-saved>Update website</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</details>
+{% endfor %}

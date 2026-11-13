@@ -11,7 +11,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="revision_id" value="{{ revision.id }}">
     <label>Note (optional) <input name="note"></label>
-    <button type="submit" data-needs-saved>Approve revision {{ revision.number }} and publish</button>
+    <button type="submit" data-needs-saved>{% if published_once %}Approve{% else %}Approve revision {{ revision.number }} and publish{% endif %}</button>
   </form>
   {% endif %}
   {% if outputs %}

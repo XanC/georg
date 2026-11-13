@@ -9,7 +9,7 @@ import hashlib
 import json
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -527,9 +527,32 @@ class PublicationRepository:
     def mark_published(self, publication_id: int, ref: ExternalRef) -> Publication:
         publication = self.get(publication_id)
         publication.status = "published"
+        publication.published_revision_id = publication.revision_id
         publication.external_id = ref.external_id
         publication.external_url = ref.url
         publication.last_error = None
+        publication.conflict_fields = None
+        publication.conflict_by = None
+        publication.conflict_at = None
+        self.session.flush()
+        return publication
+
+    def mark_conflict(
+        self,
+        publication_id: int,
+        error: str,
+        *,
+        fields: Sequence[str],
+        by: str | None,
+        at: datetime | None,
+    ) -> Publication:
+        """The target was edited outside Georg: wait for a reviewer instead of retrying."""
+        publication = self.get(publication_id)
+        publication.status = "conflict"
+        publication.last_error = error
+        publication.conflict_fields = list(fields)
+        publication.conflict_by = by
+        publication.conflict_at = at
         self.session.flush()
         return publication
 

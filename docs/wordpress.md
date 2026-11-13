@@ -125,6 +125,41 @@ upload and the sermon `PUT` are both keyed by the publication key, so repeating 
 updates the same attachment or post. A retry after a lost response therefore leaves
 exactly one sermon and one attachment.
 
+## Edits made on the website
+
+georg-bridge 0.4.0 keeps edits made in WordPress from being overwritten by a republish.
+
+- After every sermon write the bridge stores `_georg_written` post meta: a sha256 per
+  field (`title`, `content`, `date`, and `terms:<taxonomy>` with sorted term IDs for each
+  taxonomy Georg sets) of the values as WordPress saved them, read back from the saved
+  post, plus `written_at`.
+- The sermon `PUT` takes optional `fields` (which of those fields, plus `audio` and
+  `full_text`, to write; all when absent) and `overwrite`. If a requested field's current
+  fingerprint differs from `_georg_written` and the field isn't in `overwrite`, the bridge
+  writes nothing and returns 409 `georg_edited_on_site` with `fields`, `modified_gmt` and
+  `modified_by` (display name of the latest revision's author).
+- Sermons written before 0.4.0 have no `_georg_written`. They count as edited in every
+  field if the latest revision was saved by a user other than the bridge user, since
+  revisions don't say which field changed.
+- Signed `GET /georg/v1/sermons/<key>/status` returns `id`, `link`, `status`, `edited`
+  (fields edited on the website), `written_at`, `modified_gmt`, `modified_by` and the
+  bridge `version`, without changing anything.
+
+On Georg's side, a republish sends only the fields that differ between the revision the
+website last accepted (`publications.published_revision_id`) and the one being published;
+the audio is uploaded only when its artifact changed. A first publish sends everything.
+A 409 puts the website publication in the `conflict` state with the fields and editor
+("Website edited: needs decision" on the review page); it is not retried, and the other
+outputs publish as usual.
+
+Once a website holds the sermon, approving a new revision publishes the other outputs
+only. The review page's "Update website…" shows which fields would be sent and, if some
+were edited on the website, "Content was edited on the website (date, by name)" with
+"Skip these fields" (send the rest) or "Overwrite on website" (needs a confirming tick).
+
+Install georg-bridge 0.4.0 before deploying a Georg that sends `fields`: an older bridge
+ignores `fields` and would write every field.
+
 ## Threat notes
 
 - **Clock sync.** The Georg host and the web server must keep time with NTP; more than
