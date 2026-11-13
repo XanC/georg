@@ -9,6 +9,8 @@ and its aliases win over the bundled ones.
 """
 
 import hashlib
+import logging
+import re
 import tomllib
 from dataclasses import dataclass
 from importlib import resources
@@ -17,15 +19,30 @@ from typing import Literal
 
 from georg.core.errors import ConfigError
 from georg.modules.processors.metadata.names import clean_name, series_key, spell_ordinals
+from georg.modules.processors.metadata.references import DASHES
 
 Book = Literal["lsb"]
 Lectionary = Literal["three-year", "one-year"]
+
+LOOKUP_REVISION = "2"
+"""Part of `Calendar.version`; bump when matching changes so cached metadata is redone."""
+
+log = logging.getLogger(__name__)
+
+_PUNCTUATION = re.compile(f"[.,'\u2019_{re.escape(DASHES)}]")
+
+
+def punctuation_key(name: str) -> str:
+    """Equal for names that differ only in case, `.`, `,`, apostrophes, `_`, dashes or
+    spacing: "St__Luke_Evangelist" and "St. Luke, Evangelist" share a key."""
+    return " ".join(_PUNCTUATION.sub(" ", clean_name(name).casefold()).split())
 
 
 @dataclass(frozen=True)
 class Normalized:
     name: str
-    """The occasion to use: canonical if an exact or casefold alias matched, else as given."""
+    """The occasion to use: canonical if an alias matched exactly, by case or by
+    punctuation and spacing, else as given."""
     known: bool
     original: str | None = None
     """The given name, when it was replaced by its canonical form."""
@@ -78,11 +95,27 @@ class Calendar:
                         self._lookup[form.casefold()] = canonical
         for canonical in self.canonical:
             self._keys.setdefault(series_key(canonical), canonical)
+        self._loose: dict[str, str | None] = {}
+        """Punctuation key -> canonical name, or None when names of two canonical
+        names share the key (then it is only a suggestion)."""
+        for form, canonical in self._lookup.items():
+            key = punctuation_key(form)
+            if self._loose.setdefault(key, canonical) not in (canonical, None):
+                log.warning(
+                    "calendar: %r and %r differ only in punctuation; not normalized automatically",
+                    self._loose[key],
+                    canonical,
+                )
+                self._loose[key] = None
 
     def normalize(self, name: str) -> Normalized:
         cleaned = " ".join(clean_name(name).replace("\u2019", "'").split())
-        canonical = self._lookup.get(cleaned.casefold()) or self._lookup.get(
-            spell_ordinals(cleaned).casefold()
+        spelled = spell_ordinals(cleaned)
+        canonical = (
+            self._lookup.get(cleaned.casefold())
+            or self._lookup.get(spelled.casefold())
+            or self._loose.get(punctuation_key(cleaned))
+            or self._loose.get(punctuation_key(spelled))
         )
         if canonical is not None:
             return Normalized(canonical, True, cleaned if canonical != cleaned else None)
@@ -103,4 +136,6 @@ def load_calendar(
             raise ConfigError(f"calendar occasions file {occasions}: {exc}") from exc
         layers.append(_tables(local, lectionary, str(occasions)))
         digest.update(local_text.encode())
-    return Calendar(*layers, version=f"{book}-{lectionary}-{digest.hexdigest()[:8]}")
+    return Calendar(
+        *layers, version=f"{book}-{lectionary}-{LOOKUP_REVISION}-{digest.hexdigest()[:8]}"
+    )
