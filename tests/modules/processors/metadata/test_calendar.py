@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 
 from georg.core.errors import ConfigError
-from georg.modules.processors.metadata.calendar import Normalized, load_calendar
+from georg.modules.processors.metadata.calendar import (
+    Calendar,
+    Normalized,
+    load_calendar,
+    punctuation_key,
+)
 from georg.modules.processors.metadata.names import series_key, spell_ordinals
 
 
@@ -88,3 +93,43 @@ def test_bundled_names_are_canonical_spellings() -> None:
         for name in names:
             assert spell_ordinals(name) == name, (table, name)
             assert series_key(name), name
+
+
+@pytest.mark.parametrize(
+    "given",
+    [
+        "St Luke, Evangelist",
+        "St__Luke_Evangelist",
+        "st. luke \u2013 evangelist",
+        "St  Luke Evangelist",
+    ],
+)
+def test_punctuation_and_spacing_differences_are_normalized(given: str) -> None:
+    result = load_calendar().normalize(given)
+    original = " ".join(given.split())
+    assert result == Normalized("St. Luke, Evangelist", True, original)
+    assert result.note() == f"normalized from '{original}'"
+
+
+def test_punctuation_key() -> None:
+    assert punctuation_key("St__Luke_Evangelist") == "st luke evangelist"
+    assert punctuation_key("All Saints\u2019 Day") == punctuation_key("all saints day")
+    assert punctuation_key("Second-Last Sunday") == "second last sunday"
+
+
+def test_punctuation_collision_is_only_a_suggestion(caplog: pytest.LogCaptureFixture) -> None:
+    calendar = Calendar({"St. Mark": [], "St Mark": []})
+    assert "differ only in punctuation" in caplog.text
+    assert calendar.normalize("St Mark") == Normalized("St Mark", True)
+    assert calendar.normalize("St. Mark") == Normalized("St. Mark", True)
+    loose = calendar.normalize("St__Mark")
+    assert loose == Normalized("St__Mark", False, suggestion="St. Mark")
+    assert loose.note() == "not a known day name; did you mean 'St. Mark'?"
+
+
+def test_bundled_calendars_have_no_punctuation_collisions(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    load_calendar(lectionary="three-year")
+    load_calendar(lectionary="one-year")
+    assert "differ only in punctuation" not in caplog.text
