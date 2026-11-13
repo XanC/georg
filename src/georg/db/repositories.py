@@ -32,6 +32,7 @@ from georg.db.models import (
     USER_ROLES,
     Approval,
     Artifact,
+    AuditLog,
     Publication,
     Sermon,
     SermonRevision,
@@ -82,19 +83,78 @@ class UserRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def add(self, username: str, password_hash: str, role: str) -> User:
-        if role not in USER_ROLES:
-            raise RepositoryError(f"unknown role {role!r}")
-        user = User(username=username, password_hash=password_hash, role=role)
+    def add(
+        self, username: str, password_hash: str, role: str, *, email: str | None = None
+    ) -> User:
+        _check_role(role)
+        user = User(username=username, password_hash=password_hash, role=role, email=email)
         self.session.add(user)
         self.session.flush()
         return user
+
+    def all(self) -> Sequence[User]:
+        return self.session.scalars(select(User).order_by(User.username)).all()
+
+    def active_admin_count(self) -> int:
+        stmt = select(func.count()).where(User.role == "admin", User.disabled_at.is_(None))
+        return int(self.session.scalar(stmt) or 0)
+
+    def set_role(self, user_id: int, role: str) -> User:
+        _check_role(role)
+        user = self.get(user_id)
+        user.role = role
+        return user
+
+    def set_password(self, user_id: int, password_hash: str) -> User:
+        user = self.get(user_id)
+        user.password_hash = password_hash
+        return user
+
+    def set_email(self, user_id: int, email: str | None) -> User:
+        user = self.get(user_id)
+        user.email = email
+        return user
+
+    def set_disabled(self, user_id: int, at: datetime | None) -> User:
+        """Disable the user from `at`, or enable them again with None."""
+        user = self.get(user_id)
+        user.disabled_at = at
+        return user
+
+    def record_login(self, user_id: int, at: datetime) -> None:
+        self.get(user_id).last_login_at = at
 
     def get(self, user_id: int) -> User:
         return _get(self.session, User, user_id)
 
     def by_username(self, username: str) -> User | None:
         return self.session.scalars(select(User).where(User.username == username)).one_or_none()
+
+
+def _check_role(role: str) -> None:
+    if role not in USER_ROLES:
+        raise RepositoryError(f"unknown role {role!r}")
+
+
+class AuditRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def add(
+        self,
+        user_id: int | None,
+        action: str,
+        target: str | None = None,
+        detail: Mapping[str, Any] | None = None,
+    ) -> AuditLog:
+        entry = AuditLog(user_id=user_id, action=action, target=target, detail=dict(detail or {}))
+        self.session.add(entry)
+        self.session.flush()
+        return entry
+
+    def recent(self, limit: int = 50) -> Sequence[AuditLog]:
+        stmt = select(AuditLog).order_by(AuditLog.id.desc()).limit(limit)
+        return self.session.scalars(stmt).all()
 
 
 class ServiceRepository:

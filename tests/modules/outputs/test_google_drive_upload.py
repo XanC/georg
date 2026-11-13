@@ -269,3 +269,15 @@ def test_registry_builds_output(monkeypatch: pytest.MonkeyPatch) -> None:
         options={"folder_id": ARCHIVE},
     )
     assert isinstance(build_output(config), GoogleDriveUploadOutput)
+
+
+def test_connection_check_reads_folder_capabilities(drive: FakeDrive) -> None:
+    drive.folder("Archive", id="check-archive")
+    drive.folder("Read only", id="check-readonly", can_add_children=False)
+    ok = make_output(drive, folder_id="check-archive").check()
+    assert ok.ok and "can add files" in ok.message
+    readonly = make_output(drive, folder_id="check-readonly").check()
+    assert not readonly.ok and "can't add files" in readonly.message
+    missing = make_output(drive, folder_id="nowhere").check()
+    assert not missing.ok and "not found" in missing.message
+    assert {r.method for r in drive.requests} == {"GET"}

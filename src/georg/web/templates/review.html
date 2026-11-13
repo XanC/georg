@@ -121,10 +121,14 @@
   </fieldset>
   <label for="f-transcript">Transcript (Markdown)</label>
   <textarea id="f-transcript" name="transcript" rows="20" class="transcript">{{ values.transcript }}</textarea>
+  {% if user.can_edit %}
   <div class="actions">
     <button type="submit">Save as new revision</button>
     <button type="button" id="revert-form" disabled>Revert</button>
   </div>
+  {% else %}
+  <p class="hint" id="read-only">You have the viewer role: you can look, but not save, approve or publish.</p>
+  {% endif %}
 </form>
 
 <section aria-labelledby="approve-h">
@@ -137,7 +141,7 @@
   {% include "_website_update.html" %}
 </section>
 
-{% if user.role == "admin" %}
+{% if user.is_admin %}
 <section aria-labelledby="reprocess-h">
   <h2 id="reprocess-h">Reprocess</h2>
   <p class="hint">
@@ -165,7 +169,7 @@
         <td class="nowrap">{{ r.service_start_ms|hms }} · {{ r.sermon_start_ms|hms }} · {{ r.sermon_end_ms|hms }} · {{ r.service_end_ms|hms }}</td>
         <td>{{ r.field_origins | dictsort | selectattr(1, "equalto", "user") | map(attribute=0) | join(", ") }}</td>
         <td>
-          {% if r.id != revision.id %}
+          {% if r.id != revision.id and user.can_edit %}
           <form method="post" action="/sermons/{{ sermon.id }}/revisions/{{ r.id }}/restore">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button type="submit" class="small">Restore</button>

@@ -43,10 +43,12 @@ from georg.pipeline.registry import build_output
 from georg.pipeline.service import pending_request
 from georg.storage.base import ArtifactNotFoundError
 from georg.storage.local import LocalStore
+from georg.web import admin
 from georg.web.auth import (
     SESSION_USER,
     CsrfError,
     CurrentUser,
+    Forbidden,
     LoginRequired,
     csrf_token,
     log_in,
@@ -191,6 +193,10 @@ def create_app(
             status_code=403,
         )
 
+    @app.exception_handler(Forbidden)
+    async def forbidden(request: Request, exc: Forbidden) -> Response:
+        return PlainTextResponse(str(exc) or "Not allowed.", status_code=403)
+
     @app.exception_handler(NotFoundError)
     async def not_found(request: Request, exc: NotFoundError) -> Response:
         return PlainTextResponse(str(exc), status_code=404)
@@ -208,10 +214,19 @@ def create_app(
         except NotFoundError:
             request.session.clear()
             raise LoginRequired from None
-        return CurrentUser(user.id, user.username, user.role)
+        if user.disabled_at is not None:
+            request.session.clear()
+            raise LoginRequired
+        return CurrentUser(user.id, user.username, user.role, user.email)
+
+    def editor_user(user: Annotated[CurrentUser, Depends(current_user)]) -> CurrentUser:
+        if not user.can_edit:
+            raise Forbidden("Viewers can look but not change anything.")
+        return user
 
     DB = Annotated[Session, Depends(db)]
     User = Annotated[CurrentUser, Depends(current_user)]
+    Editor = Annotated[CurrentUser, Depends(editor_user)]
 
     def render(
         request: Request,
@@ -274,7 +289,13 @@ def create_app(
         if not verify_password(user.password_hash if user else None, password) or user is None:
             context = {"next": safe_next(next), "error": "Wrong username or password."}
             return render(request, "login.html", context, status_code=401)
-        log_in(request, user.id)
+        if user.disabled_at is not None:
+            context = {"next": safe_next(next), "error": "This account is disabled."}
+            return render(request, "login.html", context, status_code=403)
+        user_id = user.id
+        with sessions.begin() as writer:
+            UserRepository(writer).record_login(user_id, utcnow())
+        log_in(request, user_id)
         return _redirect(safe_next(next))
 
     @app.post("/logout")
@@ -540,14 +561,15 @@ def create_app(
     @app.get("/sermons/{sermon_id}/render-status", response_class=HTMLResponse)
     def render_status(request: Request, sermon_id: int, user: User, session: DB) -> HTMLResponse:
         context = {**review_context(session, sermon_id), "polled": True}
-        return render(request, "_render_status.html", context)
+        return render(request, "_render_status.html", context, user=user)
 
     @app.get("/sermons/{sermon_id}/publish-status", response_class=HTMLResponse)
     def publish_status(request: Request, sermon_id: int, user: User, session: DB) -> HTMLResponse:
-        return render(request, "_publish_status.html", review_context(session, sermon_id))
+        context = review_context(session, sermon_id)
+        return render(request, "_publish_status.html", context, user=user)
 
     @app.post("/sermons/{sermon_id}/revisions", response_class=HTMLResponse)
-    async def save(request: Request, sermon_id: int, user: User) -> Response:
+    async def save(request: Request, sermon_id: int, user: Editor) -> Response:
         form = {k: v for k, v in (await request.form()).items() if isinstance(v, str)}
         return await run_in_threadpool(lambda: _save(request, sermon_id, user, form))
 
@@ -596,7 +618,7 @@ def create_app(
         return _redirect(f"/sermons/{sermon_id}")
 
     @app.post("/sermons/{sermon_id}/revisions/{revision_id}/restore")
-    def restore(request: Request, sermon_id: int, revision_id: int, user: User) -> Response:
+    def restore(request: Request, sermon_id: int, revision_id: int, user: Editor) -> Response:
         with sessions.begin() as session:
             sermons = SermonRepository(session)
             old = sermons.revision(revision_id)
@@ -617,7 +639,7 @@ def create_app(
     def approve(
         request: Request,
         sermon_id: int,
-        user: User,
+        user: Editor,
         revision_id: Annotated[int, Form()],
         note: Annotated[str, Form()] = "",
     ) -> Response:
@@ -638,7 +660,7 @@ def create_app(
         return _redirect(f"/sermons/{sermon_id}")
 
     @app.post("/sermons/{sermon_id}/reprocess")
-    def reprocess(request: Request, sermon_id: int, user: User, session: DB) -> Response:
+    def reprocess(request: Request, sermon_id: int, user: Editor, session: DB) -> Response:
         if user.role != "admin":
             return PlainTextResponse("Reprocessing needs an admin.", status_code=403)
         sermon = SermonRepository(session).get(sermon_id)
@@ -653,7 +675,7 @@ def create_app(
     def publish(
         request: Request,
         sermon_id: int,
-        user: User,
+        user: Editor,
         session: DB,
         website: Annotated[str, Form()] = "",
         decision: Annotated[str, Form()] = "",
@@ -713,10 +735,10 @@ def create_app(
 
     @app.get("/jobs/table", response_class=HTMLResponse)
     def jobs_table(request: Request, user: User) -> HTMLResponse:
-        return render(request, "_jobs_table.html", jobs_context())
+        return render(request, "_jobs_table.html", jobs_context(), user=user)
 
     @app.post("/jobs/discover")
-    def check_recordings(request: Request, user: User) -> Response:
+    def check_recordings(request: Request, user: Editor) -> Response:
         if active_jobs(DISCOVER):
             _flash(request, "A check for new recordings is already queued.")
         else:
@@ -724,6 +746,11 @@ def create_app(
             _flash(request, "Checking for new recordings; new services appear when found.")
         return _redirect("/jobs")
 
+    admin.register(
+        app,
+        admin.AdminDeps(config, sessions, readers, queue, render, _redirect, _flash),
+        current_user,
+    )
     return app
 
 

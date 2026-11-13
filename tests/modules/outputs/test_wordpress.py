@@ -794,3 +794,26 @@ def test_site_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert out.field_label("terms:ctc_sermon_book") == "scripture"
     assert out.field_label("content") == "transcript"
     assert out.field_label("terms:ctc_sermon_topic") == "topic"
+
+
+def test_check_makes_a_signed_read_only_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(404, json={"code": "georg_not_found"})
+
+    out, _ = make_output(handler, monkeypatch)
+    result = out.check()
+    assert result.ok and "accepted a signed read-only request" in result.message
+    (request,) = seen
+    assert request.method == "GET"
+    assert request.url.path == "/wp-json/georg/v1/sermons/georg-connection-check"
+    assert "X-Georg-Signature" in request.headers
+
+
+def test_check_reports_a_rejected_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+    out, _ = make_output(lambda request: httpx.Response(401, json={"code": "bad"}), monkeypatch)
+    result = out.check()
+    assert not result.ok and "georg-bridge failed" in result.message
+    assert SECRET_TEXT not in result.message

@@ -23,10 +23,12 @@ from typing import Any, Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from georg.core.checks import CheckResult
 from georg.core.config import OutputConfig, resolve_secret
 from georg.core.errors import ConfigError, ModuleError
 from georg.core.types import ArtifactRef, ExternalRef, PublicationRequest
 from georg.gdrive import (
+    FOLDER_MIME,
     SCOPE_DRIVE,
     DriveClient,
     GoogleTokens,
@@ -151,9 +153,31 @@ class GoogleDriveUploadOutput:
         tokens = credentials or GoogleTokens(
             opts.credentials_file, [SCOPE_DRIVE], subject=opts.subject, http_client=client
         )
+        self._tokens = tokens
         self._drive = DriveClient(tokens, client, attempts=opts.attempts, sleep=sleep)
         self._store = DriveFolderStore(self._drive)
         self._layout = opts.layout()
+
+    def check(self) -> CheckResult:
+        """Refresh the token and read the archive folder's metadata; uploads nothing."""
+        try:
+            self._tokens.token(force_refresh=True)
+        except (ModuleError, ConfigError, httpx.HTTPError, OSError, ValueError) as exc:
+            return CheckResult(False, f"Token refresh failed: {exc}")
+        try:
+            folder = self._drive.get_file(self.folder_id, "id,mimeType,capabilities")
+        except (ModuleError, httpx.HTTPError) as exc:
+            return CheckResult(False, f"Token refreshed, but reading the folder failed: {exc}")
+        if folder is None or folder.get("mimeType") != FOLDER_MIME:
+            return CheckResult(
+                False,
+                "Token refreshed, but the folder was not found, is not a folder, "
+                "or is not shared with this account.",
+            )
+        capabilities = folder.get("capabilities") or {}
+        if not capabilities.get("canAddChildren"):
+            return CheckResult(False, "Folder reachable, but this account can't add files to it.")
+        return CheckResult(True, "Folder reachable; this account can add files to it.")
 
     def filename(self, service_date: date) -> str:
         return self.options.filename.format(**template_values(service_date))

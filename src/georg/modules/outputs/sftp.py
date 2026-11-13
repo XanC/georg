@@ -6,6 +6,7 @@ and it is then renamed over the final name, so readers never see a partial file.
 """
 
 import posixpath
+import stat
 import string
 import uuid
 from collections.abc import Callable, Iterator
@@ -17,6 +18,7 @@ from typing import Any, Protocol
 import paramiko
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from georg.core.checks import CheckResult
 from georg.core.config import OutputConfig, resolve_secret
 from georg.core.errors import ConfigError, ModuleError
 from georg.core.types import ArtifactRef, ExternalRef, PublicationRequest
@@ -145,6 +147,28 @@ class SftpOutput:
         self.name = config.name
         self.renditions = frozenset({self.options.rendition})
         self._connect = connector or paramiko_connector(self.options)
+
+    def remote_dir(self) -> str:
+        """The fixed directory part of `remote_path`, before any {date} field."""
+        head = self.options.remote_path.split("{", 1)[0]
+        if head.endswith("/"):
+            return head.rstrip("/") or "/"
+        return posixpath.dirname(head) or "."
+
+    def check(self) -> CheckResult:
+        """Connect with the configured key and known_hosts, then stat the remote directory."""
+        directory = self.remote_dir()
+        try:
+            with self._connect() as sftp:
+                attrs = sftp.stat(directory)
+        except FileNotFoundError:
+            return CheckResult(False, f"Connected, but {directory} does not exist.")
+        except (OSError, paramiko.SSHException, ConfigError) as exc:
+            return CheckResult(False, str(_module_error(exc, "connect")))
+        mode = getattr(attrs, "st_mode", None)
+        if mode is not None and not stat.S_ISDIR(mode):
+            return CheckResult(False, f"Connected, but {directory} is not a directory.")
+        return CheckResult(True, f"Connected; {directory} exists. Nothing was written.")
 
     def remote_path(self, service_date: date) -> str:
         return self.options.remote_path.format(date=service_date.isoformat())

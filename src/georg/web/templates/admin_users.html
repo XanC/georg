@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Users{% endblock %}
+{% block content %}
+<h1>Users</h1>
+<p><a href="/admin">Admin</a></p>
+{% if error %}<p class="flash error" role="alert">{{ error }}</p>{% endif %}
+{% if shown %}
+<div class="flash warning" role="status" id="shown-password">
+  <p>Temporary password for <strong>{{ shown.username }}</strong>: <code>{{ shown.password }}</code></p>
+  <p>It is shown only this once. Hand it over and ask them to change it on their Account page.</p>
+</div>
+{% endif %}
+
+<div class="scroll">
+<table>
+  <thead><tr><th scope="col">User</th><th scope="col">Role</th><th scope="col">Email</th><th scope="col">Created</th><th scope="col">Last login</th><th scope="col">State</th><th scope="col">Password</th></tr></thead>
+  <tbody>
+  {% for u in users %}
+    <tr data-user="{{ u.username }}">
+      <td>{{ u.username }}{% if u.id == user.id %} (you){% endif %}</td>
+      <td>
+        <form method="post" action="/admin/users/{{ u.id }}/role" class="row">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <select name="role" aria-label="Role of {{ u.username }}">
+            {% for r in roles %}<option value="{{ r }}"{% if r == u.role %} selected{% endif %}>{{ r }}</option>{% endfor %}
+          </select>
+          <button type="submit" class="small">Set</button>
+        </form>
+      </td>
+      <td>
+        <form method="post" action="/admin/users/{{ u.id }}/email" class="row">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input name="email" type="email" value="{{ u.email or '' }}" aria-label="Email of {{ u.username }}">
+          <button type="submit" class="small">Save</button>
+        </form>
+      </td>
+      <td class="nowrap">{{ u.created_at.strftime("%Y-%m-%d") }}</td>
+      <td class="nowrap">{{ u.last_login_at.strftime("%Y-%m-%d %H:%M") ~ " UTC" if u.last_login_at else "never" }}</td>
+      <td>
+        <form method="post" action="/admin/users/{{ u.id }}/{{ 'enable' if u.disabled_at else 'disable' }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <span class="badge {{ 'failed' if u.disabled_at else 'succeeded' }}">{{ "disabled" if u.disabled_at else "active" }}</span>
+          <button type="submit" class="small">{{ "Enable" if u.disabled_at else "Disable" }}</button>
+        </form>
+      </td>
+      <td>
+        <form method="post" action="/admin/users/{{ u.id }}/password" class="row">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input name="password" type="password" autocomplete="new-password" placeholder="empty: generate" aria-label="New password for {{ u.username }}">
+          <button type="submit" class="small">Reset</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<section aria-labelledby="add-h">
+  <h2 id="add-h">Add a user</h2>
+  <form method="post" action="/admin/users" class="stack narrow">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Username <input name="username" required autocomplete="off"></label>
+    <label>Role
+      <select name="role">{% for r in roles %}<option value="{{ r }}"{% if r == "reviewer" %} selected{% endif %}>{{ r }}</option>{% endfor %}</select>
+    </label>
+    <label>Email (optional) <input name="email" type="email"></label>
+    <label>Password <input name="password" type="password" autocomplete="new-password"></label>
+    <p class="hint">Leave the password empty to generate a temporary one, shown once.
+      Viewers can see everything but can't save, approve, publish, reprocess or run jobs.</p>
+    <button type="submit">Add user</button>
+  </form>
+</section>
+{% endblock %}
