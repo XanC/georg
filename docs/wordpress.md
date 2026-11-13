@@ -186,6 +186,6 @@ date: …"). Publishing is not blocked. If the site can't be reached, the page s
 with a note that the check couldn't be done.
 
 The same warning appears on a service page before a sermon is proposed, and the Services
-list shows an "Already on website" badge linking to the existing post. The list makes one
+list shows a "Published outside Georg" badge linking to the existing post. The list makes one
 paginated request for the date range of all listed services. Lookups, including failures,
 are cached in the web process for 60 s. If the lookup fails, the list shows no badges.

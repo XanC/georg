@@ -748,7 +748,7 @@ def test_review_warns_about_another_sermon_on_the_date(
     monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: _FakeSite(posts))
     _login(env)
     html = env.client.get(f"/sermons/{env.sermon_id}").text
-    assert "The website already has a sermon for this date" in html
+    assert "Published outside Georg for this date" in html
     assert '<a href="https://church.example/old/">Old &amp;lt;sermon&amp;gt;</a>' in html
 
 
@@ -762,7 +762,7 @@ def test_review_ignores_its_own_publication(env: Env, monkeypatch: pytest.Monkey
     monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: _FakeSite(posts))
     _login(env)
     html = env.client.get(f"/sermons/{env.sermon_id}").text
-    assert "already has a sermon" not in html
+    assert "Published outside Georg" not in html
 
 
 @pytest.mark.parametrize("env", [WORDPRESS], indirect=True)
@@ -784,7 +784,7 @@ def test_review_without_wordpress_output_does_no_lookup(
 
     monkeypatch.setattr("georg.web.app.build_output", fail)
     _login(env)
-    assert "already has a sermon" not in env.client.get(f"/sermons/{env.sermon_id}").text
+    assert "Published outside Georg" not in env.client.get(f"/sermons/{env.sermon_id}").text
 
 
 def _add_service(env: Env, day: date, ref: str) -> int:
@@ -811,7 +811,7 @@ def test_services_list_marks_dates_the_website_already_has(
     html = env.client.get("/").text
     marker = f'href="https://church.example/old/" data-same-date="{env.service_id}"'
     assert f'<a class="badge warning" {marker}' in html
-    assert "The website already has a sermon for this date: Old sermon" in html
+    assert "Published outside Georg for this date: Old sermon" in html
     assert f'data-same-date="{other}"' not in html
     assert site.calls == [(date(2026, 10, 25), date(2026, 11, 1))]
 
@@ -844,7 +844,7 @@ def test_service_page_warns_about_another_sermon_on_the_date(
     monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: _FakeSite(posts))
     _login(env)
     html = env.client.get(f"/services/{service_id}").text
-    assert "The website already has a sermon for this date:" in html
+    assert "Published outside Georg for this date:" in html
     assert '<a href="https://church.example/old/">Old sermon</a>' in html
 
 
