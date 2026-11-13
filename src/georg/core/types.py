@@ -241,7 +241,8 @@ class ExternalRef(Model):
     url: str | None = None
     written_at: datetime | None = None
     """When Georg last wrote it successfully, if known, so the target can tell whether it was
-    changed there since."""
+    changed there since. An output that publishes without writing returns the existing ref,
+    keeping this time."""
 
 
 class PublicationRequest(Model):

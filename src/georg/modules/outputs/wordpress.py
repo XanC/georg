@@ -290,6 +290,8 @@ class WordPressOutput:
     def publish(self, request: PublicationRequest) -> ExternalRef:
         route = self._sermon_route(request.publication_key)
         fields = self.fields_to_send(request)
+        if fields == frozenset() and request.existing is not None:
+            return request.existing  # nothing changed: no call, and no new write time
         artifact = self._artifact(request)
         audio = self._upload(request, artifact) if fields is None or "audio" in fields else None
         body = self.sermon_body(request, audio_id=audio)
