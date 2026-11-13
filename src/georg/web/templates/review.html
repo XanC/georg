@@ -126,6 +126,14 @@
 
 <section aria-labelledby="approve-h">
   <h2 id="approve-h">Approval and publishing</h2>
+  {% if same_date and (same_date.posts or same_date.failed) %}
+  <div class="warning" id="same-date" role="status">
+    {% for post in same_date.posts %}
+    <p>The website already has a sermon for this date: <a href="{{ post.link }}">{{ post.title }}</a></p>
+    {% endfor %}
+    {% if same_date.failed %}<p>Couldn't check the website for another sermon on this date.</p>{% endif %}
+  </div>
+  {% endif %}
   {% include "_publish_status.html" %}
 </section>
 

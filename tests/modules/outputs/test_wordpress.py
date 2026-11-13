@@ -608,3 +608,30 @@ def test_registered_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 def test_pipeline_publication_keys_are_accepted() -> None:
     assert PUBLICATION_KEY_PATTERN.match("georg:stpaul:sermon-123:website")
     assert PUBLICATION_KEY_PATTERN.match("georg:test-2:sermon-1:my_site.v2")
+
+
+def test_sermons_on_reads_core_rest(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        rows = [
+            {"id": 8216, "link": "https://church.example/s/", "title": {"rendered": "A &amp; B"}}
+        ]
+        return httpx.Response(200, json=rows)
+
+    out, _ = make_output(handler, monkeypatch)
+    assert out.sermons_on(date(2026, 9, 6)) == [
+        {"id": "8216", "title": "A & B", "link": "https://church.example/s/"}
+    ]
+    (request,) = seen
+    assert request.url.path == "/wp-json/wp/v2/ctc_sermon"
+    assert request.url.params["after"] == "2026-09-05T23:59:59"
+    assert request.url.params["before"] == "2026-09-07T00:00:00"
+    assert "X-Georg-Signature" not in request.headers
+
+
+def test_sermons_on_failure_is_a_module_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    out, _ = make_output(lambda request: httpx.Response(503), monkeypatch)
+    with pytest.raises(ModuleError, match="lookup by date failed"):
+        out.sermons_on(date(2026, 9, 6))

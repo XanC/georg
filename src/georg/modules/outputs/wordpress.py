@@ -15,7 +15,7 @@ import re
 import string
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -187,6 +187,38 @@ class WordPressOutput:
     def find_existing(self, publication_key: str) -> ExternalRef | None:
         data = self._call("GET", self._sermon_route(publication_key), none_on=frozenset({404}))
         return None if data is None else self._ref(data)
+
+    def sermons_on(self, day: date) -> list[dict[str, Any]]:
+        """Published ctc_sermon posts dated `day` (site time): id, title and link.
+
+        Reads the core REST API, which lists published sermons without authentication,
+        so posts from before Georg (with no publication key) are found too.
+        """
+        start = datetime.combine(day, datetime.min.time())
+        try:
+            response = self._client.get(
+                self._rest + "/wp/v2/ctc_sermon",
+                params={
+                    "after": (start - timedelta(seconds=1)).isoformat(),
+                    "before": (start + timedelta(days=1)).isoformat(),
+                    "_fields": "id,link,title",
+                    "per_page": 20,
+                },
+                headers={"Accept": "application/json"},
+                timeout=min(self.options.timeout_s, 5.0),
+            )
+            response.raise_for_status()
+            rows = response.json()
+            return [
+                {
+                    "id": str(int(row["id"])),
+                    "title": html.unescape(str(row["title"]["rendered"])),
+                    "link": str(row["link"]),
+                }
+                for row in rows
+            ]
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            raise ModuleError(f"{self.name}: sermon lookup by date failed: {exc}") from exc
 
     def publish(self, request: PublicationRequest) -> ExternalRef:
         route = self._sermon_route(request.publication_key)
