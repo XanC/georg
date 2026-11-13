@@ -4,7 +4,7 @@ Tags: sermons, church, rest-api
 Requires at least: 5.6
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.4.0
+Stable tag: 0.4.1
 License: AGPL-3.0-only
 License URI: https://www.gnu.org/licenses/agpl-3.0.html
 
@@ -69,6 +69,15 @@ than five minutes are refused). PHP's `upload_max_filesize` and `post_max_size` 
 exceed the largest sermon MP3.
 
 == Changelog ==
+
+= 0.4.1 =
+* Sermons written before 0.4.0 count as edited (every field) when `_edit_last` is a user
+  other than the bridge user and the post was modified more than 10 seconds after
+  `georg_written_at`, a new optional RFC 3339 parameter on the sermon PUT and `/status`
+  (without it, a non-bridge `_edit_last` is enough). Revisions are no longer used for
+  this: a save in the editor need not leave one.
+* Every sermon write sets `_edit_last` to the bridge user.
+* `modified_by` prefers `_edit_last` when it isn't the bridge user.
 
 = 0.4.0 =
 * After every sermon write, store `_georg_written`: a sha256 per field (title, content,

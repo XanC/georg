@@ -588,6 +588,7 @@ class PublicationRepository:
         publication = self.get(publication_id)
         publication.status = "published"
         publication.published_revision_id = publication.revision_id
+        publication.published_at = utcnow()
         publication.external_id = ref.external_id
         publication.external_url = ref.url
         publication.last_error = None
@@ -631,4 +632,5 @@ class PublicationRepository:
             target=publication.target_name,
             external_id=publication.external_id,
             url=publication.external_url,
+            written_at=publication.published_at,
         )

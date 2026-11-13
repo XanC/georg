@@ -4,7 +4,7 @@
  * Plugin Name:       Georg Bridge
  * Plugin URI:        https://github.com/XanC/georg
  * Description:       REST endpoints that let Georg upload sermon audio and create or update Church Content sermons.
- * Version:           0.4.0
+ * Version:           0.4.1
  * Requires at least: 5.6
  * Requires PHP:      7.4
  * License:           AGPL-3.0-only
@@ -21,7 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 require_once __DIR__ . '/includes/signing.php';
 require_once __DIR__ . '/includes/sermon.php';
 
-define( 'GEORG_BRIDGE_VERSION', '0.4.0' );
+define( 'GEORG_BRIDGE_VERSION', '0.4.1' );
 define( 'GEORG_BRIDGE_NAMESPACE', 'georg/v1' );
 define( 'GEORG_BRIDGE_WRITTEN_META', '_georg_written' );
 define( 'GEORG_BRIDGE_KEY_META', '_georg_publication_key' );
@@ -50,6 +50,12 @@ function georg_bridge_register_routes() {
 			'type'              => 'string',
 			'required'          => true,
 			'validate_callback' => 'georg_bridge_valid_key',
+		),
+	);
+	$written_at_arg = array(
+		'georg_written_at' => array(
+			'type'     => 'string',
+			'required' => false,
 		),
 	);
 
@@ -85,7 +91,7 @@ function georg_bridge_register_routes() {
 			'methods'             => 'GET',
 			'callback'            => 'georg_bridge_sermon_status',
 			'permission_callback' => 'georg_bridge_permission_sermons',
-			'args'                => $key_arg,
+			'args'                => array_merge( $key_arg, $written_at_arg ),
 		)
 	);
 
@@ -152,7 +158,8 @@ function georg_bridge_register_routes() {
 							'items'    => array( 'type' => 'string' ),
 							'required' => false,
 						),
-					)
+					),
+					$written_at_arg
 				),
 			),
 		)
@@ -774,6 +781,10 @@ function georg_bridge_put_sermon( $request ) {
 	if ( false === $fields || false === $overwrite ) {
 		return new WP_Error( 'georg_bad_fields', __( 'fields and overwrite must list known sermon fields.', 'georg-bridge' ), array( 'status' => 400 ) );
 	}
+	$georg_written_at = georg_bridge_parse_time( $request['georg_written_at'] );
+	if ( false === $georg_written_at ) {
+		return georg_bridge_bad_written_at();
+	}
 	$terms = $request['terms'] ? (array) $request['terms'] : array();
 	if ( null === $fields ) {
 		$fields = array_merge( array( 'title', 'content', 'date', 'audio', 'full_text' ), georg_bridge_term_fields( array_keys( $terms ) ) );
@@ -812,7 +823,7 @@ function georg_bridge_put_sermon( $request ) {
 		$previous = array();
 		$legacy   = false;
 		if ( $existing ) {
-			$edits     = georg_bridge_site_edits( $existing );
+			$edits     = georg_bridge_site_edits( $existing, $georg_written_at );
 			$conflicts = georg_bridge_conflicts( $fields, $edits['fields'], $overwrite ? $overwrite : array() );
 			if ( $conflicts ) {
 				return new WP_Error(
@@ -962,11 +973,13 @@ function georg_bridge_current_fingerprints( $post, $taxonomies ) {
 /**
  * Which fields were edited on the site since Georg last wrote the sermon.
  *
- * @param WP_Post $post The sermon.
+ * @param WP_Post  $post             The sermon.
+ * @param int|null $georg_written_at When Georg last wrote it (Unix time, from Georg's
+ *                                   records), for posts without `_georg_written`.
  * @return array 'fields' => edited field names, 'written' => stored fingerprints,
  *               'legacy' => whether the post predates `_georg_written`, 'written_at'.
  */
-function georg_bridge_site_edits( $post ) {
+function georg_bridge_site_edits( $post, $georg_written_at = null ) {
 	$meta = get_post_meta( $post->ID, GEORG_BRIDGE_WRITTEN_META, true );
 	if ( is_array( $meta ) && isset( $meta['fields'] ) && is_array( $meta['fields'] ) ) {
 		$taxonomies = array();
@@ -982,18 +995,10 @@ function georg_bridge_site_edits( $post ) {
 			'written_at' => isset( $meta['written_at'] ) ? $meta['written_at'] : null,
 		);
 	}
-	// Written before 0.4.0: revisions only say who saved, not what changed.
-	$revisions = array();
-	foreach ( wp_get_post_revisions( $post->ID ) as $revision ) {
-		if ( ! wp_is_post_autosave( $revision ) ) {
-			$revisions[] = array(
-				'id'     => $revision->ID,
-				'author' => (int) $revision->post_author,
-			);
-		}
-	}
+	// Written before 0.4.0: no fingerprints, and editor saves need not leave a revision.
+	// The editor's `_edit_last` and the modified time against Georg's last write decide.
 	$fields = array();
-	if ( georg_bridge_edited_after_georg( $revisions, get_current_user_id() ) ) {
+	if ( georg_bridge_legacy_edited( (int) get_post_meta( $post->ID, '_edit_last', true ), get_current_user_id(), $post->post_modified_gmt, $georg_written_at ) ) {
 		$fields = array_merge( array( 'content', 'date', 'title' ), georg_bridge_term_fields( get_object_taxonomies( GEORG_BRIDGE_POST_TYPE ) ) );
 		sort( $fields );
 	}
@@ -1006,21 +1011,35 @@ function georg_bridge_site_edits( $post ) {
 }
 
 /**
- * When the sermon was last saved and by whom (the latest revision's author).
+ * The 400 for an unparsable `georg_written_at`.
+ *
+ * @return WP_Error
+ */
+function georg_bridge_bad_written_at() {
+	return new WP_Error( 'georg_bad_written_at', __( 'georg_written_at must be an RFC 3339 time.', 'georg-bridge' ), array( 'status' => 400 ) );
+}
+
+/**
+ * When the sermon was last saved and by whom: the editor's `_edit_last` unless that is
+ * the bridge user, else the latest revision's author.
  *
  * @param WP_Post $post The sermon.
  * @return array 'modified_gmt' (RFC 3339) and 'modified_by' (display name or null).
  */
 function georg_bridge_modified_info( $post ) {
-	$author = null;
-	foreach ( wp_get_post_revisions( $post->ID ) as $revision ) {
+	$author    = null;
+	$edit_last = (int) get_post_meta( $post->ID, '_edit_last', true );
+	if ( $edit_last && get_current_user_id() !== $edit_last ) {
+		$author = $edit_last;
+	}
+	foreach ( null === $author ? wp_get_post_revisions( $post->ID ) : array() as $revision ) {
 		if ( ! wp_is_post_autosave( $revision ) ) {
 			$author = (int) $revision->post_author;
 			break;
 		}
 	}
 	if ( null === $author ) {
-		$author = (int) get_post_meta( $post->ID, '_edit_last', true );
+		$author = $edit_last;
 	}
 	$user = $author ? get_userdata( $author ) : false;
 	return array(
@@ -1045,6 +1064,7 @@ function georg_bridge_record_write( $post, $previous, $written, $legacy_edited )
 		}
 	}
 	$current = georg_bridge_current_fingerprints( $post, array_unique( $taxonomies ) );
+	update_post_meta( $post->ID, '_edit_last', get_current_user_id() );
 	update_post_meta(
 		$post->ID,
 		GEORG_BRIDGE_WRITTEN_META,
@@ -1078,7 +1098,11 @@ function georg_bridge_sermon_status( $request ) {
 			)
 		);
 	}
-	$edits = georg_bridge_site_edits( $post );
+	$georg_written_at = georg_bridge_parse_time( $request['georg_written_at'] );
+	if ( false === $georg_written_at ) {
+		return georg_bridge_bad_written_at();
+	}
+	$edits = georg_bridge_site_edits( $post, $georg_written_at );
 	return rest_ensure_response(
 		array_merge(
 			array(

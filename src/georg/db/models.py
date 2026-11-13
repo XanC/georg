@@ -298,4 +298,6 @@ class Publication(Base):
     """Fields edited at the target that a "conflict" publication would overwrite."""
     conflict_by: Mapped[str | None]
     conflict_at: Mapped[datetime | None]
+    published_at: Mapped[datetime | None]
+    """When the target last accepted a write."""
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)

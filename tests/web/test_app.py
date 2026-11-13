@@ -944,7 +944,7 @@ class _FakeBridgeSite(_FakeSite):
         assert request.previous is not None
         return frozenset(self.sending)
 
-    def site_status(self, key: str) -> dict[str, Any]:
+    def site_status(self, key: str, written_at: datetime | None = None) -> dict[str, Any]:
         if self.edited is None:
             raise ModuleError("site unreachable")
         at = datetime(2026, 11, 13, 16, 55, tzinfo=UTC)

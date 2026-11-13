@@ -440,7 +440,7 @@ def create_app(
                 )
                 request = pending_request(config, session, sermon_id, site, store=store)
                 sending = site.fields_to_send(request) if request else frozenset()
-                status = site.site_status(pub.publication_key)
+                status = site.site_status(pub.publication_key, pub.published_at)
                 labels = {f: site.field_label(f) for f in {*(sending or ()), *edited}}
                 if status is not None:
                     edited = set(status["edited"])

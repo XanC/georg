@@ -137,10 +137,17 @@ georg-bridge 0.4.0 keeps edits made in WordPress from being overwritten by a rep
   `full_text`, to write; all when absent) and `overwrite`. If a requested field's current
   fingerprint differs from `_georg_written` and the field isn't in `overwrite`, the bridge
   writes nothing and returns 409 `georg_edited_on_site` with `fields`, `modified_gmt` and
-  `modified_by` (display name of the latest revision's author).
+  `modified_by` (display name of `_edit_last` if that isn't the bridge user, else of the
+  latest revision's author).
+- Every sermon write sets `_edit_last` to the bridge user, so WordPress's own "last
+  edited by" stays meaningful.
 - Sermons written before 0.4.0 have no `_georg_written`. They count as edited in every
-  field if the latest revision was saved by a user other than the bridge user, since
-  revisions don't say which field changed.
+  field (nothing says which field changed) when `_edit_last` is a user other than the
+  bridge user and `post_modified_gmt` is more than 10 seconds after `georg_written_at`.
+  Georg sends `georg_written_at` (RFC 3339, from `publications.published_at`, the time
+  the website last accepted a write) on the `PUT` and on `/status`. Without it, a
+  non-bridge `_edit_last` alone counts as an edit. Revisions can't decide this: the
+  editor's save need not leave a revision (post 8228 had only an autosave).
 - Signed `GET /georg/v1/sermons/<key>/status` returns `id`, `link`, `status`, `edited`
   (fields edited on the website), `written_at`, `modified_gmt`, `modified_by` and the
   bridge `version`, without changing anything.
@@ -158,7 +165,8 @@ were edited on the website, "Content was edited on the website (date, by name)" 
 "Skip these fields" (send the rest) or "Overwrite on website" (needs a confirming tick).
 
 Install georg-bridge 0.4.0 before deploying a Georg that sends `fields`: an older bridge
-ignores `fields` and would write every field.
+ignores `fields` and would write every field. Georg also sends `georg_written_at`, which
+0.4.0 ignores; install 0.4.1 for the pre-0.4.0 rule above.
 
 ## Threat notes
 

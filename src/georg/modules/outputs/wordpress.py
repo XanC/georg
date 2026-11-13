@@ -299,6 +299,8 @@ class WordPressOutput:
             overwrite &= fields
         if overwrite:
             body["overwrite"] = sorted(overwrite)
+        if request.existing is not None:
+            body |= _written_at(request.existing.written_at)
         data = self._call(
             "PUT",
             route,
@@ -331,12 +333,18 @@ class WordPressOutput:
         values["audio"] = artifact.sha256 if artifact else None
         return values
 
-    def site_status(self, publication_key: str) -> dict[str, Any] | None:
+    def site_status(
+        self, publication_key: str, written_at: datetime | None = None
+    ) -> dict[str, Any] | None:
         """The bridge's view of the published sermon: id, link, `edited` (fields changed on
         the website since Georg wrote them), `modified_at` and `modified_by`; None if the
-        website has no sermon with this key."""
+        website has no sermon with this key. `written_at` is when Georg last wrote it, which
+        the bridge needs for sermons written before georg-bridge 0.4.0."""
         data = self._call(
-            "GET", self._sermon_route(publication_key) + "/status", none_on=frozenset({404})
+            "GET",
+            self._sermon_route(publication_key) + "/status",
+            params=_written_at(written_at),
+            none_on=frozenset({404}),
         )
         if data is None:
             return None
@@ -364,7 +372,8 @@ class WordPressOutput:
     def _conflict(
         self, request: PublicationRequest, fields: frozenset[str] | None
     ) -> PublicationConflictError:
-        status = self.site_status(request.publication_key) or {}
+        written_at = request.existing.written_at if request.existing else None
+        status = self.site_status(request.publication_key, written_at) or {}
         edited = set(status.get("edited") or [])
         conflicting = edited if fields is None else edited & fields
         conflicting -= request.overwrite
@@ -493,3 +502,12 @@ class WordPressOutput:
             external_id=str(post_id),
             url=link if isinstance(link, str) else None,
         )
+
+
+def _written_at(at: datetime | None) -> dict[str, str]:
+    """The bridge's `georg_written_at` parameter, if Georg knows when it last wrote."""
+    if at is None:
+        return {}
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=UTC)
+    return {"georg_written_at": at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}
