@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine
 
 from georg.core.config import GeorgConfig
-from georg.core.errors import ConfigError
+from georg.core.errors import ConfigError, ModuleError
 from georg.core.types import (
     ExternalRef,
     SermonMetadata,
@@ -720,3 +720,64 @@ def test_hidden_preacher_renders_nothing(env: Env) -> None:
         sermons = SermonRepository(s)
         revision = sermons.current_revision(env.sermon_id)
         assert revision is not None and sermons.metadata(revision).preacher == "Eric"
+
+
+WORDPRESS = {"outputs": [{"name": "website", "type": "wordpress", "options": {}}]}
+
+
+class _FakeSite:
+    def __init__(self, posts: list[dict[str, str]] | None) -> None:
+        self.posts = posts
+
+    def sermons_on(self, day: date) -> list[dict[str, str]]:
+        if self.posts is None:
+            raise ModuleError("site unreachable")
+        assert day == date(2026, 11, 1)
+        return self.posts
+
+
+@pytest.mark.parametrize("env", [WORDPRESS], indirect=True)
+def test_review_warns_about_another_sermon_on_the_date(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    posts = [{"id": "8216", "title": "Old &lt;sermon&gt;", "link": "https://church.example/old/"}]
+    monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: _FakeSite(posts))
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert "The website already has a sermon for this date" in html
+    assert '<a href="https://church.example/old/">Old &amp;lt;sermon&amp;gt;</a>' in html
+
+
+@pytest.mark.parametrize("env", [WORDPRESS], indirect=True)
+def test_review_ignores_its_own_publication(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    with session_factory(env.engine).begin() as s:
+        pubs = PublicationRepository(s)
+        pub = pubs.prepare(env.sermon_id, "website", env.revision_id, "georg:test:sermon-1:website")
+        pub.external_id = "8216"
+    posts = [{"id": "8216", "title": "Ours", "link": "https://church.example/ours/"}]
+    monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: _FakeSite(posts))
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert "already has a sermon" not in html
+
+
+@pytest.mark.parametrize("env", [WORDPRESS], indirect=True)
+def test_review_loads_when_the_site_is_unreachable(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: _FakeSite(None))
+    _login(env)
+    response = env.client.get(f"/sermons/{env.sermon_id}")
+    assert response.status_code == 200
+    assert "Couldn't check the website for another sermon on this date." in response.text
+
+
+def test_review_without_wordpress_output_does_no_lookup(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise AssertionError("no lookup expected")
+
+    monkeypatch.setattr("georg.web.app.build_output", fail)
+    _login(env)
+    assert "already has a sermon" not in env.client.get(f"/sermons/{env.sermon_id}").text

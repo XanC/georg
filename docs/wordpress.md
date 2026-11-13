@@ -140,3 +140,12 @@ exactly one sermon and one attachment.
   never in a repository, ticket or log. Georg's error messages never include it.
 - **Large bodies.** Audio is read into memory to hash it; WordPress's maximum upload size
   (the smaller of `upload_max_filesize` and `post_max_size`) caps it, with 413 above that.
+
+## Same-date warning on the review page
+
+When a `wordpress` output is configured, the sermon review page asks the site's core REST
+API (`/wp-json/wp/v2/ctc_sermon?after=…&before=…`, public and unsigned, so published posts
+only) for sermons dated on the service date. Any post that isn't this sermon's own
+publication is shown above the Publish button ("The website already has a sermon for this
+date: …"). Publishing is not blocked. If the site can't be reached, the page still loads
+with a note that the check couldn't be done.

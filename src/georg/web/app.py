@@ -37,6 +37,7 @@ from georg.db.repositories import (
 from georg.db.types import utcnow
 from georg.idle import EXEMPT_PATHS, ActivityMarker, idle_state
 from georg.jobs.queue import JobInfo, JobQueue
+from georg.pipeline.registry import build_output
 from georg.storage.base import ArtifactNotFoundError
 from georg.storage.local import LocalStore
 from georg.web.auth import (
@@ -384,7 +385,32 @@ def create_app(
 
     @app.get("/sermons/{sermon_id}", response_class=HTMLResponse)
     def review(request: Request, sermon_id: int, user: User, session: DB) -> HTMLResponse:
-        return render(request, "review.html", review_context(session, sermon_id), user=user)
+        context = review_context(session, sermon_id)
+        context["same_date"] = same_date_sermons(session, context)
+        return render(request, "review.html", context, user=user)
+
+    def same_date_sermons(session: Session, context: dict[str, Any]) -> dict[str, Any] | None:
+        """Posts the website already has on this sermon's date that aren't its own
+        publication; a failed lookup is reported, never raised."""
+        targets = [o for o in config.outputs if o.type == "wordpress"]
+        meta = SermonRepository(session).metadata(context["revision"])
+        day = meta.service_date or context["service"].service_date
+        if not targets or day is None:
+            return None
+        own = {
+            (p.target_name, p.external_id)
+            for p in PublicationRepository(session).for_sermon(context["sermon"].id)
+        }
+        posts: list[dict[str, Any]] = []
+        failed: list[str] = []
+        for target in targets:
+            try:
+                lookup = getattr(build_output(target, timezone=config.timezone), "sermons_on", None)
+                if callable(lookup):
+                    posts += [p for p in lookup(day) if (target.name, p["id"]) not in own]
+            except Exception:
+                failed.append(target.name)
+        return {"date": day, "posts": posts, "failed": failed}
 
     @app.get("/sermons/{sermon_id}/render-status", response_class=HTMLResponse)
     def render_status(request: Request, sermon_id: int, user: User, session: DB) -> HTMLResponse:
