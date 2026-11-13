@@ -4,7 +4,7 @@ import os
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -924,3 +924,125 @@ def test_unsaved_edits_disable_approve_in_a_browser(env: Env) -> None:
         assert page.locator("input[name=service_date]").input_value() == service_date
         assert approve.is_enabled() and note.is_hidden()
         browser.close()
+
+
+SITE_AND_PHONE = {
+    "outputs": [
+        {"name": "website", "type": "wordpress", "options": {}},
+        {"name": "phone", "type": "unused"},
+    ]
+}
+
+
+class _FakeBridgeSite(_FakeSite):
+    def __init__(self, sending: set[str], edited: list[str] | None) -> None:
+        super().__init__([])
+        self.sending, self.edited = sending, edited
+        self.name, self.renditions, self.wants_transcript = "website", frozenset(), True
+
+    def fields_to_send(self, request: Any) -> frozenset[str]:
+        assert request.previous is not None
+        return frozenset(self.sending)
+
+    def site_status(self, key: str) -> dict[str, Any]:
+        if self.edited is None:
+            raise ModuleError("site unreachable")
+        at = datetime(2026, 11, 13, 16, 55, tzinfo=UTC)
+        return {"edited": self.edited, "modified_by": "Owner", "modified_at": at}
+
+    def field_label(self, field: str) -> str:
+        return {"terms:ctc_sermon_book": "scripture"}.get(field, field)
+
+
+def _published_website(env: Env, *, conflict: list[str] | None = None) -> None:
+    _publication(env, "website")
+    if conflict:
+        with session_factory(env.engine).begin() as s:
+            pubs = PublicationRepository(s)
+            pub = pubs.find(env.sermon_id, "website")
+            assert pub is not None
+            pubs.mark_conflict(pub.id, "edited", fields=conflict, by="Owner", at=None)
+
+
+@pytest.mark.parametrize("env", [SITE_AND_PHONE], indirect=True)
+def test_published_sermon_approves_without_updating_the_website(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    site = _FakeBridgeSite({"title"}, [])
+    monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: site)
+    _published_website(env)
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert ">Approve</button>" in html and "and publish</button>" not in html
+    assert "<summary>Update website…</summary>" in html
+    assert "Would send: title." in html and "Approve revision 1 first." in html
+    token = _csrf(env.client, f"/sermons/{env.sermon_id}")
+    env.client.post(
+        f"/sermons/{env.sermon_id}/approve",
+        data={"csrf_token": token, "revision_id": str(env.revision_id)},
+    )
+    assert _jobs(env, "publish") == [{"sermon_id": env.sermon_id, "targets": ["phone"]}]
+
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert ">Update website</button>" in html and "Skip these fields" not in html
+    env.client.post(
+        f"/sermons/{env.sermon_id}/publish", data={"csrf_token": token, "website": "website"}
+    )
+    assert _jobs(env, "publish")[-1] == {"sermon_id": env.sermon_id, "targets": ["website"]}
+
+
+@pytest.mark.parametrize("env", [SITE_AND_PHONE], indirect=True)
+def test_conflict_shows_who_edited_and_offers_skip_or_overwrite(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    site = _FakeBridgeSite({"title", "terms:ctc_sermon_book"}, ["terms:ctc_sermon_book"])
+    monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: site)
+    _approve(env)
+    _published_website(env, conflict=["terms:ctc_sermon_book"])
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert 'data-output="website">Website edited: needs decision<' in html
+    assert re.search(r"Content was edited on the website \(Nov 13, 2026 [^,]+, by Owner\)", html)
+    assert "by Owner): scripture." in html
+    assert "Would send: scripture, title." in html
+    assert ">Skip these fields</button>" in html and ">Overwrite on website</button>" in html
+    assert 'name="confirm" value="yes" required' in html
+
+    token = _csrf(env.client, f"/sermons/{env.sermon_id}")
+    form = {"csrf_token": token, "website": "website", "fields": "terms:ctc_sermon_book"}
+    env.client.post(f"/sermons/{env.sermon_id}/publish", data={**form, "decision": "skip"})
+    assert _jobs(env, "publish")[-1] == {
+        "sermon_id": env.sermon_id,
+        "targets": ["website"],
+        "skip": ["terms:ctc_sermon_book"],
+    }
+    response = env.client.post(
+        f"/sermons/{env.sermon_id}/publish", data={**form, "decision": "overwrite"}
+    )
+    assert "Confirm that the website&#39;s edits may be overwritten." in response.text
+    assert len(_jobs(env, "publish")) == 1
+    env.client.post(
+        f"/sermons/{env.sermon_id}/publish",
+        data={**form, "decision": "overwrite", "confirm": "yes"},
+    )
+    assert _jobs(env, "publish")[-1] == {
+        "sermon_id": env.sermon_id,
+        "targets": ["website"],
+        "overwrite": ["terms:ctc_sermon_book"],
+    }
+
+
+@pytest.mark.parametrize("env", [SITE_AND_PHONE], indirect=True)
+def test_recorded_conflict_shows_when_the_website_is_unreachable(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    site = _FakeBridgeSite(set(), None)
+    monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: site)
+    _approve(env)
+    _published_website(env, conflict=["title"])
+    _login(env)
+    response = env.client.get(f"/sermons/{env.sermon_id}")
+    assert response.status_code == 200
+    assert "Couldn't check the website for edits." in response.text
+    assert "Content was edited on the website (by Owner): title." in response.text
+    assert ">Skip these fields</button>" in response.text

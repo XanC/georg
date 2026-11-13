@@ -2,7 +2,7 @@
 import dataclasses
 import os
 import time
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from test_local_run import PROPOSED, processors, tone
 
 from georg.core.config import GeorgConfig, OutputConfig
-from georg.core.errors import ModuleError
+from georg.core.errors import ModuleError, PublicationConflictError
 from georg.core.types import ExternalRef, PublicationRequest
 from georg.db.engine import session_factory
 from georg.db.models import Artifact
@@ -417,6 +417,58 @@ def test_publish_requires_approval_then_publishes_once(config: GeorgConfig, engi
         pubs = {p.target_name: p for p in PublicationRepository(s).for_sermon(sermon_id)}
         assert pubs["website"].status == "published"
         assert pubs["website"].external_id == "id-2"
+
+
+def test_publish_sends_previous_and_parks_conflicts(config: GeorgConfig, engine: Engine) -> None:
+    sessions = session_factory(engine)
+    sermon_id, first = processed(config, engine)
+    with sessions.begin() as s:
+        user = UserRepository(s).add("rev", "x", "admin")
+        SermonRepository(s).approve(first, approved_by=user.id)
+    phone = FakeOutput("phone", {"service_phone"})
+    website = FakeOutput("website", {"sermon"})
+    publish_sermon(config, sessions, sermon_id, outputs=[phone, website])
+    assert website.requests[0].previous is None
+
+    with sessions.begin() as s:
+        repo = SermonRepository(s)
+        old = repo.revision(first)
+        second = repo.add_revision(
+            sermon_id,
+            author=f"user:{user.id}",
+            boundaries=repo.boundaries(old),
+            metadata=repo.metadata(old).model_copy(update={"title": "New title"}),
+            transcript_markdown=old.transcript_markdown,
+        ).id
+        repo.approve(second, approved_by=user.id)
+    website.fail = PublicationConflictError(
+        "website: edited",
+        fields=["title"],
+        modified_by="Owner",
+        modified_at=datetime(2026, 11, 13, tzinfo=UTC),
+    )
+    statuses = publish_sermon(config, sessions, sermon_id, outputs=[phone, website])
+    assert statuses == {"phone": "published", "website": "conflict"}  # not raised: no retry
+    sent = website.requests[-1]
+    assert sent.metadata.title == "New title"
+    assert sent.previous is not None and sent.previous.metadata.title != "New title"
+    with sessions() as s:
+        pub = PublicationRepository(s).find(sermon_id, "website")
+        assert pub is not None and pub.status == "conflict"
+        assert (pub.conflict_fields, pub.conflict_by) == (["title"], "Owner")
+        assert pub.published_revision_id == first and pub.revision_id == second
+
+    website.fail = None
+    statuses = publish_sermon(
+        config, sessions, sermon_id, outputs=[phone, website], only=["website"], skip=["title"]
+    )
+    assert statuses == {"website": "published"}
+    assert website.requests[-1].skip == {"title"}
+    assert website.requests[-1].previous is not None
+    with sessions() as s:
+        pub = PublicationRepository(s).find(sermon_id, "website")
+        assert pub is not None and pub.status == "published"
+        assert pub.published_revision_id == second and pub.conflict_fields is None
 
 
 def test_publish_waits_for_missing_renditions(config: GeorgConfig, engine: Engine) -> None:

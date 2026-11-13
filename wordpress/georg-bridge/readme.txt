@@ -4,7 +4,7 @@ Tags: sermons, church, rest-api
 Requires at least: 5.6
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.3.0
+Stable tag: 0.4.0
 License: AGPL-3.0-only
 License URI: https://www.gnu.org/licenses/agpl-3.0.html
 
@@ -69,6 +69,17 @@ than five minutes are refused). PHP's `upload_max_filesize` and `post_max_size` 
 exceed the largest sermon MP3.
 
 == Changelog ==
+
+= 0.4.0 =
+* After every sermon write, store `_georg_written`: a sha256 per field (title, content,
+  date, terms:<taxonomy>) of the values as saved, and `written_at`.
+* Optional `fields` and `overwrite` on the sermon PUT. A field edited on the website since
+  Georg wrote it is only written when listed in `overwrite`; otherwise the PUT returns 409
+  `georg_edited_on_site` with `fields`, `modified_gmt` and `modified_by` and writes nothing.
+  Sermons written before 0.4.0 count as edited when someone other than the bridge user
+  saved a revision after the bridge user's last one.
+* Signed GET `/georg/v1/sermons/<key>/status`: post ID, link, fields edited on the website,
+  last modified time and author, and the bridge version.
 
 = 0.3.0 =
 * Optional `full_text` on the sermon PUT sets or clears `_ctc_sermon_has_full_text`

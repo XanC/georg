@@ -5,7 +5,7 @@ import hmac
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,7 @@ import pytest
 
 from georg.core.config import OutputConfig
 from georg.core.contracts import OutputTarget
-from georg.core.errors import ConfigError, ModuleError
+from georg.core.errors import ConfigError, ModuleError, PublicationConflictError
 from georg.core.types import ArtifactRef, PublicationRequest, SermonMetadata
 from georg.modules.outputs.wordpress import (
     PUBLICATION_KEY_PATTERN,
@@ -42,6 +42,8 @@ class FakeBridge:
     terms: dict[str, set[str]] = field(default_factory=dict)
     requests: list[httpx.Request] = field(default_factory=list)
     nonces: set[str] = field(default_factory=set)
+    edited: dict[str, list[str]] = field(default_factory=dict)
+    """Fields edited on the website, by publication key."""
     next_id: int = 100
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -53,6 +55,8 @@ class FakeBridge:
             return self._audio(request)
         if path.startswith("/sermons/"):
             key = path.removeprefix("/sermons/")
+            if key.endswith("/status") and request.method == "GET":
+                return self._status(key.removesuffix("/status"))
             if request.method == "GET":
                 if key not in self.sermons:
                     return httpx.Response(404, json={"code": "georg_not_found", "message": "x"})
@@ -99,7 +103,27 @@ class FakeBridge:
         }
         return httpx.Response(201, json={**self.attachments[key], "created": True})
 
+    def _status(self, key: str) -> httpx.Response:
+        if key not in self.sermons:
+            return httpx.Response(404, json={"code": "georg_not_found", "message": "x"})
+        return httpx.Response(
+            200,
+            json={
+                "id": self.sermons[key]["id"],
+                "link": self.sermons[key]["link"],
+                "edited": self.edited.get(key, []),
+                "modified_gmt": "2026-11-13T16:55:00+00:00",
+                "modified_by": "Owner",
+                "version": "0.4.0",
+            },
+        )
+
     def _put(self, key: str, body: dict[str, Any]) -> httpx.Response:
+        requested = body.get("fields")
+        edited = set(self.edited.get(key, []))
+        conflicts = edited & set(requested or edited) - set(body.get("overwrite", []))
+        if key in self.sermons and conflicts:
+            return httpx.Response(409, json={"code": "georg_edited_on_site", "message": "x"})
         for taxonomy, names in body.get("terms", {}).items():
             self.terms.setdefault(taxonomy, set()).update(names)
         created = key not in self.sermons
@@ -674,6 +698,102 @@ def test_sermons_between_failure_is_a_module_error(monkeypatch: pytest.MonkeyPat
     out, _ = make_output(lambda request: httpx.Response(503), monkeypatch)
     with pytest.raises(ModuleError, match="lookup by date failed"):
         out.sermons_between(date(2026, 9, 1), date(2026, 9, 6))
+
+
+def _republish(tmp_path: Path, first: PublicationRequest, **meta: Any) -> PublicationRequest:
+    again = make_request(tmp_path, **meta)
+    return again.model_copy(update={"previous": first})
+
+
+def _puts(bridge: FakeBridge) -> list[dict[str, Any]]:
+    return [json.loads(r.content) for r in bridge.requests if r.method == "PUT"]
+
+
+def test_first_publish_sends_every_field(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge = FakeBridge()
+    out, _ = make_output(bridge, monkeypatch)
+    request = make_request(tmp_path)
+    assert out.fields_to_send(request) is None
+    out.publish(request)
+    [put] = _puts(bridge)
+    assert "fields" not in put and "audio_attachment_id" in put
+
+
+def test_republish_sends_only_changed_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bridge = FakeBridge()
+    out, _ = make_output(bridge, monkeypatch)
+    first = make_request(tmp_path)
+    out.publish(first)
+    uploads = sum(r.url.path.endswith("/audio") for r in bridge.requests)
+
+    same = _republish(tmp_path, first)
+    assert out.fields_to_send(same) == frozenset()
+    retitled = _republish(tmp_path, first, title="Greater Expectations", preacher="Rev. X")
+    assert out.fields_to_send(retitled) == {"title", "terms:ctc_sermon_speaker"}
+    out.publish(retitled)
+    put = _puts(bridge)[-1]
+    assert put["fields"] == ["terms:ctc_sermon_speaker", "title"]
+    assert "audio_attachment_id" not in put  # audio unchanged: not uploaded again
+    assert sum(r.url.path.endswith("/audio") for r in bridge.requests) == uploads
+
+    moved = _republish(tmp_path, first, service_time="08:00")
+    assert out.fields_to_send(moved) == {"date"}
+    new_audio = make_request(tmp_path, audio=b"ID3 other").model_copy(update={"previous": first})
+    assert out.fields_to_send(new_audio) == {"audio"}
+    retext = first.model_copy(update={"transcript_markdown": "Other.", "previous": first})
+    assert out.fields_to_send(retext) == {"content", "full_text"}
+
+
+def test_conflict_names_fields_and_editor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge = FakeBridge()
+    out, _ = make_output(bridge, monkeypatch)
+    first = make_request(tmp_path)
+    out.publish(first)
+    bridge.edited[KEY] = ["content", "title"]
+    retitled = _republish(tmp_path, first, title="Greater Expectations", preacher="Rev. X")
+    with pytest.raises(PublicationConflictError) as err:
+        out.publish(retitled)
+    assert err.value.fields == ["title"]
+    assert err.value.modified_by == "Owner" and not err.value.retryable
+    assert err.value.modified_at == datetime(2026, 11, 13, 16, 55, tzinfo=UTC)
+    assert "Owner" in str(err.value) and "title" in str(err.value)
+    assert sum(r.method == "PUT" for r in bridge.requests) == 2  # the 409 is not retried
+    assert bridge.sermons[KEY]["title"] == "Great Expectations"
+
+
+def test_skip_and_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge = FakeBridge()
+    out, _ = make_output(bridge, monkeypatch)
+    first = make_request(tmp_path)
+    out.publish(first)
+    bridge.edited[KEY] = ["title"]
+    retitled = _republish(tmp_path, first, title="Greater Expectations", preacher="Rev. X")
+
+    out.publish(retitled.model_copy(update={"skip": frozenset({"title"})}))
+    put = _puts(bridge)[-1]
+    assert put["fields"] == ["terms:ctc_sermon_speaker"] and "overwrite" not in put
+    assert bridge.sermons[KEY]["terms"]["ctc_sermon_speaker"] == ["Rev. X"]
+
+    out.publish(retitled.model_copy(update={"overwrite": frozenset({"title", "date"})}))
+    put = _puts(bridge)[-1]
+    assert put["overwrite"] == ["title"]  # only fields being sent
+    assert bridge.sermons[KEY]["title"] == "Greater Expectations"
+
+
+def test_site_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bridge = FakeBridge()
+    out, _ = make_output(bridge, monkeypatch)
+    assert out.site_status(KEY) is None
+    out.publish(make_request(tmp_path))
+    bridge.edited[KEY] = ["terms:ctc_sermon_book"]
+    status = out.site_status(KEY)
+    assert status is not None
+    assert status["edited"] == ["terms:ctc_sermon_book"] and status["modified_by"] == "Owner"
+    assert out.field_label("terms:ctc_sermon_book") == "scripture"
+    assert out.field_label("content") == "transcript"
+    assert out.field_label("terms:ctc_sermon_topic") == "topic"
 
 
 def test_check_makes_a_signed_read_only_call(monkeypatch: pytest.MonkeyPatch) -> None:

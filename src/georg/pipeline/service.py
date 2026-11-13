@@ -4,8 +4,9 @@
 import logging
 import mimetypes
 import shutil
-from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -18,9 +19,10 @@ from georg.core.contracts import (
     MediaInputSource,
     OutputTarget,
 )
-from georg.core.errors import ModuleError
+from georg.core.errors import ModuleError, PublicationConflictError
 from georg.core.types import (
     ArtifactRef,
+    ExternalRef,
     MediaInput,
     PublicationRequest,
     SermonMetadata,
@@ -418,40 +420,27 @@ def publication_key(config: GeorgConfig, sermon_id: int, target_name: str) -> st
     return f"georg:{config.instance}:sermon-{sermon_id}:{target_name}"
 
 
-def publish_sermon(
-    config: GeorgConfig,
-    sessions: sessionmaker[Session],
-    sermon_id: int,
-    *,
-    store: LocalStore | None = None,
-    outputs: Sequence[OutputTarget] | None = None,
-) -> dict[str, str]:
-    """Publish the sermon's current revision to every output; return status by output.
+@dataclass(frozen=True)
+class _Content:
+    """What a revision publishes: metadata, date, transcript and stored renditions."""
 
-    Outputs already holding this revision are skipped. Each output is attempted even
-    if another fails; any failure is raised afterwards so the job is retried.
-    """
-    store = store or LocalStore.for_data_dir(config.data_dir)
-    targets = (
-        list(outputs)
-        if outputs is not None
-        else [build_output(c, timezone=config.timezone) for c in config.outputs]
-    )
-    with sessions() as session:
-        sermons = SermonRepository(session)
-        sermon = sermons.get(sermon_id)
-        revision = sermons.current_revision(sermon_id)
-        if revision is None:
-            raise ModuleError(f"sermon {sermon_id} has no revision")
-        if config.review.require_approval and not sermons.is_approved(sermon_id):
-            raise ModuleError(f"sermon {sermon_id}'s current revision is not approved")
-        metadata = sermons.metadata(revision)
-        service = ServiceRepository(session).get(sermon.service_id)
-        service_date = metadata.service_date or service.service_date
-        renditions = _renditions_for(session, service.id, sermons.boundaries(revision))
-        transcript = revision.transcript_markdown
-        revision_id = revision.id
-        files = {
+    metadata: SermonMetadata
+    service_date: date | None
+    transcript: str | None
+    files: dict[str, ArtifactRef]
+
+
+def _content(session: Session, store: LocalStore, revision_id: int) -> _Content:
+    sermons = SermonRepository(session)
+    revision = sermons.revision(revision_id)
+    metadata = sermons.metadata(revision)
+    service = ServiceRepository(session).get(sermons.get(revision.sermon_id).service_id)
+    renditions = _renditions_for(session, service.id, sermons.boundaries(revision))
+    return _Content(
+        metadata=metadata,
+        service_date=metadata.service_date or service.service_date,
+        transcript=revision.transcript_markdown,
+        files={
             name: ArtifactRef(
                 path=store.path(a.sha256),
                 sha256=a.sha256,
@@ -460,14 +449,116 @@ def publish_sermon(
                 duration_ms=a.duration_ms,
             )
             for name, a in renditions.items()
-        }
-    if service_date is None:
+        },
+    )
+
+
+def _request(
+    content: _Content,
+    target: OutputTarget,
+    key: str,
+    *,
+    existing: ExternalRef | None = None,
+    previous: _Content | None = None,
+    skip: Collection[str] = (),
+    overwrite: Collection[str] = (),
+) -> PublicationRequest:
+    assert content.service_date is not None
+    return PublicationRequest(
+        publication_key=key,
+        service_date=content.service_date,
+        metadata=content.metadata,
+        transcript_markdown=content.transcript if target.wants_transcript else None,
+        files={n: content.files[n] for n in target.renditions if n in content.files},
+        existing=existing,
+        previous=None
+        if previous is None
+        else _request(
+            replace(previous, service_date=previous.service_date or content.service_date),
+            target,
+            key,
+        ),
+        skip=frozenset(skip),
+        overwrite=frozenset(overwrite),
+    )
+
+
+def pending_request(
+    config: GeorgConfig,
+    session: Session,
+    sermon_id: int,
+    target: OutputTarget,
+    *,
+    store: LocalStore | None = None,
+) -> PublicationRequest | None:
+    """The request publishing the sermon's current revision to `target` would send, with
+    what the target last accepted as `previous`; None without a revision or date."""
+    store = store or LocalStore.for_data_dir(config.data_dir)
+    sermons = SermonRepository(session)
+    revision = sermons.current_revision(sermon_id)
+    if revision is None:
+        return None
+    content = _content(session, store, revision.id)
+    if content.service_date is None:
+        return None
+    publication = PublicationRepository(session).find(sermon_id, target.name)
+    previous = (
+        _content(session, store, publication.published_revision_id)
+        if publication and publication.published_revision_id
+        else None
+    )
+    key = (
+        publication.publication_key
+        if publication
+        else publication_key(config, sermon_id, target.name)
+    )
+    return _request(content, target, key, previous=previous)
+
+
+def publish_sermon(
+    config: GeorgConfig,
+    sessions: sessionmaker[Session],
+    sermon_id: int,
+    *,
+    store: LocalStore | None = None,
+    outputs: Sequence[OutputTarget] | None = None,
+    only: Collection[str] | None = None,
+    skip: Collection[str] = (),
+    overwrite: Collection[str] = (),
+) -> dict[str, str]:
+    """Publish the sermon's current revision to every output (or those named in `only`);
+    return status by output.
+
+    Outputs already holding this revision are skipped. Each output is sent what it last
+    accepted, so it can send only what changed; `skip` and `overwrite` name output fields
+    a reviewer decided to leave alone or to overwrite after an edit at the target. Each
+    output is attempted even if another fails; any failure is raised afterwards so the job
+    is retried, except a `PublicationConflictError`, which waits for a reviewer.
+    """
+    store = store or LocalStore.for_data_dir(config.data_dir)
+    targets = (
+        list(outputs)
+        if outputs is not None
+        else [build_output(c, timezone=config.timezone) for c in config.outputs]
+    )
+    if only is not None:
+        targets = [t for t in targets if t.name in only]
+    with sessions() as session:
+        sermons = SermonRepository(session)
+        revision = sermons.current_revision(sermon_id)
+        if revision is None:
+            raise ModuleError(f"sermon {sermon_id} has no revision")
+        if config.review.require_approval and not sermons.is_approved(sermon_id):
+            raise ModuleError(f"sermon {sermon_id}'s current revision is not approved")
+        revision_id = revision.id
+        content = _content(session, store, revision_id)
+    if content.service_date is None:
         raise ModuleError(f"sermon {sermon_id} has no service date")
 
     statuses: dict[str, str] = {}
     errors: list[ModuleError] = []
     for target in targets:
-        missing = target.renditions - files.keys()
+        missing = target.renditions - content.files.keys()
         if missing:
             errors.append(
                 ModuleError(f"{target.name}: not rendered yet: {sorted(missing)}", retryable=True)
@@ -477,10 +568,15 @@ def publish_sermon(
         key = publication_key(config, sermon_id, target.name)
         with sessions.begin() as session:
             pubs = PublicationRepository(session)
-            previous = pubs.find(sermon_id, target.name)
-            if previous and previous.status == "published" and previous.revision_id == revision_id:
+            found = pubs.find(sermon_id, target.name)
+            if found and found.status == "published" and found.revision_id == revision_id:
                 statuses[target.name] = "published"
                 continue
+            previous = (
+                _content(session, store, found.published_revision_id)
+                if found and found.published_revision_id
+                else None
+            )
             publication = pubs.prepare(sermon_id, target.name, revision_id, key)
             publication_id = publication.id
             key = publication.publication_key
@@ -489,15 +585,28 @@ def publish_sermon(
         try:
             existing = existing or target.find_existing(key)
             ref = target.publish(
-                PublicationRequest(
-                    publication_key=key,
-                    service_date=service_date,
-                    metadata=metadata,
-                    transcript_markdown=transcript if target.wants_transcript else None,
-                    files={n: files[n] for n in target.renditions},
+                _request(
+                    content,
+                    target,
+                    key,
                     existing=existing,
+                    previous=previous,
+                    skip=skip,
+                    overwrite=overwrite,
                 )
             )
+        except PublicationConflictError as exc:
+            statuses[target.name] = "conflict"
+            with sessions.begin() as session:
+                PublicationRepository(session).mark_conflict(
+                    publication_id,
+                    str(exc),
+                    fields=exc.fields,
+                    by=exc.modified_by,
+                    at=exc.modified_at,
+                )
+            log.warning("sermon %d: %s", sermon_id, exc)
+            continue
         except Exception as exc:
             error = exc if isinstance(exc, ModuleError) else ModuleError(str(exc))
             errors.append(ModuleError(f"{target.name}: {error}", retryable=error.retryable))
