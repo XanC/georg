@@ -14,10 +14,22 @@ if not isinstance(db_path, Path):
 engine = create_engine(db_path)
 try:
     with engine.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=Base.metadata, render_as_batch=True
-        )
-        with context.begin_transaction():
-            context.run_migrations()
+        # Batch migrations recreate tables, and dropping a table that other rows
+        # reference fails while foreign keys are enforced. SQLite ignores this pragma
+        # inside a transaction, so it is set on the raw connection before one starts.
+        raw = connection.connection.driver_connection
+        assert raw is not None
+        raw.execute("PRAGMA foreign_keys=OFF")
+        try:
+            context.configure(
+                connection=connection, target_metadata=Base.metadata, render_as_batch=True
+            )
+            with context.begin_transaction():
+                context.run_migrations()
+                violations = connection.exec_driver_sql("PRAGMA foreign_key_check").all()
+                if violations:
+                    raise RuntimeError(f"migration broke foreign keys: {violations}")
+        finally:
+            raw.execute("PRAGMA foreign_keys=ON")
 finally:
     engine.dispose()
