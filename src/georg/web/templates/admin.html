@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Admin{% endblock %}
+{% block content %}
+<h1>Admin</h1>
+<p><a href="/admin/users">Users</a> · <a href="/admin/settings">Settings and connection tests</a></p>
+
+<section aria-labelledby="health-h">
+  <h2 id="health-h">Health</h2>
+  <p>Georg {{ health.version }}{% if health.commit %} (commit <code>{{ health.commit }}</code>){% endif %}.
+    Last job finished: {{ health.last_finished.strftime("%Y-%m-%d %H:%M") ~ " UTC" if health.last_finished else "never" }}.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th scope="col">Disk</th><th scope="col">Path</th><th scope="col">Free</th></tr></thead>
+    <tbody>
+    {% for d in health.disks %}
+      <tr><td>{{ d.label }}</td><td><code>{{ d.path }}</code></td>
+        <td>{% if d.error %}{{ d.error }}{% else %}{{ human_bytes(d.free) }} of {{ human_bytes(d.total) }} ({{ "%.0f"|format(d.free_pct) }}%){% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p>Jobs:
+    {% for status, n in health.counts|dictsort %}<span class="badge {{ status }}" data-count="{{ status }}">{{ status }} {{ n }}</span> {% else %}none yet{% endfor %}
+  </p>
+  {% if health.failed %}
+  <p>Failed in the last 7 days ({{ health.failed|length }}), see <a href="/jobs">Jobs</a>:</p>
+  <ul>
+    {% for job in health.failed %}<li><a href="/jobs">#{{ job.id }} {{ job.kind }}</a>, {{ job.finished_at.strftime("%Y-%m-%d %H:%M") }} UTC</li>{% endfor %}
+  </ul>
+  {% else %}
+  <p>No jobs failed in the last 7 days.</p>
+  {% endif %}
+</section>
+
+<section aria-labelledby="audit-h">
+  <h2 id="audit-h">Recent admin activity</h2>
+  {% if audit %}
+  <div class="scroll">
+  <table>
+    <thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">Action</th><th scope="col">Target</th><th scope="col">Details</th></tr></thead>
+    <tbody>
+    {% for e in audit %}
+      <tr><td class="nowrap">{{ e.at.strftime("%Y-%m-%d %H:%M") }} UTC</td><td>{{ e.user }}</td><td><code>{{ e.action }}</code></td>
+        <td>{{ e.target or "—" }}</td><td>{% if e.detail %}<code>{{ e.detail|tojson }}</code>{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>Nothing yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

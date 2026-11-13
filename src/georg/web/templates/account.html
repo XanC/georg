@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Account{% endblock %}
+{% block content %}
+<h1>Account</h1>
+<p>{{ user.username }} · role {{ user.role }}</p>
+{% if error %}<p class="flash error" role="alert">{{ error }}</p>{% endif %}
+<section aria-labelledby="pw-h">
+  <h2 id="pw-h">Change password</h2>
+  <form method="post" action="/account/password" class="stack narrow">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Current password <input name="current" type="password" autocomplete="current-password" required></label>
+    <label>New password <input name="new" type="password" autocomplete="new-password" minlength="8" required></label>
+    <label>New password again <input name="confirm" type="password" autocomplete="new-password" minlength="8" required></label>
+    <button type="submit">Change password</button>
+  </form>
+</section>
+<section aria-labelledby="email-h">
+  <h2 id="email-h">Email</h2>
+  <form method="post" action="/account/email" class="stack narrow">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Email address <input name="email" type="email" value="{{ email or '' }}"></label>
+    <p class="hint">Used for test emails from the admin settings page.</p>
+    <button type="submit">Save email</button>
+  </form>
+</section>
+{% endblock %}

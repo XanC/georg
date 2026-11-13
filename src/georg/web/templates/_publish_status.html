@@ -2,11 +2,13 @@
   {% if publishing %}hx-get="/sermons/{{ sermon.id }}/publish-status" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
   {% if approval %}
   <p>Revision {{ revision.number }} is approved{% if approval.note %} ({{ approval.note }}){% endif %}.</p>
+  {% if user and user.can_edit %}
   <form method="post" action="/sermons/{{ sermon.id }}/publish">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" data-needs-saved {% if publishing %}disabled data-busy{% endif %}>{{ "Publishing…" if publishing else "Publish again" }}</button>
   </form>
-  {% else %}
+  {% endif %}
+  {% elif user and user.can_edit %}
   <form method="post" action="/sermons/{{ sermon.id }}/approve" class="stack narrow">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="revision_id" value="{{ revision.id }}">

@@ -135,7 +135,10 @@ Module selection is by configuration (`georg.toml`): each configured instance na
 ## 4. Core data model (SQLite)
 
 ```
-users            id, username, password_hash (argon2), role [admin|reviewer], created_at
+users            id, username, password_hash (argon2), role [admin|reviewer|viewer], created_at,
+                 email, last_login_at, disabled_at
+
+audit_log        id, at, user_id, action, target, detail (JSON)   -- admin actions, password changes
 
 services         id, source_type, source_ref  UNIQUE(source_type, source_ref),
                  title, service_date, duration_ms, discovered_at, status_summary
@@ -347,7 +350,7 @@ Runbook and implementation: [`docs/deploy-aws.md`](deploy-aws.md), `deploy/aws/`
 | D6 | Media hosting for published audio | Unchanged: `uploads/sermons/` on the web server, synced to R2 by the existing cron | No |
 | D7 | WordPress integration mechanism | `georg-bridge` plugin REST routes (meta + attachment endpoint) with HMAC-signed requests, §5.4 | Confirm plugin OK |
 | D8 | Source-media retention | Keep audio forever; keep source video N days (configurable) — video features later can re-fetch | Light |
-| D9 | Auth | Local users, argon2, session cookies; 2 roles | Light (Q5) |
+| D9 | Auth | Local users, argon2, session cookies; roles admin, reviewer, viewer (read-only) | Light (Q5) |
 | D10 | Artifact store on AWS | Local EBS + S3 backup now; S3Store in a later phase | No |
 | D11 | Multiple sermons per service | Answered: one sermon per service; schema still allows N, detector proposes 1 | No |
 | D12 | Podcast feed: keep `podcast.pl` vs Georg output module | Keep `podcast.pl` + R2 sync; Georg writes data compatible with them | No |

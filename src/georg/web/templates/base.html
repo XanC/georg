@@ -18,6 +18,8 @@
     <nav aria-label="Main">
       <a href="/">Services</a>
       <a href="/jobs">Jobs</a>
+      {% if user.is_admin %}<a href="/admin">Admin</a>{% endif %}
+      <a href="/account">Account</a>
       <form method="post" action="/logout" class="inline">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="link">Log out {{ user.username }}</button>

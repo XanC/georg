@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<p><a href="/admin">Admin</a> · Read-only: the effective configuration from the config file.
+  Secrets are never shown; <code>env:NAME</code> references show whether the variable is set.</p>
+{% macro check_button(kind, name, label="Test connection") %}
+<form method="post" action="/admin/checks/{{ kind }}/{{ name }}" class="inline"
+  hx-post="/admin/checks/{{ kind }}/{{ name }}" hx-target="#check-{{ kind }}-{{ name }}" hx-swap="innerHTML">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <button type="submit" class="small">{{ label }}</button>
+</form>
+<span id="check-{{ kind }}-{{ name }}" class="check-result" aria-live="polite"></span>
+{% endmacro %}
+{% for section in sections %}
+<section aria-labelledby="s-{{ section.id }}">
+  <h2 id="s-{{ section.id }}">{{ section.title }}</h2>
+  {% if section.rows %}
+  <table class="settings">
+    <tbody>{% for label, value in section.rows %}<tr><th scope="row"><code>{{ label }}</code></th><td>{{ value }}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% endif %}
+  {% if section.check == "smtp" %}
+  <p>{{ check_button("email", "smtp") }}</p>
+  <p>{% if my_email %}{{ check_button("email", "me", "Send test email to me") }} <span class="hint">to {{ my_email }}</span>
+    {% else %}<span class="hint">Add your email address on the <a href="/account">Account</a> page to send yourself a test email.</span>{% endif %}</p>
+  {% endif %}
+  {% for m in section.modules %}
+  <h3>{{ m.name }} <span class="badge">{{ m.type }}</span></h3>
+  {% if m.kind != "processor" %}
+  <p>{% if m.checkable %}{{ check_button(m.kind, m.name) }}{% else %}<span class="hint">No test available.</span>{% endif %}</p>
+  {% endif %}
+  {% if m.rows %}
+  <table class="settings">
+    <tbody>{% for label, value in m.rows %}<tr><th scope="row"><code>{{ label }}</code></th><td>{{ value }}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% endif %}
+  {% else %}
+  {% if not section.rows %}<p>None configured.</p>{% endif %}
+  {% endfor %}
+</section>
+{% endfor %}
+{% endblock %}

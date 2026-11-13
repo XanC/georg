@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import Connection, Engine, Row, Table, insert, literal, select, update
+from sqlalchemy import Connection, Engine, Row, Table, func, insert, literal, select, update
 
 from georg.core.errors import GeorgError, ModuleError
 from georg.db.engine import writer
@@ -261,6 +261,28 @@ class JobQueue:
         if exponent >= 32:
             return self.backoff_max
         return min(self.backoff_base * (1 << exponent), self.backoff_max)
+
+    def counts(self) -> dict[str, int]:
+        """Number of jobs per status."""
+        stmt = select(_jobs.status, func.count()).group_by(_jobs.status)
+        with self._engine.connect() as conn:
+            return {status: int(n) for status, n in conn.execute(stmt)}
+
+    def failed_since(self, since: datetime) -> list[JobInfo]:
+        stmt = (
+            select(_table)
+            .where(_jobs.status == "failed", _jobs.finished_at >= since)
+            .order_by(_jobs.finished_at.desc())
+        )
+        with self._engine.connect() as conn:
+            return [_info(row) for row in conn.execute(stmt)]
+
+    def last_finished_at(self) -> datetime | None:
+        """When a worker last finished a job (succeeded or failed)."""
+        stmt = select(func.max(_jobs.finished_at)).where(_jobs.status.in_(("succeeded", "failed")))
+        with self._engine.connect() as conn:
+            value: datetime | None = conn.execute(stmt).scalar()
+        return value
 
     def get(self, job_id: int) -> JobInfo:
         with self._engine.connect() as conn:

@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from georg.core.checks import CheckResult
 from georg.core.config import OutputConfig, resolve_secret
 from georg.core.errors import ConfigError, ModuleError
 from georg.core.types import ArtifactRef, ExternalRef, PublicationRequest, SermonMetadata
@@ -40,6 +41,8 @@ PUBLICATION_KEY_PATTERN = re.compile(r"^[A-Za-z0-9:._-]{1,190}$")
 FILENAME_FIELDS = frozenset({"date", "slug"})
 METADATA_TERM_FIELDS = frozenset({"preacher", "scripture", "occasion", "series"})
 SERMON_LIST_PAGE_SIZE = 100
+CHECK_PUBLICATION_KEY = "georg-connection-check"
+"""Looked up by `check()`; no sermon has it, so a signed GET answers 404."""
 SERMON_LIST_MAX_PAGES = 20
 DEFAULT_TERM_FIELDS = {
     "preacher": "ctc_sermon_speaker",
@@ -189,6 +192,15 @@ class WordPressOutput:
     def find_existing(self, publication_key: str) -> ExternalRef | None:
         data = self._call("GET", self._sermon_route(publication_key), none_on=frozenset({404}))
         return None if data is None else self._ref(data)
+
+    def check(self) -> CheckResult:
+        """A signed, read-only georg-bridge call: look up a publication key no sermon has.
+        The bridge checks the signature before the lookup, so a 404 proves the key works."""
+        try:
+            self.find_existing(CHECK_PUBLICATION_KEY)
+        except ModuleError as exc:
+            return CheckResult(False, f"Signed request to georg-bridge failed: {exc}")
+        return CheckResult(True, "georg-bridge accepted a signed read-only request.")
 
     def sermons_on(self, day: date) -> list[dict[str, Any]]:
         """Published ctc_sermon posts dated `day` (site time): id, title and link.

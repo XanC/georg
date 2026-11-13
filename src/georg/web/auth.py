@@ -8,6 +8,8 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 from fastapi import Request
 
+from georg.db.models import EDITOR_ROLES
+
 _hasher = PasswordHasher()
 _DUMMY_HASH = _hasher.hash(secrets.token_hex(16))
 SESSION_USER = "user_id"
@@ -15,6 +17,7 @@ SESSION_CSRF = "csrf"
 CSRF_FIELD = "csrf_token"
 CSRF_HEADER = "x-csrf-token"
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+MIN_PASSWORD_LENGTH = 8
 
 
 @dataclass(frozen=True)
@@ -22,10 +25,24 @@ class CurrentUser:
     id: int
     username: str
     role: str
+    email: str | None = None
+
+    @property
+    def can_edit(self) -> bool:
+        """Save, approve, publish and run jobs; viewers only read."""
+        return self.role in EDITOR_ROLES
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
 
 
 class LoginRequired(Exception):
     """Raised by the `current_user` dependency when nobody is logged in."""
+
+
+class Forbidden(Exception):
+    """The logged-in user's role doesn't allow this request (answered with 403)."""
 
 
 class CsrfError(Exception):
@@ -34,6 +51,11 @@ class CsrfError(Exception):
 
 def hash_password(password: str) -> str:
     return _hasher.hash(password)
+
+
+def generate_password() -> str:
+    """A temporary password for an admin to hand over; shown once, never stored."""
+    return secrets.token_urlsafe(12)
 
 
 def verify_password(password_hash: str | None, password: str) -> bool:

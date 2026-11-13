@@ -30,6 +30,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from georg.core.checks import CheckResult
 from georg.core.config import NamedModuleConfig, resolve_secret
 from georg.core.errors import ConfigError, ModuleError, SourceNotReadyError
 from georg.core.types import MediaInput, RemoteMedia, SourceItem, SourcePart
@@ -176,6 +177,7 @@ class GoogleDriveInput:
         tokens = credentials or GoogleTokens(
             opts.credentials_file, [SCOPE_READONLY], subject=opts.subject, http_client=client
         )
+        self._tokens = tokens
         self._drive = DriveClient(tokens, client, attempts=opts.attempts, sleep=sleep)
         self._store = DriveFolderStore(self._drive, all_drives=opts.include_shared_drives)
         self._layout = opts.layout()
@@ -185,6 +187,25 @@ class GoogleDriveInput:
     def from_options(cls, options: Mapping[str, Any]) -> "GoogleDriveInput":
         """Build from bare options, as `georg.pipeline.registry.build_input` does."""
         return cls(NamedModuleConfig(name=TYPE_NAME, type=TYPE_NAME, options=dict(options)))
+
+    def check(self) -> CheckResult:
+        """Refresh the token, then list the configured folder (read-only)."""
+        try:
+            self._tokens.token(force_refresh=True)
+        except (ModuleError, ConfigError, httpx.HTTPError, OSError, ValueError) as exc:
+            return CheckResult(False, f"Token refresh failed: {exc}")
+        try:
+            folder = self._drive.get_file(self.folder_id, "id,mimeType")
+            if folder is None or folder.get("mimeType") != FOLDER_MIME:
+                return CheckResult(
+                    False,
+                    "Token refreshed, but the folder was not found, is not a folder, "
+                    "or is not shared with this account.",
+                )
+            count = sum(1 for _ in self._children(self.folder_id))
+        except (ModuleError, httpx.HTTPError) as exc:
+            return CheckResult(False, f"Token refreshed, but reading the folder failed: {exc}")
+        return CheckResult(True, f"Token refreshed; folder readable ({count} items).")
 
     def _children(self, folder_id: str, extra: str = "") -> Iterator[dict[str, Any]]:
         query = f"'{quote_query(folder_id)}' in parents and trashed = false{extra}"

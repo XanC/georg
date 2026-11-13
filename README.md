@@ -57,6 +57,17 @@ re-render the audio), and approves a revision for publishing. `georg web --dev`
 uses a throwaway key and allows session cookies over plain HTTP; otherwise serve
 it behind HTTPS.
 
+Roles: `admin`, `reviewer` and `viewer`. Viewers see everything but can't save,
+approve, publish, reprocess or run jobs. Admins also get `/admin`, which has:
+- users: add users, change roles, reset passwords (typed, or generated and shown once),
+  and disable or enable accounts;
+- the effective settings, read-only and with secrets masked;
+- connection tests for the inputs, outputs and SMTP;
+- health: disk space, jobs, and the version (commit from `$GEORG_GIT_COMMIT` if set);
+- an audit log.
+
+Everyone can change their own password and email address at `/account`.
+
 ## License
 
 Georg is licensed under the **GNU Affero General Public License, version 3 only** (`AGPL-3.0-only`); see [LICENSE](LICENSE). If you run a modified version of Georg as a network service, the AGPL requires you to offer its source code to that service's users.

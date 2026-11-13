@@ -324,3 +324,31 @@ def test_fetch_document_downloads_once_per_version(drive: FakeDrive, tmp_path: P
     assert newer is not None and newer != path and newer.read_bytes() == b"edited"
     assert source.fetch_document(item, "Order of Service", dest) is None
     assert source.fetch_document(item, "missing.docx", dest) is None
+
+
+class _BrokenTokens:
+    def token(self, *, force_refresh: bool = False) -> str:
+        raise ModuleError("token refresh refused")
+
+
+def test_check_counts_the_folder_items(drive: FakeDrive) -> None:
+    drive.folder("Recordings", id="check-root")
+    drive.folder("SPX 11.01.26", parent="check-root")
+    drive.add("notes.txt", "check-root", mime="text/plain")
+    drive.add("deep.mp4", "elsewhere")
+    result = make_input(drive, folder_id="check-root").check()
+    assert result.ok and result.message == "Token refreshed; folder readable (2 items)."
+    assert all(r.method == "GET" for r in drive.requests)
+
+
+def test_check_reports_a_missing_folder_and_a_bad_token(drive: FakeDrive) -> None:
+    result = make_input(drive, folder_id="nowhere").check()
+    assert not result.ok and "not found" in result.message
+    source = GoogleDriveInput(
+        NamedModuleConfig(name="drive", type="google_drive", options={"folder_id": "x"}),
+        credentials=_BrokenTokens(),
+        http_client=drive.client(),
+        sleep=lambda _: None,
+    )
+    broken = source.check()
+    assert not broken.ok and broken.message.startswith("Token refresh failed")

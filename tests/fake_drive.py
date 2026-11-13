@@ -37,6 +37,7 @@ class FakeFile:
     trashed: bool = False
     has_size: bool = True
     reported_md5: str | None = None
+    can_add_children: bool = True
 
     def resource(self, fields: str) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -48,6 +49,7 @@ class FakeFile:
             "trashed": self.trashed,
             "webViewLink": f"https://drive.google.com/file/d/{self.id}/view",
             "appProperties": dict(self.app_properties),
+            "capabilities": {"canAddChildren": self.can_add_children, "canListChildren": True},
         }
         if self.mime != FOLDER_MIME and self.has_size:
             data["size"] = str(len(self.content))
