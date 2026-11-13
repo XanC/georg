@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 import hashlib
+import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -239,3 +240,56 @@ def test_paramiko_connector_rejects_unknown_host_key(
     assert isinstance(seen["policy"], paramiko.RejectPolicy)
     assert seen["known_hosts"] == str(known) and "system" not in seen
     assert seen["connect"][1]["password"] == "pw" and seen["closed"]
+
+
+@dataclass
+class _DirStat:
+    st_mode: int
+
+
+class _StatOnly:
+    def __init__(self, entries: dict[str, int]) -> None:
+        self.entries = entries
+        self.calls: list[str] = []
+
+    def stat(self, path: str) -> _DirStat:
+        self.calls.append(path)
+        if path not in self.entries:
+            raise FileNotFoundError(2, "No such file", path)
+        return _DirStat(self.entries[path])
+
+    @contextmanager
+    def connect(self) -> Iterator["_StatOnly"]:
+        yield self
+
+
+def test_remote_dir_is_the_fixed_part_of_remote_path() -> None:
+    fake = FakeSftp()
+    assert make_output(fake).remote_dir() == "/var/www/html/phone/services"
+    assert make_output(fake, remote_path="/srv/{date}/a.mp3").remote_dir() == "/srv"
+    assert make_output(fake, remote_path="/srv/a-{date}.mp3").remote_dir() == "/srv"
+
+
+def test_check_stats_the_remote_directory_without_writing() -> None:
+    server = _StatOnly({"/var/www/html/phone/services": stat.S_IFDIR | 0o755})
+    out = make_output(FakeSftp())
+    out._connect = server.connect
+    result = out.check()
+    assert result.ok and "exists" in result.message
+    assert server.calls == ["/var/www/html/phone/services"]
+    server.entries = {"/var/www/html/phone/services": stat.S_IFREG | 0o644}
+    assert "not a directory" in out.check().message
+    server.entries = {}
+    assert "does not exist" in out.check().message
+
+
+def test_check_reports_connection_failures() -> None:
+    @contextmanager
+    def refused() -> Iterator[Any]:
+        raise paramiko.AuthenticationException("Authentication failed.")
+        yield
+
+    out = make_output(FakeSftp())
+    out._connect = refused
+    result = out.check()
+    assert not result.ok and "Authentication failed" in result.message

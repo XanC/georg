@@ -14,6 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from georg.core.checks import CheckResult
 from georg.core.config import SECRET_PREFIX, GeorgConfig, SmtpConfig, resolve_secret
 from georg.core.errors import ConfigError, ModuleError
 from georg.db.repositories import PublicationRepository, SermonRepository, ServiceRepository
@@ -84,6 +85,44 @@ def send(message: EmailMessage, smtp: SmtpConfig, factory: SmtpFactory = smtplib
         raise ModuleError(f"smtp login failed: {exc}", retryable=False) from exc
     except (OSError, smtplib.SMTPException) as exc:
         raise ModuleError(f"smtp: {exc}", retryable=True) from exc
+
+
+def check_smtp(smtp: SmtpConfig, factory: SmtpFactory = smtplib.SMTP) -> CheckResult:
+    """Connect, STARTTLS and log in as configured, without sending anything."""
+    steps: list[str] = []
+    try:
+        with factory(smtp.host, smtp.port) as client:
+            steps.append(f"connected to {smtp.host}:{smtp.port}")
+            if smtp.starttls:
+                client.starttls()
+                steps.append("STARTTLS")
+            if smtp.username:
+                client.login(resolve_secret(smtp.username), resolve_secret(smtp.password or ""))
+                steps.append("logged in")
+    except ConfigError as exc:
+        return CheckResult(False, f"SMTP not configured: {exc}")
+    except smtplib.SMTPAuthenticationError:
+        return CheckResult(False, "SMTP login was refused.")
+    except (OSError, smtplib.SMTPException) as exc:
+        done = ", ".join(steps) if steps else f"connecting to {smtp.host}:{smtp.port}"
+        return CheckResult(False, f"SMTP failed ({done}): {exc}")
+    summary = ", ".join(steps)
+    return CheckResult(True, summary[0].upper() + summary[1:] + "; nothing was sent.")
+
+
+def send_test_email(
+    smtp: SmtpConfig, to: str, *, instance: str, factory: SmtpFactory = smtplib.SMTP
+) -> CheckResult:
+    message = EmailMessage()
+    message["Subject"] = f"Georg ({instance}) test email"
+    message["From"] = smtp.sender
+    message["To"] = to
+    message.set_content("This is a test email from Georg's admin settings page.\n")
+    try:
+        send(message, smtp, factory)
+    except (ModuleError, ConfigError) as exc:
+        return CheckResult(False, f"Test email not sent: {exc}")
+    return CheckResult(True, f"Test email sent to {to}.")
 
 
 def notify_review(

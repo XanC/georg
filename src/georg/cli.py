@@ -16,6 +16,7 @@ from georg import __version__
 from georg.core.config import RenditionSpec
 from georg.core.errors import GeorgError
 from georg.core.types import ServiceBoundaries, TimeRange
+from georg.db.models import USER_ROLES
 
 if TYPE_CHECKING:
     from sqlalchemy import Engine
@@ -376,7 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
     user_commands = user.add_subparsers(dest="user_command", metavar="COMMAND", required=True)
     user_add = user_commands.add_parser("add", help="add a user (prompts for the password)")
     user_add.add_argument("username")
-    user_add.add_argument("--role", choices=("admin", "reviewer"), required=True)
+    user_add.add_argument("--role", choices=USER_ROLES, required=True)
     user_add.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     user_add.add_argument(
         "--password-stdin", action="store_true", help="read the password from standard input"

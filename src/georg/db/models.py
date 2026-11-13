@@ -34,7 +34,9 @@ NAMING_CONVENTION: Final = {
     "pk": "pk_%(table_name)s",
 }
 
-USER_ROLES: Final = ("admin", "reviewer")
+USER_ROLES: Final = ("admin", "reviewer", "viewer")
+EDITOR_ROLES: Final = ("admin", "reviewer")
+"""Roles that may change editorial state; a viewer only reads."""
 RUN_STATUSES: Final = ("queued", "running", "succeeded", "failed", "cancelled")
 PUBLICATION_STATUSES: Final = ("pending", "publishing", "published", "failed", "superseded")
 ARTIFACT_KINDS: Final = (
@@ -75,6 +77,22 @@ class User(Base):
     password_hash: Mapped[str]
     role: Mapped[str]
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    email: Mapped[str | None]
+    last_login_at: Mapped[datetime | None]
+    disabled_at: Mapped[datetime | None]
+
+
+class AuditLog(Base):
+    """Who changed what in the admin area (users, passwords, settings)."""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    at: Mapped[datetime] = mapped_column(default=utcnow)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    action: Mapped[str]
+    target: Mapped[str | None]
+    detail: Mapped[dict[str, Any]] = mapped_column(default=dict)
 
 
 class Service(Base):

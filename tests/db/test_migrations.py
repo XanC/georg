@@ -23,6 +23,7 @@ TABLES = {
     "sermon_revisions",
     "approvals",
     "publications",
+    "audit_log",
 }
 
 

@@ -12,7 +12,7 @@ from georg.core.errors import ModuleError
 from georg.core.types import SermonMetadata, ServiceBoundaries, SourceItem, SourcePart
 from georg.db.engine import session_factory
 from georg.db.repositories import SermonRepository, ServiceRepository
-from georg.notify import notify_review, redact, send
+from georg.notify import check_smtp, notify_review, redact, send, send_test_email
 
 
 class FakeSmtp:
@@ -150,3 +150,33 @@ def test_smtp_errors(config: GeorgConfig, engine: Engine) -> None:
 )  # fmt: skip
 def test_redact(text: str, expected: str) -> None:
     assert redact(text, ["hunter22", "ab"]) == expected
+
+
+def test_check_smtp_logs_in_without_sending() -> None:
+    FakeSmtp.sent.clear()
+    FakeSmtp.logins.clear()
+    FakeSmtp.fail = None
+    smtp = SmtpConfig(host="smtp.example", username="u", password="p", sender="g@example.org")
+    result = check_smtp(smtp, FakeSmtp)
+    assert result.ok
+    assert result.message == "Connected to smtp.example:587, STARTTLS, logged in; nothing was sent."
+    assert FakeSmtp.sent == [] and FakeSmtp.logins == [("u", "p")]
+
+
+def test_check_smtp_reports_a_refused_login() -> None:
+    FakeSmtp.fail = smtplib.SMTPAuthenticationError(535, b"no")
+    try:
+        smtp = SmtpConfig(host="smtp.example", username="u", password="p", sender="g@example.org")
+        result = check_smtp(smtp, FakeSmtp)
+    finally:
+        FakeSmtp.fail = None
+    assert not result.ok and result.message == "SMTP login was refused."
+
+
+def test_send_test_email() -> None:
+    FakeSmtp.sent.clear()
+    smtp = SmtpConfig(host="smtp.example", sender="g@example.org")
+    result = send_test_email(smtp, "me@example.org", instance="test", factory=FakeSmtp)
+    assert result.ok
+    (message,) = FakeSmtp.sent
+    assert message["To"] == "me@example.org" and "test email" in message["Subject"]
