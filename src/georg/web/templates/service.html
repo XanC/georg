@@ -4,5 +4,6 @@
 <h1>{{ service.title or service.source_ref }}</h1>
 <p>Date: {{ service.service_date or "unknown" }}. Status: {{ status }}.</p>
 {% include "_same_date.html" %}
+{% if service.purged_at %}{% include "_purged.html" %}{% endif %}
 <p>No sermon has been proposed for this service yet. See <a href="/jobs">jobs</a> for progress or errors.</p>
 {% endblock %}

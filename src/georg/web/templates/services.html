@@ -2,6 +2,11 @@
 {% block title %}Services{% endblock %}
 {% block content %}
 <h1>Services</h1>
+<p class="hint">
+  {% if show_all %}All services. <a href="/">Show only recent ones and those needing attention</a>.
+  {% else %}Fetched in the last {{ recent_days }} days, or needing attention.
+  {% if hidden %}<a href="/?all=1">All services ({{ hidden }} hidden)</a>{% endif %}{% endif %}
+</p>
 {% if rows %}
 <div class="scroll">
 <table>
@@ -13,13 +18,14 @@
       <td><a href="/services/{{ row.service.id }}">{{ row.service.title or row.service.source_ref }}</a></td>
       <td><span class="badge" data-status="{{ row.service.id }}">{{ row.status }}</span>
         {% for post in row.same_date %}<a class="badge warning" href="{{ post.link }}" data-same-date="{{ row.service.id }}"
-          title="Published outside Georg for this date: {{ post.title }}">Published outside Georg</a>{% endfor %}</td>
+          title="Published outside Georg for this date: {{ post.title }}">Published outside Georg</a>{% endfor %}
+        {% if row.service.purged_at %}<span class="badge" data-purged="{{ row.service.id }}">Files removed</span>{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
 {% else %}
-<p>No services yet. <a href="/jobs">Check for new recordings</a>.</p>
+<p>{% if show_all or not hidden %}No services yet. <a href="/jobs">Check for new recordings</a>.{% else %}Nothing recent or needing attention.{% endif %}</p>
 {% endif %}
 {% endblock %}

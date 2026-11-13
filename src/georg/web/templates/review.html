@@ -16,6 +16,9 @@
 
 {% include "_render_status.html" %}
 
+{% if purged %}
+{% include "_purged.html" %}
+{% else %}
 <section aria-labelledby="recording-h" class="recording{% if preview %} sticky{% endif %}">
   <h2 id="recording-h">Whole recording</h2>
   {% if preview %}
@@ -62,6 +65,7 @@
   {% endfor %}
   {% endif %}
 </section>
+{% endif %}
 
 {% if report %}
 <section aria-labelledby="detect-h">

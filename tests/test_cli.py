@@ -207,3 +207,14 @@ def test_reprocess_enqueues_a_process_job(
     assert main(["reprocess", "999", "--config", str(config)]) == 1
     assert "not found" in capsys.readouterr().err
     engine.dispose()
+
+
+def test_cleanup_dry_run_with_days_while_off(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = _config_file(tmp_path)
+    config.write_text(config.read_text() + "\n[retention]\ndays = 0\n")
+    assert main(["cleanup", "--dry-run", "--config", str(config)]) == 0
+    assert "pass --days N" in capsys.readouterr().out
+    assert main(["cleanup", "--dry-run", "--days", "60", "--config", str(config)]) == 0
+    assert "0 service(s), 0 bytes would be freed (dry run)" in capsys.readouterr().out

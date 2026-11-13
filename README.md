@@ -68,6 +68,15 @@ approve, publish, reprocess or run jobs. Admins also get `/admin`, which has:
 
 Everyone can change their own password and email address at `/account`.
 
+The Services list shows services fetched in the last 30 days, plus older ones that need
+attention: needing review, edited since approval, publish failed, edited on the
+website, or processing failed. A review is not counted as needing attention if the
+website already has a sermon for that date published outside Georg. "All services"
+shows the rest. Georg is not an archive: `[retention] days` (default 60) after the last
+publication through Georg, or after discovery if never published, a daily worker job
+deletes the service's stored files and keeps its database rows. `georg cleanup
+--dry-run` lists what would be deleted and how many bytes.
+
 ## License
 
 Georg is licensed under the **GNU Affero General Public License, version 3 only** (`AGPL-3.0-only`); see [LICENSE](LICENSE). If you run a modified version of Georg as a network service, the AGPL requires you to offer its source code to that service's users.

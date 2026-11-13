@@ -4,7 +4,7 @@ import os
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -30,6 +30,7 @@ from georg.db.repositories import (
     ServiceRepository,
     UserRepository,
 )
+from georg.db.types import utcnow
 from georg.jobs.queue import JobQueue
 from georg.storage.local import LocalStore
 from georg.web import create_app
@@ -1073,3 +1074,51 @@ def test_recorded_conflict_shows_when_the_website_is_unreachable(
     assert "Couldn't check the website for edits." in response.text
     assert "Content was edited on the website (by Owner): title." in response.text
     assert ">Skip these fields</button>" in response.text
+
+
+def _age(env: Env, service_id: int, days: float) -> None:
+    with session_factory(env.engine).begin() as s:
+        ServiceRepository(s).get(service_id).discovered_at = utcnow() - timedelta(days=days)
+
+
+def test_services_list_shows_recent_and_attention_only(env: Env) -> None:
+    old = _add_service(env, date(2026, 9, 6), "SPX 09.06.26")
+    edge = _add_service(env, date(2026, 10, 11), "SPX 10.11.26")
+    failed = _add_service(env, date(2026, 9, 13), "SPX 09.13.26")
+    for service_id, days in ((env.service_id, 90), (old, 30.01), (edge, 29.99), (failed, 31)):
+        _age(env, service_id, days)
+    job_id = env.queue.enqueue("process", {"service_id": failed})
+    assert env.queue.lease("w") is not None
+    env.queue.fail(job_id, "w", "boom", retryable=False)
+    _login(env)
+    html = env.client.get("/").text
+    assert f'data-status="{env.service_id}">Needs review<' in html
+    assert f'data-status="{old}"' not in html
+    assert f'data-status="{edge}"' in html
+    assert f'data-status="{failed}">Processing failed<' in html
+    assert 'href="/?all=1">All services (1 hidden)</a>' in html
+    every = env.client.get("/?all=1").text
+    assert f'data-status="{old}"' in every and "Show only recent ones" in every
+
+
+@pytest.mark.parametrize("env", [WORDPRESS], indirect=True)
+def test_services_list_hides_old_reviews_published_outside_georg(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    posts = [{"id": "8216", "title": "Old sermon", "link": "https://church.example/old/"}]
+    monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: _FakeSite(posts))
+    _login(env)
+    _age(env, env.service_id, 29)
+    assert f'data-status="{env.service_id}">Needs review<' in env.client.get("/").text
+    _age(env, env.service_id, 31)
+    assert f'data-status="{env.service_id}"' not in env.client.get("/").text
+
+
+def test_purged_service_page_hides_audio_and_publishing(env: Env) -> None:
+    with session_factory(env.engine).begin() as s:
+        ServiceRepository(s).get(env.service_id).purged_at = utcnow()
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert 'id="purged"' in html and "Files removed after 60 days" in html
+    assert "<audio" not in html and "and publish</button>" not in html
+    assert f'data-purged="{env.service_id}"' in env.client.get("/?all=1").text

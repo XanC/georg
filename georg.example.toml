@@ -10,6 +10,15 @@ language = "en"
 [discovery]
 start_date = 2026-11-01
 
+# Georg is not an archive: a service's stored files (audio, renditions, previews,
+# transcripts, cached stage outputs) are deleted this many days after its sermon was last
+# published through Georg, or after it was fetched if it never was. Database rows stay,
+# so discovery never fetches it again and a later publish updates the same post.
+# Runs daily from the worker after discovery; `georg cleanup --dry-run` lists what it
+# would delete. 0 turns it off.
+[retention]
+days = 60
+
 # Day names: an occasion read from a bulletin is replaced by its canonical name when it
 # matches one exactly or as a known alias ("All Saints Sunday" -> "All Saints' Day").
 # Near matches only show as a suggestion on the review page.

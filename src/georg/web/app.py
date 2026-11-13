@@ -4,14 +4,14 @@
 import json
 import os
 import time
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Final
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, Form, Request
+from fastapi import Depends, FastAPI, Form, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -77,6 +77,16 @@ ACTIVE_STATUSES: Final = ("queued", "running")
 SEEK_RENDITION: Final = "service_hq"
 PREVIEW_RENDITION: Final = "preview"
 WEBSITE_CACHE_S: Final = 60.0
+RECENT_DAYS: Final = 30
+"""The Services list shows services fetched this recently, plus any needing attention."""
+CONFLICT_STATUS: Final = "Website edited: needs decision"
+ATTENTION_STATUSES: Final = (
+    "Needs review",
+    "Edited since approval",
+    "Publish failed",
+    CONFLICT_STATUS,
+    "Processing failed",
+)
 CUT_PREVIEW_LABELS: Final = {"sermon_preview": "Sermon", "service_preview": "Service"}
 """Built-in low-quality copies of the cuts (`georg.pipeline.local.CUT_PREVIEWS`)."""
 AUDIO_KINDS: Final = ("sermon_audio", "rendition")
@@ -377,22 +387,37 @@ def create_app(
         pubs = PublicationRepository(session)
         publishing = {j.payload.get("sermon_id") for j in active_jobs(PUBLISH)}
         configured = [o.name for o in config.outputs]
-        return {s.id: _service_status(s, sermons, pubs, configured, publishing) for s in services}
+        failed = _failed_processing(queue.list())
+        return {
+            s.id: _service_status(s, sermons, pubs, configured, publishing, failed)
+            for s in services
+        }
 
     @app.get("/", response_class=HTMLResponse)
-    def services(request: Request, user: User, session: DB) -> HTMLResponse:
+    def services(
+        request: Request,
+        user: User,
+        session: DB,
+        show_all: Annotated[bool, Query(alias="all")] = False,
+    ) -> HTMLResponse:
         found = ServiceRepository(session).newest_first(limit=200)
         status = statuses(session, found)
         same_date = same_date_posts(session, found)
-        rows = [
-            {
-                "service": service,
-                "status": status[service.id],
-                "same_date": same_date.get(service.id, {}).get("posts", []),
-            }
-            for service in found
-        ]
-        return render(request, "services.html", {"rows": rows}, user=user)
+        recent = utcnow() - timedelta(days=RECENT_DAYS)
+        rows = []
+        for service in found:
+            posts = same_date.get(service.id, {}).get("posts", [])
+            row = {"service": service, "status": status[service.id], "same_date": posts}
+            row["shown"] = service.discovered_at >= recent or _needs_attention(row["status"], posts)
+            rows.append(row)
+        visible = rows if show_all else [r for r in rows if r["shown"]]
+        context = {
+            "rows": visible,
+            "show_all": show_all,
+            "hidden": len(rows) - len([r for r in rows if r["shown"]]),
+            "recent_days": RECENT_DAYS,
+        }
+        return render(request, "services.html", context, user=user)
 
     @app.get("/services/{service_id}", response_class=HTMLResponse)
     def service_page(request: Request, service_id: int, user: User, session: DB) -> Response:
@@ -404,6 +429,7 @@ def create_app(
             "service": service,
             "status": statuses(session, [service])[service.id],
             "same_date": same_date_posts(session, [service]).get(service.id),
+            "retention_days": config.retention.days,
         }
         return render(request, "service.html", context, user=user)
 
@@ -503,6 +529,8 @@ def create_app(
             (a for a in [*cut_previews, *audio] if a.name in ("service_preview", SEEK_RENDITION)),
             None,
         )
+        if service.purged_at is not None:
+            audio, preview, cut_previews, seek = [], None, [], None
         return {
             "service": service,
             "sermon": sermon,
@@ -541,6 +569,8 @@ def create_app(
             "published_once": any(p.published_revision_id for p in publications),
             "author_name": lambda author: _author_name(users, author),
             "publishing": publishing,
+            "purged": service.purged_at,
+            "retention_days": config.retention.days,
             "errors": [],
             "polled": False,
         }
@@ -777,11 +807,14 @@ def _service_status(
     pubs: PublicationRepository,
     configured: list[str],
     publishing: set[Any],
+    failed_processing: Collection[int] = (),
 ) -> str:
     """One live status line for a service, from its sermon's approval and publications."""
     found = sermons.for_service(service.id)
     sermon = found[0] if found else None
     if sermon is None or sermon.current_revision_id is None:
+        if service.id in failed_processing:
+            return "Processing failed"
         return service.status_summary or "processing"
     approval = sermons.current_approval(sermon.id)
     if approval is None:
@@ -797,6 +830,8 @@ def _service_status(
     failed = [s.name for s in states if s.status == "failed"]
     if failed:
         return f"Publish failed ({', '.join(failed)})"
+    if any(s.status == "conflict" for s in states):
+        return CONFLICT_STATUS
     if states and all(
         s.status == "published" and s.publication and s.publication.revision_id == approved
         for s in states
@@ -809,6 +844,24 @@ def _service_status(
     ):
         return "Publishing"
     return "Approved"
+
+
+def _failed_processing(jobs: Sequence[JobInfo]) -> set[int]:
+    """Services whose latest process job failed for good."""
+    latest: dict[int, str] = {}
+    for job in sorted(jobs, key=lambda j: j.id):
+        service_id = job.payload.get("service_id")
+        if job.kind == PROCESS and isinstance(service_id, int):
+            latest[service_id] = job.status
+    return {service_id for service_id, status in latest.items() if status == "failed"}
+
+
+def _needs_attention(status: str, same_date_posts: Sequence[object]) -> bool:
+    """Whether the Services list keeps showing a service after RECENT_DAYS. A sermon
+    already on the website from outside Georg doesn't need reviewing here."""
+    if status == "Needs review" and same_date_posts:
+        return False
+    return status.startswith(ATTENTION_STATUSES)
 
 
 def _author_name(users: UserRepository, author: str) -> str:

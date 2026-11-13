@@ -17,6 +17,7 @@ from georg.idle import IdleWatchdog
 from georg.jobs.queue import JobQueue, LeasedJob, LeaseLostError
 from georg.notify import SmtpFactory, notify_job_failed, notify_review
 from georg.pipeline.registry import Processors, build_processors
+from georg.pipeline.retention import CLEANUP, cleanup, maybe_enqueue_cleanup
 from georg.pipeline.service import (
     DISCOVER,
     PROCESS,
@@ -80,7 +81,8 @@ class Worker:
         self.watchdog = watchdog
         self.smtp_factory = smtp_factory
         self.handlers: dict[str, Callable[[dict[str, Any]], object]] = {
-            DISCOVER: lambda _: discover(self.config, self.sessions, self.queue),
+            DISCOVER: self._discover,
+            CLEANUP: lambda _: cleanup(self.config, self.sessions, self.queue),
             PROCESS: self._process,
             NOTIFY: lambda payload: notify_review(
                 self.config, self.sessions, int(payload["service_id"]), factory=self.smtp_factory
@@ -97,6 +99,11 @@ class Worker:
                 overwrite=payload.get("overwrite") or (),
             ),
         }
+
+    def _discover(self, _: dict[str, Any]) -> list[int]:
+        found = discover(self.config, self.sessions, self.queue)
+        maybe_enqueue_cleanup(self.config, self.queue)
+        return found
 
     def _process(self, payload: dict[str, Any]) -> int | None:
         service_id = int(payload["service_id"])

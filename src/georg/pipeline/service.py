@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Discovery and processing of services recorded in the database."""
 
+import copy
 import logging
 import mimetypes
 import shutil
@@ -132,9 +133,10 @@ def process_service(
     if not included:
         raise ModuleError(f"service {service_id} has no included recording parts")
 
-    result, out_dir = _run(config, service_id, item, included, input_name, processors, cache)
+    result, out_dir, used = _run(config, service_id, item, included, input_name, processors, cache)
     with sessions.begin() as session:
         sermon_audio_id = _store_files(session, store, config, service_id, result, out_dir)
+        _record_run(session, service_id, cache.root, used)
         sermons = SermonRepository(session)
         found = sermons.for_service(service_id)
         sermon = found[0] if found else sermons.create(service_id)
@@ -197,7 +199,7 @@ def render_revision(
             part for part, row in zip(item.parts, service.parts, strict=True) if row.included
         )
         input_name = service.hints.get(INPUT_HINT)
-    result, out_dir = _run(
+    result, out_dir, used = _run(
         config,
         service_id,
         item,
@@ -220,6 +222,7 @@ def render_revision(
             out_dir,
             transcript=replace_transcript,
         )
+        _record_run(session, service_id, cache.root, used)
         sermons = SermonRepository(session)
         current = sermons.revision(revision_id)
         if replace_transcript:
@@ -263,7 +266,7 @@ def _run(
     metadata_override: SermonMetadata | None = None,
     transcribe_sermon: bool = True,
     format_transcript: bool = True,
-) -> tuple[LocalRunResult, Path]:
+) -> tuple[LocalRunResult, Path, set[Path]]:
     if not included:
         raise ModuleError(f"service {service_id} has no included recording parts")
     work = config.data_dir / "work" / str(service_id)
@@ -283,11 +286,13 @@ def _run(
         and generator.uses_documents
     ):
         document_texts = _document_texts(source, item, cache.root / "documents")
+    run_cache = copy.copy(cache)
+    run_cache.used = set()
     result = run_local(
         parts,
         out_dir,
         processors,
-        cache=cache,
+        cache=run_cache,
         renditions=config.renditions,
         language=config.language,
         source=item,
@@ -297,7 +302,7 @@ def _run(
         transcribe_sermon=transcribe_sermon,
         format_transcript=format_transcript,
     )
-    return result, out_dir
+    return result, out_dir, run_cache.used
 
 
 def _document_texts(source: InputSource, item: SourceItem, dest_dir: Path) -> dict[str, str]:
@@ -379,6 +384,14 @@ def _store_files(
         if kind == "sermon_audio" and sermon_audio_id is None:
             sermon_audio_id = artifact.id
     return sermon_audio_id
+
+
+def _record_run(session: Session, service_id: int, cache_root: Path, used: set[Path]) -> None:
+    """Remember the cache files the run relied on; the service has files again."""
+    service = ServiceRepository(session).get(service_id)
+    entries = {str(path.relative_to(cache_root)) for path in used if path.is_file()}
+    service.cache_entries = sorted(set(service.cache_entries) | entries)
+    service.purged_at = None
 
 
 def _is_preview(artifact: Artifact) -> bool:
@@ -551,6 +564,12 @@ def publish_sermon(
         if config.review.require_approval and not sermons.is_approved(sermon_id):
             raise ModuleError(f"sermon {sermon_id}'s current revision is not approved")
         revision_id = revision.id
+        if ServiceRepository(session).get(sermons.get(sermon_id).service_id).purged_at:
+            raise ModuleError(
+                f"sermon {sermon_id}: its files were removed by retention cleanup; "
+                "reprocess the service first",
+                retryable=False,
+            )
         content = _content(session, store, revision_id)
     if content.service_date is None:
         raise ModuleError(f"sermon {sermon_id} has no service date")

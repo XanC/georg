@@ -127,6 +127,12 @@ class DiscoveryConfig(_Section):
     `georg discover --since` overrides it for one run."""
 
 
+class RetentionConfig(_Section):
+    days: int = Field(default=60, ge=0)
+    """Delete a service's stored files this many days after its sermon was last published
+    through Georg (or after discovery, if never published); 0 turns cleanup off."""
+
+
 class GeorgConfig(_Section):
     instance: str = Field(pattern=r"^[a-z][a-z0-9-]*$")
     """Short stable name; part of every publication key, so never change it."""
@@ -139,6 +145,7 @@ class GeorgConfig(_Section):
     outputs: tuple[OutputConfig, ...] = ()
     review: ReviewConfig = ReviewConfig()
     discovery: DiscoveryConfig = DiscoveryConfig()
+    retention: RetentionConfig = RetentionConfig()
     calendar: CalendarConfig = CalendarConfig()
     idle_shutdown_minutes: int | None = Field(default=None, gt=0)
     """Power the host off after this long with no jobs and no web requests (off if unset)."""
