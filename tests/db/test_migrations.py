@@ -116,3 +116,39 @@ def test_upgrade_marks_existing_failed_jobs_as_notified(db_path: Path, tmp_path:
     finally:
         engine.dispose()
     assert [(r[0], r[1] is not None) for r in rows] == [("failed", True), ("queued", False)]
+
+
+def test_upgrade_recreates_tables_that_other_rows_reference(tmp_path: Path) -> None:
+    path = tmp_path / "old.sqlite3"
+    upgrade(path, "0002")
+    engine = create_engine(path)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO users (id, username, password_hash, role, created_at)"
+                    " VALUES (1, 'xan', 'x', 'admin', '2026-11-01')"
+                )
+            )
+            for sql in (
+                "INSERT INTO services (id, source_type, source_ref, hints_json, discovered_at)"
+                " VALUES (1, 'local_folder', 'a', '{}', '2026-11-01')",
+                "INSERT INTO sermons (id, service_id) VALUES (1, 1)",
+                "INSERT INTO sermon_revisions (id, sermon_id, number, author, service_start_ms,"
+                " sermon_start_ms, sermon_end_ms, service_end_ms, metadata_json,"
+                " field_origins_json, content_hash, created_at)"
+                " VALUES (1, 1, 1, 'system', 0, 1, 2, 3, '{}', '{}', 'h', '2026-11-01')",
+                "UPDATE sermons SET current_revision_id = 1",
+                "INSERT INTO approvals (revision_id, approved_by, approved_at)"
+                " VALUES (1, 1, '2026-11-02')",
+            ):
+                conn.execute(text(sql))
+        upgrade(path)
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT username, role FROM users")).all() == [
+                ("xan", "admin")
+            ]
+            assert conn.execute(text("PRAGMA foreign_key_check")).all() == []
+            assert conn.execute(text("PRAGMA foreign_keys")).scalar() == 1
+    finally:
+        engine.dispose()
