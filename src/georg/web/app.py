@@ -570,6 +570,7 @@ def create_app(
             "author_name": lambda author: _author_name(users, author),
             "publishing": publishing,
             "purged": service.purged_at,
+            "can_reprocess": _can_reprocess(service, publications),
             "retention_days": config.retention.days,
             "errors": [],
             "polled": False,
@@ -690,6 +691,10 @@ def create_app(
         if user.role != "admin":
             return PlainTextResponse("Reprocessing needs an admin.", status_code=403)
         sermon = SermonRepository(session).get(sermon_id)
+        service = ServiceRepository(session).get(sermon.service_id)
+        if not _can_reprocess(service, PublicationRepository(session).for_sermon(sermon_id)):
+            _flash(request, "This sermon is published; reprocessing would replace it.", "error")
+            return _redirect(f"/sermons/{sermon_id}")
         queue.enqueue(PROCESS, {"service_id": sermon.service_id, "reprocess": True})
         _flash(
             request,
@@ -844,6 +849,12 @@ def _service_status(
     ):
         return "Publishing"
     return "Approved"
+
+
+def _can_reprocess(service: Service, publications: Sequence[Publication]) -> bool:
+    """Published sermons are reprocessed only after retention removed their files; the
+    new revision then updates the existing publications on approval."""
+    return service.purged_at is not None or not publications
 
 
 def _failed_processing(jobs: Sequence[JobInfo]) -> set[int]:

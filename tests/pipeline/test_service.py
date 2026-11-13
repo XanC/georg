@@ -23,6 +23,7 @@ from georg.db.repositories import (
     ServiceRepository,
     UserRepository,
 )
+from georg.db.types import utcnow
 from georg.jobs.queue import JobQueue
 from georg.media.ffmpeg import probe
 from georg.modules.processors.metadata import RulesMetadataGenerator
@@ -547,3 +548,20 @@ def test_worker_reads_the_bulletin_for_metadata(
         assert meta.title == "Sermon for Feast of All Saints"
         assert revision.field_origins["occasion"] == f"rules-3/document text: {name}"
         assert "boundaries" in revision.field_origins
+
+
+def test_reprocess_after_purge_keeps_publications(config: GeorgConfig, engine: Engine) -> None:
+    sessions = session_factory(engine)
+    sermon_id, revision_id = processed(config, engine)
+    with sessions.begin() as s:
+        service_id = SermonRepository(s).get(sermon_id).service_id
+        ServiceRepository(s).get(service_id).purged_at = utcnow()
+        pub = PublicationRepository(s).prepare(sermon_id, "website", revision_id, "georg:test:k")
+        pub.external_id, pub_id = "8216", pub.id
+    new_revision = process_service(config, sessions, service_id, processors(), reprocess=True)
+    assert new_revision is not None and new_revision != revision_id
+    with sessions() as s:
+        assert ServiceRepository(s).get(service_id).purged_at is None
+        (pub,) = PublicationRepository(s).for_sermon(sermon_id)
+        assert pub.id == pub_id and pub.external_id == "8216"
+        assert [x.id for x in SermonRepository(s).for_service(service_id)] == [sermon_id]
