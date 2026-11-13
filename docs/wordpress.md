@@ -181,8 +181,8 @@ ignores `fields` and would write every field.
 When a `wordpress` output is configured, the sermon review page asks the site's core REST
 API (`/wp-json/wp/v2/ctc_sermon?after=…&before=…`, public and unsigned, so published posts
 only) for sermons dated on the service date. Any post that isn't this sermon's own
-publication is shown above the Publish button ("The website already has a sermon for this
-date: …"). Publishing is not blocked. If the site can't be reached, the page still loads
+publication is shown above the Publish button ("Published outside Georg for this date:
+…"). Publishing is not blocked. If the site can't be reached, the page still loads
 with a note that the check couldn't be done.
 
 The same warning appears on a service page before a sermon is proposed, and the Services
