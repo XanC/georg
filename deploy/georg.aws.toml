@@ -19,6 +19,11 @@ language = "en"
 [discovery]
 start_date = 2026-11-01
 
+# Retention cleanup stays off (0) until a production `georg cleanup --dry-run --days 60`
+# has been reviewed; then set it to 60.
+[retention]
+days = 0
+
 [[inputs]]
 name = "drive"
 type = "google_drive"

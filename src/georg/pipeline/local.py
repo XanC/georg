@@ -73,13 +73,17 @@ class StageCache:
 
     def __init__(self, root: Path) -> None:
         self.root = root
+        self.used: set[Path] = set()
+        """Every entry asked for, so a service can record the files its run relied on."""
 
     @staticmethod
     def key(*parts: object) -> str:
         return hashlib.sha256("\0".join(map(str, parts)).encode()).hexdigest()[:32]
 
     def path(self, stage: str, key: str, suffix: str = ".json") -> Path:
-        return self.root / stage / f"{key}{suffix}"
+        path = self.root / stage / f"{key}{suffix}"
+        self.used.add(path)
+        return path
 
     def text(self, stage: str, key: str, compute: Callable[[], str]) -> tuple[str, bool]:
         """Return the cached text, computing and storing it on a miss; and whether it hit."""

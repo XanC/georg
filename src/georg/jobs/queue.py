@@ -284,6 +284,13 @@ class JobQueue:
             value: datetime | None = conn.execute(stmt).scalar()
         return value
 
+    def last_created_at(self, kind: str) -> datetime | None:
+        """When the newest job of `kind` was queued, whatever its status."""
+        stmt = select(func.max(_jobs.created_at)).where(_jobs.kind == kind)
+        with self._engine.connect() as conn:
+            value: datetime | None = conn.execute(stmt).scalar()
+        return value
+
     def get(self, job_id: int) -> JobInfo:
         with self._engine.connect() as conn:
             row = conn.execute(select(_table).where(_jobs.id == job_id)).one_or_none()

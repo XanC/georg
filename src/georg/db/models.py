@@ -71,6 +71,7 @@ class Base(DeclarativeBase):
         date: Date(),
         dict[str, Any]: JSON(),
         list[int]: JSON(),
+        list[str]: JSON(),
         str: String(),
     }
 
@@ -117,6 +118,10 @@ class Service(Base):
     duration_ms: Mapped[int | None]
     discovered_at: Mapped[datetime] = mapped_column(default=utcnow)
     status_summary: Mapped[str | None]
+    cache_entries: Mapped[list[str]] = mapped_column(default=list)
+    """Stage cache files (relative to the cache root) the service's runs used."""
+    purged_at: Mapped[datetime | None]
+    """When retention cleanup deleted the service's stored files."""
 
     parts: Mapped[list["SourcePart"]] = relationship(
         back_populates="service", order_by="SourcePart.position", cascade="all, delete-orphan"

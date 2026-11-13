@@ -190,6 +190,42 @@ def _reprocess(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cleanup(args: argparse.Namespace) -> int:
+    from georg.core.config import RetentionConfig
+    from georg.db.engine import session_factory
+    from georg.jobs.queue import JobQueue
+    from georg.pipeline.retention import cleanup
+
+    config, engine = _open(args)
+    if args.days is not None:
+        config = config.model_copy(update={"retention": RetentionConfig(days=args.days)})
+    if config.retention.days <= 0:
+        print("retention is off ([retention] days = 0); pass --days N to preview a cleanup")
+        return 0
+    report = cleanup(config, session_factory(engine), JobQueue(engine), dry_run=args.dry_run)
+    verb = "would delete" if args.dry_run else "deleted"
+    for purge in report.purges:
+        print(
+            f"service {purge.service_id} ({purge.title}): {purge.reason} "
+            f"{purge.since:%Y-%m-%d}; {verb} {len(purge.files)} files, {purge.bytes} bytes"
+        )
+        if args.dry_run:
+            for path in purge.files:
+                print(f"  {path}")
+    for service_id in report.skipped_busy:
+        print(f"service {service_id}: skipped, it has queued or running jobs")
+    if report.stale_cache:
+        print(
+            f"unowned cache files older than {report.days} days: {verb} "
+            f"{len(report.stale_cache)} files, {report.stale_cache_bytes} bytes"
+        )
+    print(
+        f"{len(report.purges)} service(s), {report.bytes} bytes "
+        + ("would be freed (dry run)" if args.dry_run else "freed")
+    )
+    return 0
+
+
 WATCHDOG_POLL_SECONDS = 10.0
 """Upper bound on the idle poll while the watchdog is on, so the browser's one-minute
 shutdown warning is accurate to a few seconds."""
@@ -351,6 +387,25 @@ def build_parser() -> argparse.ArgumentParser:
     reprocess.add_argument("service_id", type=int)
     reprocess.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     reprocess.set_defaults(handler=_reprocess)
+
+    clean = commands.add_parser(
+        "cleanup",
+        help="delete stored files of services past [retention] days",
+        description="Delete the audio, renditions, previews, transcripts and cached stage "
+        "outputs of services whose sermon was published through Georg [retention] days ago "
+        "(or discovered that long ago, if never published). Database rows stay, so "
+        "discovery never fetches them again and publishing updates the existing posts.",
+    )
+    clean.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    clean.add_argument(
+        "--dry-run", action="store_true", help="list what would be deleted, delete nothing"
+    )
+    clean.add_argument(
+        "--days",
+        type=int,
+        help="use this retention instead of [retention] days (works while cleanup is off)",
+    )
+    clean.set_defaults(handler=_cleanup)
 
     work = commands.add_parser("worker", help="run queued jobs")
     work.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
