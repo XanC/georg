@@ -239,6 +239,9 @@ class ExternalRef(Model):
     target: str
     external_id: str
     url: str | None = None
+    written_at: datetime | None = None
+    """When Georg last wrote it successfully, if known, so the target can tell whether it was
+    changed there since."""
 
 
 class PublicationRequest(Model):

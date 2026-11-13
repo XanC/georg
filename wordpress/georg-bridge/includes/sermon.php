@@ -51,26 +51,49 @@ function georg_bridge_changed_fields( $current, $written ) {
 	return $changed;
 }
 
+/** Seconds by which a post may be modified after Georg's recorded write time and still
+ * count as Georg's own write (the post is saved just before Georg records the time). */
+define( 'GEORG_BRIDGE_WRITE_TOLERANCE', 10 );
+
 /**
- * For posts written before 0.4.0: whether someone other than the bridge user saved a
- * revision after the bridge user's last one.
+ * For posts written before 0.4.0: whether someone other than the bridge user saved the
+ * post after Georg last wrote it. WordPress's editor sets `_edit_last` on every save but
+ * does not always leave a revision, so revisions cannot tell.
  *
- * @param array $revisions   Each array( 'id' => int, 'author' => int ), any order.
- * @param int   $bridge_user The bridge's authenticated user ID.
+ * @param int         $edit_last        The post's `_edit_last` user ID (0 if unset).
+ * @param int         $bridge_user      The bridge's authenticated user ID.
+ * @param string      $modified_gmt     The post's `post_modified_gmt` (Y-m-d H:i:s, UTC).
+ * @param int|null    $georg_written_at When Georg last wrote it (Unix time), or null if
+ *                                      Georg does not know; then any non-bridge
+ *                                      `_edit_last` counts as an edit.
  * @return bool
  */
-function georg_bridge_edited_after_georg( $revisions, $bridge_user ) {
-	usort(
-		$revisions,
-		function ( $a, $b ) {
-			return (int) $a['id'] - (int) $b['id'];
-		}
-	);
-	$edited = false;
-	foreach ( $revisions as $revision ) {
-		$edited = (int) $revision['author'] !== (int) $bridge_user;
+function georg_bridge_legacy_edited( $edit_last, $bridge_user, $modified_gmt, $georg_written_at ) {
+	if ( ! $edit_last || (int) $edit_last === (int) $bridge_user ) {
+		return false;
 	}
-	return $edited;
+	if ( null === $georg_written_at ) {
+		return true;
+	}
+	$modified = strtotime( $modified_gmt . ' UTC' );
+	return false === $modified || $modified > $georg_written_at + GEORG_BRIDGE_WRITE_TOLERANCE;
+}
+
+/**
+ * Parses the optional `georg_written_at` parameter.
+ *
+ * @param mixed $value RFC 3339 time with a zone, or null/empty.
+ * @return int|null|false Unix time, null if absent, false if invalid.
+ */
+function georg_bridge_parse_time( $value ) {
+	if ( null === $value || '' === $value ) {
+		return null;
+	}
+	if ( ! is_string( $value ) || ! preg_match( '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/i', $value ) ) {
+		return false;
+	}
+	$time = strtotime( $value );
+	return false === $time ? false : $time;
 }
 
 /**

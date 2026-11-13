@@ -218,6 +218,8 @@ def test_publication_is_unique_per_target(sessions: sessionmaker[Session], sermo
             pub.id, ExternalRef(target="website", external_id="42", url="https://x/42")
         )
         pub_id = pub.id
+        written_at = pub.published_at
+        assert written_at is not None
 
         r2 = sermons.add_revision(
             sermon_id, author="user:1", boundaries=BOUNDS, metadata=META, transcript_markdown="t"
@@ -226,8 +228,10 @@ def test_publication_is_unique_per_target(sessions: sessionmaker[Session], sermo
         assert again.id == pub_id
         assert (again.status, again.revision_id) == ("pending", r2.id)
         assert again.publication_key == key
+        repo.mark_publishing(again.id)
+        assert again.published_at == written_at  # only a successful write moves it
         assert repo.external_ref(again) == ExternalRef(
-            target="website", external_id="42", url="https://x/42"
+            target="website", external_id="42", url="https://x/42", written_at=written_at
         )
         assert [p.id for p in repo.for_sermon(sermon_id)] == [pub_id]
         r2_id = r2.id

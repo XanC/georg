@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,7 +23,7 @@ import httpx
 
 from georg.core.config import OutputConfig
 from georg.core.errors import ModuleError, PublicationConflictError
-from georg.core.types import ArtifactRef, PublicationRequest, SermonMetadata
+from georg.core.types import ArtifactRef, ExternalRef, PublicationRequest, SermonMetadata
 from georg.modules.outputs.wordpress import WordPressOutput
 from georg.modules.outputs.wordpress_signing import decode_secret, sign
 
@@ -597,17 +597,44 @@ def page_loads() -> None:
             check(r.status_code == 200, f"front GET {path}", r.status_code)
 
 
-def edit_as_owner(post_id: int, title: str) -> None:
-    """Save the post as another WordPress user, as an editor fixing it on the website would."""
+def edit_as_owner(post_id: int, title: str, *, revision: bool = True) -> None:
+    """Save the post as another WordPress user, as an editor fixing it on the website would
+    (the editor sets `_edit_last`). Without `revision`, as on the live site's post 8228:
+    an autosave revision, then a save that leaves no revision."""
     php(f"""
         $u = get_user_by('login', 'owner-e2e');
         $id = $u ? $u->ID : wp_insert_user(array('user_login' => 'owner-e2e',
             'user_pass' => wp_generate_password(), 'role' => 'editor',
             'display_name' => 'Owner E2E'));
         wp_set_current_user($id);
+        if (!{"true" if revision else "false"}) {{
+            _wp_put_post_revision(get_post({post_id}), true);
+            add_filter('wp_revisions_to_keep', '__return_zero');
+        }}
         wp_update_post(array('ID' => {post_id}, 'post_title' => {json.dumps(title)}));
+        update_post_meta({post_id}, '_edit_last', $id);
         echo wp_json_encode(true);
         """)
+
+
+def modified_gmt(post_id: int) -> datetime:
+    value = php(f"echo wp_json_encode(get_post({post_id})->post_modified_gmt);")
+    return datetime.fromisoformat(value).replace(tzinfo=UTC)
+
+
+def make_legacy(post_id: int, *, modified: datetime | None = None) -> None:
+    """Make a sermon look written before georg-bridge 0.4.0, optionally modified at a time."""
+    php(f"delete_post_meta({post_id}, '_georg_written'); echo wp_json_encode(true);")
+    if modified is not None:
+        php(f"""
+            global $wpdb;
+            $wpdb->update($wpdb->posts, array(
+                'post_modified_gmt' => '{modified:%Y-%m-%d %H:%M:%S}',
+                'post_modified' => get_date_from_gmt('{modified:%Y-%m-%d %H:%M:%S}')),
+                array('ID' => {post_id}));
+            clean_post_cache({post_id});
+            echo wp_json_encode(true);
+            """)
 
 
 def check_site_edits(audio: ArtifactRef) -> None:
@@ -617,7 +644,7 @@ def check_site_edits(audio: ArtifactRef) -> None:
     post_id = int(out.publish(first).external_id)
     status = out.site_status(key)
     check(status is not None and status["edited"] == [], "fresh sermon has no site edits", status)
-    check(status is not None and status["version"] == "0.4.0", "status reports bridge version")
+    check(status is not None and status["version"] == "0.4.1", "status reports bridge version")
     unchanged = first.model_copy(update={"previous": first})
     check(out.fields_to_send(unchanged) == frozenset(), "unchanged republish sends nothing")
 
@@ -646,17 +673,59 @@ def check_site_edits(audio: ArtifactRef) -> None:
     status = out.site_status(key)
     check(status is not None and status["edited"] == [], "overwrite settles the edit", status)
 
-    # Sermons written before 0.4.0 have no _georg_written: judged by revision authors.
+    # Sermons written before 0.4.0 have no _georg_written: judged by _edit_last and the
+    # modified time against when Georg last wrote them.
+    every = {"title", "content", "date", "terms:ctc_sermon_book"}
     legacy = f"georg:e2e{RUN}:legacy:website"
     legacy_id = int(out.publish(request(legacy, audio, "Legacy", "Old words.")).external_id)
-    php(f"delete_post_meta({legacy_id}, '_georg_written'); echo wp_json_encode(true);")
-    status = out.site_status(legacy)
+    bridge_user = php(
+        f"echo wp_json_encode((int) get_post_meta({legacy_id}, '_edit_last', true)"
+        " === get_user_by('login', 'georg')->ID);"
+    )
+    check(bridge_user is True, "a Georg write sets _edit_last to the bridge user")
+    written = modified_gmt(legacy_id)  # Georg records its time just after the bridge saves
+    make_legacy(legacy_id)
+    status = out.site_status(legacy, written)
     check(status is not None and status["edited"] == [], "legacy, Georg-only: not edited", status)
-    edit_as_owner(legacy_id, "Legacy Fixed")
-    php(f"delete_post_meta({legacy_id}, '_georg_written'); echo wp_json_encode(true);")
-    status = out.site_status(legacy)
+
+    # Live post 8228: the owner saves a minute after Georg; only an autosave revision.
+    edit_as_owner(legacy_id, "Legacy Fixed", revision=False)
+    make_legacy(legacy_id, modified=written + timedelta(minutes=1))
+    revisions = php(
+        f"echo wp_json_encode(array_map(function ($r) {{ return wp_is_post_autosave($r); }},"
+        f" array_values(wp_get_post_revisions({legacy_id}))));"
+    )
+    check(all(revisions), "8228-like post has only an autosave revision", revisions)
+    status = out.site_status(legacy, written)
     edited = set(status["edited"]) if status else set()
-    check({"title", "content", "date"} <= edited, "legacy, edited by owner: all edited", status)
+    check(every <= edited, "legacy 8228: saved by the owner after Georg: all edited", status)
+    check(status is not None and status["modified_by"] == "Owner E2E", "8228 modified_by", status)
+    ref = ExternalRef(target="website", external_id=str(legacy_id), written_at=written)
+    try:
+        out.publish(request(legacy, audio, "Legacy", "New words.").model_copy(
+            update={"existing": ref}))  # fmt: skip
+        check(False, "legacy 8228: republish is refused")
+    except PublicationConflictError as exc:
+        check(every <= set(exc.fields), "legacy 8228: 409 names every field", exc.fields)
+    check(sermon_state(legacy_id)["title"] == "Legacy Fixed", "legacy 8228: 409 wrote nothing")
+
+    # Live post 8212: _edit_last from an older owner edit, then Georg rewrote the post.
+    rewritten = f"georg:e2e{RUN}:legacy-rewritten:website"
+    rewritten_id = int(out.publish(request(rewritten, audio, "Old", "Old words.")).external_id)
+    written = modified_gmt(rewritten_id)
+    php(
+        f"update_post_meta({rewritten_id}, '_edit_last', get_user_by('login', 'owner-e2e')->ID);"
+        " echo wp_json_encode(true);"
+    )
+    make_legacy(rewritten_id)
+    status = out.site_status(rewritten, written)
+    check(status is not None and status["edited"] == [], "legacy 8212: not edited", status)
+    status = out.site_status(rewritten)
+    edited = set(status["edited"]) if status else set()
+    check(every <= edited, "legacy, no Georg write time: a non-bridge _edit_last is an edit")
+    ref = ExternalRef(target="website", external_id=str(rewritten_id), written_at=written)
+    out.publish(request(rewritten, audio, "New", "New words.").model_copy(update={"existing": ref}))
+    check(sermon_state(rewritten_id)["title"] == "New", "legacy 8212: republish writes")
 
 
 def main() -> int:

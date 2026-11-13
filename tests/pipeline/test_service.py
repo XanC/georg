@@ -429,6 +429,10 @@ def test_publish_sends_previous_and_parks_conflicts(config: GeorgConfig, engine:
     website = FakeOutput("website", {"sermon"})
     publish_sermon(config, sessions, sermon_id, outputs=[phone, website])
     assert website.requests[0].previous is None
+    with sessions() as s:
+        found = PublicationRepository(s).find(sermon_id, "website")
+        assert found is not None and found.published_at is not None
+        written_at = found.published_at
 
     with sessions.begin() as s:
         repo = SermonRepository(s)
@@ -452,6 +456,7 @@ def test_publish_sends_previous_and_parks_conflicts(config: GeorgConfig, engine:
     sent = website.requests[-1]
     assert sent.metadata.title == "New title"
     assert sent.previous is not None and sent.previous.metadata.title != "New title"
+    assert sent.existing is not None and sent.existing.written_at == written_at
     with sessions() as s:
         pub = PublicationRepository(s).find(sermon_id, "website")
         assert pub is not None and pub.status == "conflict"
@@ -469,6 +474,7 @@ def test_publish_sends_previous_and_parks_conflicts(config: GeorgConfig, engine:
         pub = PublicationRepository(s).find(sermon_id, "website")
         assert pub is not None and pub.status == "published"
         assert pub.published_revision_id == second and pub.conflict_fields is None
+        assert pub.published_at is not None and pub.published_at > written_at
 
 
 def test_publish_waits_for_missing_renditions(config: GeorgConfig, engine: Engine) -> None:

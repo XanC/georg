@@ -53,11 +53,25 @@ georg_check(
 georg_check( array() === georg_bridge_conflicts( array( 'title' ), array( 'title' ), array( 'title' ) ), 'overwrite clears a conflict' );
 georg_check( array() === georg_bridge_conflicts( array( 'date' ), array( 'title' ), array() ), 'skipping the edited field avoids the conflict' );
 
-// Revisions: bridge user 5, owner user 2.
-georg_check( true === georg_bridge_edited_after_georg( array( array( 'id' => 10, 'author' => 5 ), array( 'id' => 12, 'author' => 2 ) ), 5 ), 'a revision by another user after Georg (post 8228) is an edit' );
-georg_check( false === georg_bridge_edited_after_georg( array( array( 'id' => 10, 'author' => 5 ), array( 'id' => 11, 'author' => 5 ) ), 5 ), 'only Georg revisions (posts 8212/8216) are not an edit' );
-georg_check( false === georg_bridge_edited_after_georg( array( array( 'id' => 14, 'author' => 5 ), array( 'id' => 12, 'author' => 2 ) ), 5 ), 'Georg writing after the edit settles it' );
-georg_check( false === georg_bridge_edited_after_georg( array(), 5 ), 'no revisions, no edit' );
+// Posts written before 0.4.0, from the live site: bridge user 4 (scripts), owner user 2 (xan).
+// 8228: Georg wrote it, then the owner saved at 10:56:03 CST (no revision, only an
+// autosave), leaving _edit_last = 2 and post_modified_gmt after Georg's write.
+georg_check( true === georg_bridge_legacy_edited( 2, 4, '2026-11-13 16:56:03', strtotime( '2026-11-13T16:11:52Z' ) ), 'post 8228: saved by the owner after Georg wrote it is an edit' );
+// 8212: _edit_last = 2 from an older edit, but Georg rewrote the post at 10:11:52 CST, so
+// post_modified_gmt is Georg's own write; Georg records its time just after the save.
+georg_check( false === georg_bridge_legacy_edited( 2, 4, '2026-11-13 16:11:52', strtotime( '2026-11-13T16:11:53Z' ) ), 'post 8212: Georg rewriting after the edit settles it' );
+georg_check( false === georg_bridge_legacy_edited( 2, 4, '2026-11-13 16:11:52', strtotime( '2026-11-13T16:11:52Z' ) ), 'modified exactly at Georg\'s write is not an edit' );
+georg_check( false === georg_bridge_legacy_edited( 2, 4, '2026-11-13 16:12:02', strtotime( '2026-11-13T16:11:52Z' ) ), 'within the tolerance after Georg\'s write is not an edit' );
+georg_check( true === georg_bridge_legacy_edited( 2, 4, '2026-11-13 16:12:03', strtotime( '2026-11-13T16:11:52Z' ) ), 'past the tolerance is an edit' );
+// 8214 ... 8226: no _edit_last.
+georg_check( false === georg_bridge_legacy_edited( 0, 4, '2026-11-13 16:56:03', strtotime( '2026-11-13T16:11:52Z' ) ), 'no _edit_last (posts 8214-8226) is not an edit' );
+georg_check( false === georg_bridge_legacy_edited( 4, 4, '2026-11-13 16:56:03', strtotime( '2026-11-13T16:11:52Z' ) ), '_edit_last by the bridge user is not an edit' );
+georg_check( true === georg_bridge_legacy_edited( 2, 4, '2026-11-13 16:11:52', null ), 'without Georg\'s write time a non-bridge _edit_last is an edit' );
+
+georg_check( null === georg_bridge_parse_time( null ) && null === georg_bridge_parse_time( '' ), 'absent georg_written_at' );
+georg_check( strtotime( '2026-11-13T16:11:52Z' ) === georg_bridge_parse_time( '2026-11-13T16:11:52Z' ), 'parses UTC' );
+georg_check( strtotime( '2026-11-13T16:11:52Z' ) === georg_bridge_parse_time( '2026-11-13T10:11:52-06:00' ), 'parses an offset' );
+georg_check( false === georg_bridge_parse_time( '2026-11-13 16:11:52' ) && false === georg_bridge_parse_time( 'yesterday' ), 'a time without a zone is invalid' );
 
 $georg_taxonomies = array( 'ctc_sermon_book', 'ctc_sermon_series' );
 georg_check( null === georg_bridge_parse_fields( null, $georg_taxonomies ), 'absent fields means all' );

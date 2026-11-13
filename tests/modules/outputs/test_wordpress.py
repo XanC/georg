@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -15,7 +16,7 @@ import pytest
 from georg.core.config import OutputConfig
 from georg.core.contracts import OutputTarget
 from georg.core.errors import ConfigError, ModuleError, PublicationConflictError
-from georg.core.types import ArtifactRef, PublicationRequest, SermonMetadata
+from georg.core.types import ArtifactRef, ExternalRef, PublicationRequest, SermonMetadata
 from georg.modules.outputs.wordpress import (
     PUBLICATION_KEY_PATTERN,
     WordPressOutput,
@@ -114,7 +115,7 @@ class FakeBridge:
                 "edited": self.edited.get(key, []),
                 "modified_gmt": "2026-11-13T16:55:00+00:00",
                 "modified_by": "Owner",
-                "version": "0.4.0",
+                "version": "0.4.1",
             },
         )
 
@@ -780,6 +781,38 @@ def test_skip_and_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     put = _puts(bridge)[-1]
     assert put["overwrite"] == ["title"]  # only fields being sent
     assert bridge.sermons[KEY]["title"] == "Greater Expectations"
+
+
+def test_sends_when_georg_last_wrote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sermons written before georg-bridge 0.4.0 are judged against Georg's last write."""
+    bridge = FakeBridge()
+    out, _ = make_output(bridge, monkeypatch)
+    first = make_request(tmp_path)
+    out.publish(first)
+    assert "georg_written_at" not in _puts(bridge)[-1]
+    at = datetime(2026, 11, 13, 10, 11, 52, 600000, tzinfo=ZoneInfo("America/Chicago"))
+    existing = ExternalRef(target="website", external_id="101", written_at=at)
+    again = _republish(tmp_path, first, title="Other").model_copy(update={"existing": existing})
+    out.publish(again)
+    assert _puts(bridge)[-1]["georg_written_at"] == "2026-11-13T16:11:52Z"
+
+    out.site_status(KEY, at)
+    status = [r for r in bridge.requests if r.url.path.endswith("/status")][-1]
+    assert status.url.params["georg_written_at"] == "2026-11-13T16:11:52Z"
+    out.site_status(KEY, datetime(2026, 11, 13, 16, 11, 52))  # naive: the database's UTC
+    status = [r for r in bridge.requests if r.url.path.endswith("/status")][-1]
+    assert status.url.params["georg_written_at"] == "2026-11-13T16:11:52Z"
+    out.site_status(KEY)
+    status = [r for r in bridge.requests if r.url.path.endswith("/status")][-1]
+    assert "georg_written_at" not in status.url.params
+
+    bridge.edited[KEY] = ["title"]
+    with pytest.raises(PublicationConflictError):
+        out.publish(
+            again.model_copy(update={"metadata": again.metadata.model_copy(update={"title": "X"})})
+        )
+    status = [r for r in bridge.requests if r.url.path.endswith("/status")][-1]
+    assert status.url.params["georg_written_at"] == "2026-11-13T16:11:52Z"
 
 
 def test_site_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
