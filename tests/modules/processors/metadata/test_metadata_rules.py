@@ -344,3 +344,12 @@ def test_rules_generator_normalizes_bulletin_occasion(tmp_path: Path) -> None:
     assert proposal.origins["occasion"].endswith(
         "; not a known day name; did you mean 'The Holy Trinity'?"
     )
+
+
+def test_title_uses_occasion_normalized_from_punctuation(tmp_path: Path) -> None:
+    gen = RulesMetadataGenerator({"title": "Sermon for {occasion}"}, calendar=load_calendar())
+    text = bulletin(tmp_path, [["St Luke, Evangelist"], ["November 1, 2026"]])
+    proposal = gen.propose(doc_ctx(date(2026, 11, 1), {DOC_1101: text}))
+    assert proposal.metadata.occasion == "St. Luke, Evangelist"
+    assert proposal.metadata.title == "Sermon for St. Luke, Evangelist"
+    assert proposal.origins["occasion"].endswith("; normalized from 'St Luke, Evangelist'")
