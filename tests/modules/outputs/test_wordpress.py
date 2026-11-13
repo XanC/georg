@@ -747,6 +747,52 @@ def test_republish_sends_only_changed_fields(
     assert out.fields_to_send(retext) == {"content", "full_text"}
 
 
+def test_preacher_only_change_sends_only_the_speaker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bridge = FakeBridge()
+    out, _ = make_output(bridge, monkeypatch)
+    first = make_request(tmp_path)
+    out.publish(first)
+    sent = len(bridge.requests)
+    out.publish(_republish(tmp_path, first, preacher="Rev. X"))
+    [put] = [json.loads(r.content) for r in bridge.requests[sent:] if r.method == "PUT"]
+    assert put["fields"] == ["terms:ctc_sermon_speaker"]
+    assert bridge.sermons[KEY]["terms"]["ctc_sermon_speaker"] == ["Rev. X"]
+    assert not any(r.url.path.endswith("/audio") for r in bridge.requests[sent:])
+
+
+def test_unchanged_revision_makes_no_website_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bridge = FakeBridge()
+    out, _ = make_output(bridge, monkeypatch)
+    first = make_request(tmp_path)
+    out.publish(first)
+    sent = len(bridge.requests)
+    at = datetime(2026, 11, 13, 16, 11, 52, tzinfo=UTC)
+    existing = ExternalRef(target="website", external_id="101", url="https://x/101", written_at=at)
+    same = _republish(tmp_path, first).model_copy(update={"existing": existing})
+    assert out.publish(same) == existing  # keeps Georg's last write time
+    assert len(bridge.requests) == sent
+
+
+def test_site_edited_content_is_a_conflict_without_touching_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bridge = FakeBridge()
+    out, _ = make_output(bridge, monkeypatch)
+    first = make_request(tmp_path)
+    out.publish(first)
+    content = bridge.sermons[KEY]["content"]
+    bridge.edited[KEY] = ["content"]
+    retext = first.model_copy(update={"transcript_markdown": "Other.", "previous": first})
+    with pytest.raises(PublicationConflictError) as err:
+        out.publish(retext)
+    assert err.value.fields == ["content"]
+    assert bridge.sermons[KEY]["content"] == content
+
+
 def test_conflict_names_fields_and_editor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     bridge = FakeBridge()
     out, _ = make_output(bridge, monkeypatch)

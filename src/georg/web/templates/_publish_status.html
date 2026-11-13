@@ -9,6 +9,12 @@
   </form>
   {% endif %}
   {% elif user and user.can_edit %}
+  {% for w in website_updates or [] %}
+  <p data-approve-sends="{{ w.name }}">{% if w.failed %}Couldn't check what approving will send to the website{% if website_updates|length > 1 %} ({{ w.name }}){% endif %}.
+  {%- elif not w.fields %}Approving won't change the website{% if website_updates|length > 1 %} ({{ w.name }}){% endif %}.
+  {%- else %}Approving will also update on the website{% if website_updates|length > 1 %} ({{ w.name }}){% endif %}: {% for f, label in w.fields %}{{ label|capitalize }}{{ ", " if not loop.last }}{% endfor %}.
+  {%- if w.conflict %} Not sent while edited there: {% for f, label in w.conflict %}{{ label|capitalize }}{{ ", " if not loop.last }}{% endfor %}.{% endif %}{% endif %}</p>
+  {% endfor %}
   <form method="post" action="/sermons/{{ sermon.id }}/approve" class="stack narrow">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="revision_id" value="{{ revision.id }}">

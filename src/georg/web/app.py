@@ -410,14 +410,10 @@ def create_app(
     # --- sermon review ----------------------------------------------------------------
 
     def publish_payload(session: Session, sermon_id: int) -> dict[str, Any] | None:
-        """The publish job for an approval: once a website holds the sermon, it is only
-        updated through "Update website…", so edits made there are not overwritten unseen.
-        None if no output is left to publish."""
-        held = _held_websites(config, PublicationRepository(session).for_sermon(sermon_id))
-        if not held:
-            return {"sermon_id": sermon_id}
-        targets = [o.name for o in config.outputs if o.name not in held]
-        return {"sermon_id": sermon_id, "targets": targets} if targets else None
+        """The publish job for an approval: every output. A website that already holds the
+        sermon gets only the fields changed since it last accepted a revision, and refuses
+        fields edited there (a conflict, resolved through "Update website…")."""
+        return {"sermon_id": sermon_id}
 
     def website_updates(session: Session, sermon_id: int) -> list[dict[str, Any]]:
         """Per website already holding the sermon: the fields an update would send, and
@@ -877,7 +873,7 @@ class OutputState:
 
 def _held_websites(config: GeorgConfig, publications: Sequence[Publication]) -> set[str]:
     """Website outputs that already hold some revision of the sermon (or wait for a
-    decision on one): updated only when a reviewer asks."""
+    decision on one): they get only changed fields, and "Update website…" on the review page."""
     websites = {o.name for o in config.outputs if o.type == "wordpress"}
     return {
         p.target_name

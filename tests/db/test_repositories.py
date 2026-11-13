@@ -233,6 +233,9 @@ def test_publication_is_unique_per_target(sessions: sessionmaker[Session], sermo
         assert repo.external_ref(again) == ExternalRef(
             target="website", external_id="42", url="https://x/42", written_at=written_at
         )
+        repo.mark_published(again.id, repo.external_ref(again))
+        assert again.published_at == written_at  # published without a write: time kept
+        assert again.published_revision_id == r2.id
         assert [p.id for p in repo.for_sermon(sermon_id)] == [pub_id]
         r2_id = r2.id
 

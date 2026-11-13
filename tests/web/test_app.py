@@ -951,7 +951,8 @@ class _FakeBridgeSite(_FakeSite):
         return {"edited": self.edited, "modified_by": "Owner", "modified_at": at}
 
     def field_label(self, field: str) -> str:
-        return {"terms:ctc_sermon_book": "scripture"}.get(field, field)
+        labels = {"terms:ctc_sermon_book": "scripture", "terms:ctc_sermon_speaker": "speaker"}
+        return labels.get(field, field)
 
 
 def _published_website(env: Env, *, conflict: list[str] | None = None) -> None:
@@ -965,23 +966,26 @@ def _published_website(env: Env, *, conflict: list[str] | None = None) -> None:
 
 
 @pytest.mark.parametrize("env", [SITE_AND_PHONE], indirect=True)
-def test_published_sermon_approves_without_updating_the_website(
+def test_published_sermon_approves_and_updates_the_website(
     env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    site = _FakeBridgeSite({"title"}, [])
+    site = _FakeBridgeSite({"terms:ctc_sermon_speaker"}, [])
     monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: site)
     _published_website(env)
     _login(env)
     html = env.client.get(f"/sermons/{env.sermon_id}").text
     assert ">Approve</button>" in html and "and publish</button>" not in html
+    assert "Approving will also update on the website: Speaker." in html
     assert "<summary>Update website…</summary>" in html
-    assert "Would send: title." in html and "Approve revision 1 first." in html
+    assert "Would send: speaker." in html and "Approve revision 1 first." in html
     token = _csrf(env.client, f"/sermons/{env.sermon_id}")
     env.client.post(
         f"/sermons/{env.sermon_id}/approve",
         data={"csrf_token": token, "revision_id": str(env.revision_id)},
     )
-    assert _jobs(env, "publish") == [{"sermon_id": env.sermon_id, "targets": ["phone"]}]
+    assert _jobs(env, "publish") == [{"sermon_id": env.sermon_id}]
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert "Approving will also update" not in html
 
     html = env.client.get(f"/sermons/{env.sermon_id}").text
     assert ">Update website</button>" in html and "Skip these fields" not in html
@@ -989,6 +993,29 @@ def test_published_sermon_approves_without_updating_the_website(
         f"/sermons/{env.sermon_id}/publish", data={"csrf_token": token, "website": "website"}
     )
     assert _jobs(env, "publish")[-1] == {"sermon_id": env.sermon_id, "targets": ["website"]}
+
+
+@pytest.mark.parametrize("env", [SITE_AND_PHONE], indirect=True)
+def test_approve_says_what_it_sends_to_the_website(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    site = _FakeBridgeSite(set(), [])
+    monkeypatch.setattr("georg.web.app.build_output", lambda *a, **k: site)
+    _published_website(env)
+    _login(env)
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert "Approving won't change the website." in html
+
+    site.sending, site.edited = {"content", "title"}, ["content"]
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert (
+        "Approving will also update on the website: Content, Title."
+        " Not sent while edited there: Content." in html
+    )
+
+    site.edited = None
+    html = env.client.get(f"/sermons/{env.sermon_id}").text
+    assert "Couldn't check what approving will send to the website." in html
 
 
 @pytest.mark.parametrize("env", [SITE_AND_PHONE], indirect=True)

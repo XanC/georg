@@ -159,10 +159,15 @@ A 409 puts the website publication in the `conflict` state with the fields and e
 ("Website edited: needs decision" on the review page); it is not retried, and the other
 outputs publish as usual.
 
-Once a website holds the sermon, approving a new revision publishes the other outputs
-only. The review page's "Update website…" shows which fields would be sent and, if some
-were edited on the website, "Content was edited on the website (date, by name)" with
-"Skip these fields" (send the rest) or "Overwrite on website" (needs a confirming tick).
+Approving a revision publishes to every output, websites included. A website that already
+holds the sermon gets only the changed fields, and no request at all when none changed
+(the publication then keeps its last write time). Above Approve, the review page says
+what it will send, e.g. "Approving will also update on the website: Speaker". Approve
+never overwrites a field edited on the website: the bridge's 409 puts the website in the
+`conflict` state while phone and archive still publish. "Update website…" then shows which
+fields would be sent and "Content was edited on the website (date, by name)" with "Skip
+these fields" (send the rest) or "Overwrite on website" (needs a confirming tick); it is
+also how a failed website update is retried.
 
 Install georg-bridge 0.4.0 before deploying a Georg that sends `fields`: an older bridge
 ignores `fields` and would write every field. Georg also sends `georg_written_at`, which
