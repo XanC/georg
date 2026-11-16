@@ -16,6 +16,7 @@ until `georg resume` verifies each published object at its target.
 import hashlib
 import json
 import logging
+import shutil
 import sqlite3
 import tarfile
 import tempfile
@@ -214,25 +215,22 @@ def export_bundle(
         _backup(db_path, snapshot)
         cells = _rewrite_paths(snapshot, tokens)
 
-        artifact_dir = tmp / ARTIFACTS_DIR
-        artifact_dir.mkdir()
         missing: list[str] = []
         conn = sqlite3.connect(snapshot)
         try:
             shas = [row[0] for row in conn.execute("SELECT DISTINCT sha256 FROM artifacts")]
         finally:
             conn.close()
-        count = 0
+        stored: list[Path] = []
         for sha in shas:
             if store.exists(sha):
-                (artifact_dir / sha).write_bytes(store.path(sha).read_bytes())
-                count += 1
+                stored.append(store.path(sha))
             else:
                 missing.append(sha)
 
         files = {
             BUNDLE_DB: _sha256(snapshot),
-            **{f"{ARTIFACTS_DIR}/{p.name}": _sha256(p) for p in sorted(artifact_dir.iterdir())},
+            **{f"{ARTIFACTS_DIR}/{p.name}": _sha256(p) for p in stored},
         }
         manifest = {
             "format": BUNDLE_FORMAT,
@@ -251,10 +249,10 @@ def export_bundle(
         with tarfile.open(out, "w") as tar:
             tar.add(manifest_path, arcname=MANIFEST_NAME)
             tar.add(snapshot, arcname=BUNDLE_DB)
-            for p in sorted(artifact_dir.iterdir()):
+            for p in stored:  # tar streams the store files; no copy, no buffering
                 tar.add(p, arcname=f"{ARTIFACTS_DIR}/{p.name}")
 
-    return ExportReport(out, church_id, count, missing, cells)
+    return ExportReport(out, church_id, len(stored), missing, cells)
 
 
 @dataclass
@@ -330,7 +328,7 @@ def import_bundle(config: GeorgConfig, bundle: Path) -> ImportReport:
             dest = store.location(p.name)
             if not dest.is_file():
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(p.read_bytes())
+                shutil.copyfile(p, dest)
                 dest.chmod(0o444)
             restored += 1
 
