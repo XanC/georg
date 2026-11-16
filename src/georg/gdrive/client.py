@@ -221,6 +221,19 @@ class DriveClient:
             return None
         return self._json(response, f"get {file_id}")
 
+    def update_file(
+        self, file_id: str, metadata: dict[str, Any], fields: str = "id, name"
+    ) -> dict[str, Any]:
+        """Patch a file's metadata; return the fields requested."""
+        response = self.request(
+            "PATCH",
+            f"{API_URL}/files/{file_id}",
+            action=f"update {file_id}",
+            params={"fields": fields, "supportsAllDrives": "true"},
+            json=metadata,
+        )
+        return self._json(response, f"update {file_id}")
+
     def create_folder(self, name: str, parent: str) -> dict[str, Any]:
         response = self.request(
             "POST",

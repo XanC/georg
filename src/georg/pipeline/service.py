@@ -33,6 +33,7 @@ from georg.core.types import (
 from georg.db.models import Artifact
 from georg.db.repositories import (
     ArtifactRepository,
+    IdentityRepository,
     PublicationRepository,
     SermonRepository,
     ServiceRepository,
@@ -430,8 +431,13 @@ def _renditions_for(
     return found
 
 
-def publication_key(config: GeorgConfig, sermon_id: int, target_name: str) -> str:
-    return f"georg:{config.instance}:sermon-{sermon_id}:{target_name}"
+def publication_key(church_id: str, sermon_id: int, target_name: str) -> str:
+    """The sermon's idempotency key at a target, namespaced by the church's UUID.
+
+    The UUID is permanent, so the key survives renaming the `instance` slug;
+    keys made before the UUID existed are migrated once, never recomputed.
+    """
+    return f"georg:{church_id}:sermon-{sermon_id}:{target_name}"
 
 
 @dataclass(frozen=True)
@@ -524,7 +530,7 @@ def pending_request(
     key = (
         publication.publication_key
         if publication
-        else publication_key(config, sermon_id, target.name)
+        else publication_key(IdentityRepository(session).church_id(), sermon_id, target.name)
     )
     return _request(content, target, key, previous=previous)
 
@@ -572,6 +578,7 @@ def publish_sermon(
                 retryable=False,
             )
         content = _content(session, store, revision_id)
+        church_id = IdentityRepository(session).church_id()
     if content.service_date is None:
         raise ModuleError(f"sermon {sermon_id} has no service date")
 
@@ -585,7 +592,7 @@ def publish_sermon(
             )
             statuses[target.name] = "waiting"
             continue
-        key = publication_key(config, sermon_id, target.name)
+        key = publication_key(church_id, sermon_id, target.name)
         with sessions.begin() as session:
             pubs = PublicationRepository(session)
             found = pubs.find(sermon_id, target.name)

@@ -8,6 +8,7 @@ import re
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
     from sqlalchemy import Engine
 
     from georg.core.config import GeorgConfig
+    from georg.core.contracts import OutputTarget
 
 DEFAULT_CONFIG = Path("georg.toml")
 SAMPLE_MS = 120_000
@@ -223,6 +225,158 @@ def _cleanup(args: argparse.Namespace) -> int:
         f"{len(report.purges)} service(s), {report.bytes} bytes "
         + ("would be freed (dry run)" if args.dry_run else "freed")
     )
+    return 0
+
+
+WP_CLI = "sudo -u www-data php /usr/local/lib/wp-cli/wp-cli.phar --path=/var/www/html"
+"""How WP-CLI is invoked on a hosted church's web server."""
+
+
+@dataclass(frozen=True)
+class _KeyChange:
+    """One publications row whose key moves from the instance slug to the church UUID."""
+
+    publication_id: int
+    target_name: str
+    old_key: str
+    new_key: str
+    external_id: str | None
+
+
+def _wp_rekey_script(changes: Sequence[_KeyChange]) -> str:
+    """A WP-CLI shell script re-keying `_georg_publication_key` on posts and attachments.
+
+    Each `post list` only selects posts whose meta still holds the old key, so
+    re-running the script changes nothing; attachments carry the same meta key,
+    and `--post_type=any` covers them along with the sermon posts.
+    """
+    lines = [
+        "#!/bin/sh",
+        "# Re-key Georg's WordPress publications to the church-UUID key form.",
+        "# Run on the church web server; idempotent.",
+        "set -eu",
+        f'WP="{WP_CLI}"',
+        "",
+    ]
+    for change in changes:
+        lines += [
+            f"# publication {change.publication_id} ({change.target_name})",
+            "for ID in $($WP post list --post_type=any --post_status=any"
+            f" --meta_key=_georg_publication_key --meta_value='{change.old_key}'"
+            " --field=ID); do",
+            f"  $WP post meta update \"$ID\" _georg_publication_key '{change.new_key}'",
+            "done",
+            "",
+        ]
+    return "\n".join(lines)
+
+
+def _migrate_publication_keys(args: argparse.Namespace) -> int:
+    from sqlalchemy import select
+
+    from georg.db.engine import session_factory
+    from georg.db.models import Publication
+    from georg.db.repositories import IdentityRepository
+    from georg.pipeline.registry import build_output
+
+    config, engine = _open(args)
+    sessions = session_factory(engine)
+    old_prefix = f"georg:{args.old_instance}:"
+    outputs: dict[str, OutputTarget] = {}
+
+    def rows() -> list[tuple[int, str, str, str | None]]:
+        with sessions() as session:
+            pubs = session.scalars(select(Publication).order_by(Publication.id)).all()
+            return [(p.id, p.target_name, p.publication_key, p.external_id) for p in pubs]
+
+    def output(name: str) -> "OutputTarget":
+        if name not in outputs:
+            outputs[name] = build_output(targets[name], timezone=config.timezone)
+        return outputs[name]
+
+    with sessions() as session:
+        church_id = IdentityRepository(session).church_id()
+    new_prefix = f"georg:{church_id}:"
+    targets = {c.name: c for c in config.outputs}
+
+    plan: list[_KeyChange] = []
+    already = 0
+    for pid, target, key, ext in rows():
+        if key.startswith(old_prefix):
+            plan.append(_KeyChange(pid, target, key, new_prefix + key[len(old_prefix) :], ext))
+        elif key.startswith(new_prefix):
+            already += 1
+        else:
+            print(f"publication {pid}: key {key!r} matches neither key form; left alone")
+    print(f"church_id: {church_id}")
+    print(f"{already} publication(s) already on the new key; {len(plan)} to migrate")
+    for change in plan:
+        print(f"  {change.old_key} -> {change.new_key}")
+        if change.target_name not in targets:
+            print(
+                f"  warning: target {change.target_name!r} is not configured; "
+                "only its database row can change"
+            )
+
+    wp_changes = [
+        c for c in plan if targets.get(c.target_name) and targets[c.target_name].type == "wordpress"
+    ]
+    drive_changes = [
+        c
+        for c in plan
+        if targets.get(c.target_name) and targets[c.target_name].type == "google_drive_upload"
+    ]
+    if wp_changes:
+        script_path = args.wp_script or Path(f"wp-rekey-{args.old_instance}.sh")
+        script_path.write_text(_wp_rekey_script(wp_changes))
+        script_path.chmod(0o755)
+        print(
+            f"wrote {script_path}: run it on the church web server, then re-run "
+            "this command with --apply"
+        )
+
+    if args.apply:
+        for change in drive_changes:
+            moved = output(change.target_name).rekey(  # type: ignore[attr-defined]
+                change.old_key, change.new_key, file_id=change.external_id
+            )
+            if moved is None:
+                print(
+                    f"publication {change.publication_id}: no Drive file carries {change.old_key!r}"
+                )
+            else:
+                print(f"publication {change.publication_id}: Drive file {moved} re-keyed")
+        with sessions.begin() as session:
+            updated = 0
+            for change in plan:
+                pub = session.get(Publication, change.publication_id)
+                if pub is not None and pub.publication_key == change.old_key:
+                    pub.publication_key = change.new_key
+                    updated += 1
+        print(f"updated {updated} publication row(s)")
+
+    if args.verify:
+        missing = unverifiable = 0
+        for pid, target, key, _ in rows():
+            if key.startswith(old_prefix):
+                print(f"publication {pid} ({target}): still on the old key; run --apply")
+                missing += 1
+                continue
+            cfg = targets.get(target)
+            if cfg is None or cfg.type not in ("wordpress", "google_drive_upload"):
+                print(f"publication {pid} ({target}): not externally verifiable")
+                unverifiable += 1
+                continue
+            if output(target).find_existing(key) is None:
+                print(f"publication {pid} ({target}): NOT FOUND: {key}")
+                missing += 1
+            else:
+                print(f"publication {pid} ({target}): found at target")
+        print(f"verify: {missing} missing, {unverifiable} unverifiable")
+        return 1 if missing else 0
+
+    if not args.apply and not args.verify:
+        print("dry run: run the WordPress script, then re-run with --apply, then --verify")
     return 0
 
 
@@ -463,6 +617,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the address and ask for the redirected one, e.g. over SSH",
     )
     drive.set_defaults(handler=_drive_login)
+
+    migrate_keys = commands.add_parser(
+        "migrate-publication-keys",
+        help="re-key publications from the instance slug to the church UUID",
+        description="One-time migration after the church-UUID change (ADR 0003): "
+        "lists publications still keyed georg:<old-instance>:..., writes a WP-CLI "
+        "script for the WordPress targets, and with --apply re-keys Google Drive "
+        "files and the database. --verify checks each new key at its target. "
+        "Idempotent; safe to re-run.",
+    )
+    migrate_keys.add_argument(
+        "--old-instance",
+        required=True,
+        help="the [instance] slug the old keys were built from, e.g. stpaul",
+    )
+    migrate_keys.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    migrate_keys.add_argument(
+        "--wp-script",
+        type=Path,
+        help="where to write the WP-CLI script (default: ./wp-rekey-<old-instance>.sh)",
+    )
+    migrate_keys.add_argument(
+        "--apply",
+        action="store_true",
+        help="re-key Drive files and the database rows (dry run without it)",
+    )
+    migrate_keys.add_argument(
+        "--verify",
+        action="store_true",
+        help="call each target's find_existing on every publication's new key",
+    )
+    migrate_keys.set_defaults(handler=_migrate_publication_keys)
 
     db = commands.add_parser("db", help="manage the database")
     db_commands = db.add_subparsers(dest="db_command", metavar="COMMAND", required=True)

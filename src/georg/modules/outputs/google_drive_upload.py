@@ -207,6 +207,33 @@ class GoogleDriveUploadOutput:
         raw = self._find(publication_key)
         return self._ref(raw) if raw else None
 
+    def rekey(self, old_key: str, new_key: str, *, file_id: str | None = None) -> str | None:
+        """Re-stamp the file carrying `old_key` with `new_key`; return its file id.
+
+        Locates the file by `file_id` (a previous publication's external id) or
+        by the key in its `appProperties`. Only a file still carrying `old_key`
+        is changed; one already on `new_key` counts, so re-running is safe.
+        Returns None when no candidate carries either key.
+        """
+        raw = (
+            self._drive.get_file(file_id, f"{FILE_FIELDS}, appProperties")
+            if file_id is not None
+            else self._find(old_key)
+        )
+        if raw is None:
+            raw = self._find(new_key)
+        if raw is None:
+            return None
+        props = {str(k): str(v) for k, v in (raw.get("appProperties") or {}).items()}
+        current = props.get(KEY_PROPERTY)
+        if current == new_key:
+            return str(raw["id"])
+        if current != old_key:
+            return None
+        props[KEY_PROPERTY] = new_key
+        self._drive.update_file(str(raw["id"]), {"appProperties": props}, fields=FILE_FIELDS)
+        return str(raw["id"])
+
     def publish(self, request: PublicationRequest) -> ExternalRef:
         artifact = self._artifact(request)
         key = request.publication_key

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 import dataclasses
 import os
+import re
 import time
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -18,6 +19,7 @@ from georg.db.engine import session_factory
 from georg.db.models import Artifact
 from georg.db.repositories import (
     ArtifactRepository,
+    IdentityRepository,
     PublicationRepository,
     SermonRepository,
     ServiceRepository,
@@ -407,7 +409,10 @@ def test_publish_requires_approval_then_publishes_once(config: GeorgConfig, engi
         publish_sermon(config, sessions, sermon_id, outputs=[good, bad])
     assert err.value.retryable
     [request] = good.requests
-    assert request.publication_key == "georg:test:sermon-1:phone"
+    with sessions() as s:
+        church_id = IdentityRepository(s).church_id()
+    assert request.publication_key == f"georg:{church_id}:sermon-{sermon_id}:phone"
+    assert re.fullmatch(r"georg:[0-9a-f-]{36}:sermon-\d+:phone", request.publication_key)
     assert request.transcript_markdown is not None and request.service_date.day == 1
 
     bad.fail = None

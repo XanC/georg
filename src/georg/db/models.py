@@ -280,6 +280,24 @@ class Approval(Base):
     note: Mapped[str | None] = mapped_column(Text)
 
 
+class InstanceIdentity(Base):
+    """The one row naming this Georg instance's church.
+
+    `church_id` is a UUID generated once — by the migration that creates the
+    table, or by `IdentityRepository` on first read — and never changed.
+    Publication keys carry it, so the human-readable `instance` slug in the
+    configuration stays display-only. Export/import carries the row along, so
+    an imported instance keeps its keys.
+    """
+
+    __tablename__ = "instance_identity"
+    __table_args__ = (CheckConstraint("id = 1", name="single_row"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    church_id: Mapped[str] = mapped_column(unique=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class Publication(Base):
     __tablename__ = "publications"
     __table_args__ = (

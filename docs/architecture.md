@@ -119,7 +119,7 @@ class MetadataGenerator(Protocol):
 
 # ---- outputs ----
 class PublicationRequest(BaseModel):
-    publication_key: str             # stable idempotency key: f"georg:{instance}:{sermon_id}"
+    publication_key: str             # stable idempotency key: f"georg:{church_id}:sermon-{sermon_id}:{target}"
     metadata: SermonMetadata
     transcript_markdown: str | None
     audio: ArtifactHandle | None     # local path + optional public URL
@@ -171,6 +171,10 @@ publications     id, sermon_id, target_name, revision_id, publication_key,
                  status [pending|publishing|published|failed|superseded],
                  external_id, external_url, attempts, last_error, updated_at
                  UNIQUE(sermon_id, target_name)  -- one external object per target
+
+instance_identity  id (=1), church_id (uuid), created_at
+                 -- one row; the church's permanent identity, carried into
+                    publication keys so the `instance` slug stays display-only
 ```
 
 Notes:
@@ -328,6 +332,22 @@ Runbook and implementation: [`docs/deploy-aws.md`](deploy-aws.md), `deploy/aws/`
 - **Portability:** with the watchdog off, the same compose file runs always-on on any VPS or office machine. The wake Lambda, schedule, and DNS hook live in `deploy/aws/` and are optional.
 
 **Input note:** original recordings come from a **private Google Drive** folder, which avoids YouTube's datacenter-IP blocking. Access: either a Google Cloud service account shared on the folder, or (for a congregation without Google Workspace, as at St. Paul) a congregation-owned Google account that signs in once with `georg drive-login`; its storage also holds the Drive archive, which a service account cannot own outside a shared drive. YouTube remains a possible later input.
+
+## 7a. One instance per church
+
+**Church = instance (ADR 0003).** Each church runs its own Georg with its own
+database and data directory; hosting several churches means running several
+instances side by side, not tenancy inside one Georg. Long-term preservation is
+an **output** to church- or provider-owned storage (e.g. an S3 archive target);
+Georg's own storage has a retention limit and is not an archive.
+
+Each instance has a permanent `church_id` UUID in `instance_identity`, generated
+once and never changed; publication keys are `georg:{church_id}:sermon-<id>:<target>`
+(the `instance` slug is display-only). Keys created before the UUID existed are
+rewritten once by `georg migrate-publication-keys`. A planned `georg export` /
+`georg import` bundle moves an instance between deployments; the planned
+release path is versioned images (GHCR) plus an on-host `georg upgrade` with a
+pre-migration backup and a refuse-on-newer-DB guard.
 
 ## 8. Licensing implementation
 
