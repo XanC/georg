@@ -29,8 +29,13 @@ cd "$(dirname "$0")"
 compose() { docker compose --env-file "$ENV_FILE" "$@"; }
 
 # The image the running web container actually uses (fallback: compose default).
-OLD_IMAGE=$(docker inspect -f '{{.Config.Image}}' "$(compose ps -q georg-web)" 2>/dev/null \
-    || true)
+# Prefer the repo digest over the tag: pulling :0 moves that tag to the new image,
+# so a tag would roll "back" to the very image that just failed.
+cid=$(compose ps -q georg-web 2>/dev/null || true)
+if [ -n "$cid" ]; then
+    OLD_IMAGE=$(docker inspect -f '{{index .RepoDigests 0}}' "$cid" 2>/dev/null \
+        || docker inspect -f '{{.Config.Image}}' "$cid" 2>/dev/null || true)
+fi
 OLD_IMAGE=${OLD_IMAGE:-georg:local}
 
 rollback() {
@@ -51,14 +56,20 @@ EOF
 echo "upgrading Georg to $NEW_IMAGE (was $OLD_IMAGE)"
 docker pull "$NEW_IMAGE"
 
+# wait-idle runs under the NEW image: it predates this feature on the running one,
+# and it only reads the jobs table, so running the new image here migrates nothing.
 echo "waiting up to ${TIMEOUT}s for running jobs to finish"
-if ! compose exec -T georg-web georg db wait-idle --timeout "$TIMEOUT"; then
+if ! GEORG_IMAGE=$NEW_IMAGE compose run --rm --no-deps -T georg-web \
+    georg db wait-idle --timeout "$TIMEOUT"; then
     echo "jobs still running; try again later" >&2
     exit 1
 fi
 
 echo "restarting web and worker on $NEW_IMAGE"
-GEORG_IMAGE=$NEW_IMAGE compose up -d georg-web georg-worker
+# `up` exits nonzero when the health dependency fails; that's a rollback case too.
+if ! GEORG_IMAGE=$NEW_IMAGE compose up -d georg-web georg-worker; then
+    rollback
+fi
 
 # The container's own health check (same probe as compose.yaml).
 i=0
