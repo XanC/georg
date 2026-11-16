@@ -31,7 +31,9 @@ failure it switches back to the previous image and points at the pre-migration
 database backup.
 
 To make a pin survive a plain `docker compose up` (e.g. systemd restart), put
-`GEORG_IMAGE=ghcr.io/xanc/georg:0` in `/run/georg/host.env`.
+`GEORG_IMAGE=ghcr.io/xanc/georg:0` in the compose env file. On AWS that file,
+`/run/georg/host.env`, is rewritten at every boot, so put the line in
+`/etc/georg/boot.env` instead; `georg-boot` copies it into `host.env`.
 
 **Pinning:** pin to a major (`0`, `1`) to take every release in that major — the
 `X` tag moves to each new `X.Y.Z` — or pin an exact `X.Y.Z` to upgrade only by

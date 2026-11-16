@@ -85,6 +85,16 @@ def test_writes_env_and_secret_files_privately(tmp_path: Path) -> None:
     assert not any(SECRET in line for line in logs)
 
 
+def test_image_pin_passes_through_to_host_env(tmp_path: Path) -> None:
+    _run(tmp_path, {"GEORG_IMAGE": "ghcr.io/xanc/georg:0"})
+    assert "GEORG_IMAGE='ghcr.io/xanc/georg:0'" in (tmp_path / "run" / "host.env").read_text()
+
+
+def test_no_image_pin_keeps_compose_default(tmp_path: Path) -> None:
+    _run(tmp_path, {})
+    assert "GEORG_IMAGE" not in (tmp_path / "run" / "host.env").read_text()
+
+
 def test_stale_secret_files_are_removed(tmp_path: Path) -> None:
     _run(tmp_path, {})
     _run(tmp_path, {}, {"/georg/GEORG_SECRET_KEY": SECRET})
