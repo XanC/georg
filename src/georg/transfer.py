@@ -185,6 +185,7 @@ def export_bundle(
         identity.set_state("frozen")
     deadline = time.monotonic() + drain_seconds
     while queue.counts().get("running", 0):
+        queue.reclaim_stale()  # a crashed worker's lease otherwise counts forever
         if time.monotonic() >= deadline:
             raise GeorgError(
                 "a job is still running; re-run `georg export` when it finishes "
@@ -388,9 +389,10 @@ def _rederive_jobs(session: Session, queue: JobQueue) -> int:
     ).all()
     unprocessed = session.scalars(
         select(Service.id).where(
+            Service.purged_at.is_(None),  # retention retired it; don't start over
             Service.id.not_in(
                 select(Sermon.service_id).where(Sermon.current_revision_id.is_not(None))
-            )
+            ),
         )
     ).all()
     for sermon_id in pending:
@@ -449,12 +451,14 @@ def resume(
             report.missing.append(f"{target_name}: {key}")
     if report.problems and not force:
         return report
+    enqueued = 0
     with sessions.begin() as session:
+        # One transaction: an interrupted resume must not activate the instance
+        # without also restoring its queue.
         IdentityRepository(session).set_state("active")
-    if queue is not None:
-        with sessions.begin() as session:
+        if queue is not None:
             enqueued = _rederive_jobs(session, queue)
-        if enqueued:
-            log.info("re-derived %d pending job(s)", enqueued)
+    if enqueued:
+        log.info("re-derived %d pending job(s)", enqueued)
     report.resumed = True
     return report
