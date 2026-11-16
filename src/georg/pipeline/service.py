@@ -54,6 +54,23 @@ from georg.storage.local import LocalStore
 
 log = logging.getLogger(__name__)
 
+
+def _require_active(session: Session) -> None:
+    """Discovery and publishing stop on a paused (imported) or frozen (exported)
+    instance, so two deployments never act on the same church."""
+    state = IdentityRepository(session).state()
+    if state == "frozen":
+        raise ModuleError(
+            "this instance was exported and is frozen; it never publishes again",
+            retryable=False,
+        )
+    if state == "paused":
+        raise ModuleError(
+            "this instance is paused after import; run `georg resume` first",
+            retryable=False,
+        )
+
+
 INPUT_HINT = "input"
 """`Service.hints` key naming the configured input that discovered it."""
 PROCESS = "process"
@@ -70,6 +87,8 @@ def discover(
     since: datetime | None = None,
 ) -> list[int]:
     """Record new recordings from every input and queue them; return their service IDs."""
+    with sessions() as session:
+        _require_active(session)
     floor = config.discovery.start_date
     if floor is not None and (since is None or since.date() < floor):
         since = datetime(floor.year, floor.month, floor.day, tzinfo=UTC)
@@ -571,6 +590,7 @@ def publish_sermon(
         if config.review.require_approval and not sermons.is_approved(sermon_id):
             raise ModuleError(f"sermon {sermon_id}'s current revision is not approved")
         revision_id = revision.id
+        _require_active(session)
         if ServiceRepository(session).get(sermons.get(sermon_id).service_id).purged_at:
             raise ModuleError(
                 f"sermon {sermon_id}: its files were removed by retention cleanup; "

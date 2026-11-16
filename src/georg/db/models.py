@@ -46,6 +46,10 @@ PUBLICATION_STATUSES: Final = (
     "superseded",
     "conflict",
 )
+INSTANCE_STATES: Final = ("active", "paused", "frozen")
+"""`instance_identity.state`: 'active' normally; 'paused' after `georg import`, until
+`georg resume`; 'frozen' after `georg export`, permanently — the source never
+discovers or publishes again, so two deployments can't act on the same church."""
 ARTIFACT_KINDS: Final = (
     "source_media",
     "service_audio",
@@ -291,11 +295,15 @@ class InstanceIdentity(Base):
     """
 
     __tablename__ = "instance_identity"
-    __table_args__ = (CheckConstraint("id = 1", name="single_row"),)
+    __table_args__ = (
+        CheckConstraint("id = 1", name="single_row"),
+        CheckConstraint(_in("state", INSTANCE_STATES), name="state"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     church_id: Mapped[str] = mapped_column(unique=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    state: Mapped[str] = mapped_column(default="active")
 
 
 class Publication(Base):
