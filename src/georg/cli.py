@@ -83,6 +83,40 @@ def _db_upgrade(args: argparse.Namespace) -> int:
     return 0
 
 
+def _db_wait_idle(args: argparse.Namespace) -> int:
+    """Exit 0 once the jobs table has no running job, else 1 after --timeout."""
+    import time
+
+    from sqlalchemy import inspect
+
+    from georg.db.engine import create_engine
+    from georg.jobs.queue import JobQueue
+
+    path = _database_path(args)
+    engine = create_engine(path)
+    try:
+        if not inspect(engine).has_table("jobs"):
+            print(f"{path}: no jobs table; nothing running")
+            return 0
+        queue = JobQueue(engine)
+        deadline = time.monotonic() + args.timeout
+        while True:
+            running = queue.counts().get("running", 0)
+            if running == 0:
+                print(f"{path}: no running jobs")
+                return 0
+            if time.monotonic() >= deadline:
+                print(
+                    f"georg: {running} job(s) still running after {args.timeout:.0f}s",
+                    file=sys.stderr,
+                )
+                return 1
+            print(f"{running} job(s) running; waiting up to {args.timeout:.0f}s")
+            time.sleep(min(args.interval, max(0.0, deadline - time.monotonic())))
+    finally:
+        engine.dispose()
+
+
 def parse_boundaries(value: str) -> ServiceBoundaries:
     """Parse "service_start,sermon_start,sermon_end,service_end" timestamps."""
     times = [parse_timestamp(v) for v in value.split(",")]
@@ -477,6 +511,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     upgrade.add_argument("--revision", default="head", help="target revision (default: head)")
     upgrade.set_defaults(handler=_db_upgrade)
+
+    wait_idle = db_commands.add_parser(
+        "wait-idle",
+        help="exit 0 once no job is running (for deploy/upgrade.sh)",
+        description="Poll the jobs table until no job has status 'running', then exit 0. "
+        "Exits 1 when --timeout seconds pass first. Does not run migrations, so the "
+        "old image can run it while an upgrade is pending.",
+    )
+    wait_idle.add_argument(
+        "--config",
+        type=Path,
+        help=f"configuration file (default: $GEORG_CONFIG or ./{DEFAULT_CONFIG})",
+    )
+    wait_idle.add_argument(
+        "--database", type=Path, help="SQLite file (default: georg.sqlite3 in data_dir)"
+    )
+    wait_idle.add_argument(
+        "--timeout", type=float, default=600.0, help="seconds to wait (default: 600)"
+    )
+    wait_idle.add_argument(
+        "--interval", type=float, default=5.0, help="seconds between checks (default: 5)"
+    )
+    wait_idle.set_defaults(handler=_db_wait_idle)
     return parser
 
 

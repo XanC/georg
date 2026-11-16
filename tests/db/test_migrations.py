@@ -8,8 +8,15 @@ from alembic.runtime.migration import MigrationContext
 from sqlalchemy import Engine, inspect, text
 
 from georg.cli import main
+from georg.core.errors import GeorgError
 from georg.db import create_engine, upgrade
-from georg.db.migrate import alembic_config, current_revision, head_revision
+from georg.db.migrate import (
+    alembic_config,
+    backup_database,
+    current_revision,
+    head_revision,
+    prune_backups,
+)
 from georg.db.models import Base
 
 TABLES = {
@@ -152,3 +159,88 @@ def test_upgrade_recreates_tables_that_other_rows_reference(tmp_path: Path) -> N
             assert conn.execute(text("PRAGMA foreign_keys")).scalar() == 1
     finally:
         engine.dispose()
+
+
+def test_pending_migration_writes_a_consistent_backup(tmp_path: Path) -> None:
+    path = tmp_path / "g.sqlite3"
+    upgrade(path, "0001")
+    engine = create_engine(path)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO users (id, username, password_hash, role, created_at)"
+                    " VALUES (1, 'xan', 'x', 'admin', '2026-11-01')"
+                )
+            )
+    finally:
+        engine.dispose()
+    upgrade(path)
+    (backup,) = (tmp_path / "backups").glob("georg-0001-*.sqlite")
+    assert current_revision(backup) == "0001"
+    copy = create_engine(backup)
+    try:
+        with copy.connect() as conn:
+            assert conn.execute(text("SELECT username FROM users")).all() == [("xan",)]
+    finally:
+        copy.dispose()
+
+
+def test_upgrade_at_head_takes_no_backup(db_path: Path) -> None:
+    upgrade(db_path)
+    assert not (db_path.parent / "backups").exists()
+
+
+def test_upgrade_refuses_a_database_from_a_newer_georg(tmp_path: Path) -> None:
+    path = tmp_path / "g.sqlite3"
+    upgrade(path)
+    engine = create_engine(path)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE alembic_version SET version_num = 'newer00'"))
+    finally:
+        engine.dispose()
+    with pytest.raises(GeorgError, match="newer00"):
+        upgrade(path)
+
+
+def test_prune_backups_keeps_the_newest(tmp_path: Path) -> None:
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    names = [f"georg-0001-2026010{i}T000000Z.sqlite" for i in range(7)]
+    for name in names:
+        (backups / name).touch()
+    removed = prune_backups(tmp_path / "georg.sqlite3", keep=5)
+    assert {p.name for p in removed} == set(names[:2])
+    assert sorted(p.name for p in backups.iterdir()) == names[2:]
+
+
+def test_backup_database_names_unstamped_databases(tmp_path: Path) -> None:
+    path = tmp_path / "g.sqlite3"
+    engine = create_engine(path)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE TABLE t (id INTEGER)"))
+    finally:
+        engine.dispose()
+    backup = backup_database(path, None)
+    assert backup.name.startswith("georg-unstamped-")
+
+
+def test_db_wait_idle(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    path = tmp_path / "g.sqlite3"
+    idle = ["db", "wait-idle", "--database", str(path), "--timeout", "0.05", "--interval", "0.01"]
+    assert main(idle) == 0  # no database yet
+    upgrade(path)
+    assert main(idle) == 0  # migrated, no jobs
+    from georg.jobs.queue import JobQueue
+
+    engine = create_engine(path)
+    try:
+        queue = JobQueue(engine)
+        queue.enqueue("discover")
+        assert queue.lease("test") is not None
+    finally:
+        engine.dispose()
+    assert main(idle) == 1  # a running job outlives the timeout
+    assert "still running" in capsys.readouterr().err
