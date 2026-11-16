@@ -173,6 +173,8 @@ def boot(
     }
     if bucket:
         host["COMPOSE_PROFILES"] = "backup"
+    if image := environ.get("GEORG_IMAGE"):
+        host["GEORG_IMAGE"] = image
     write_file(run_dir / "host.env", format_env(host), mode=0o644)
 
     if zone_id:
