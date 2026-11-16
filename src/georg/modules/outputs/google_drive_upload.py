@@ -215,13 +215,12 @@ class GoogleDriveUploadOutput:
         is changed; one already on `new_key` counts, so re-running is safe.
         Returns None when no candidate carries either key.
         """
-        raw = (
-            self._drive.get_file(file_id, f"{FILE_FIELDS}, appProperties")
-            if file_id is not None
-            else self._find(old_key)
-        )
-        if raw is None:
-            raw = self._find(new_key)
+        if file_id is None:
+            found = self._find(old_key) or self._find(new_key)
+            if found is None:
+                return None
+            file_id = str(found["id"])
+        raw = self._drive.get_file(file_id, f"{FILE_FIELDS}, appProperties")
         if raw is None:
             return None
         props = {str(k): str(v) for k, v in (raw.get("appProperties") or {}).items()}

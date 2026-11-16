@@ -246,9 +246,12 @@ class _KeyChange:
 def _wp_rekey_script(changes: Sequence[_KeyChange]) -> str:
     """A WP-CLI shell script re-keying `_georg_publication_key` on posts and attachments.
 
-    Each `post list` only selects posts whose meta still holds the old key, so
-    re-running the script changes nothing; attachments carry the same meta key,
-    and `--post_type=any` covers them along with the sermon posts.
+    Each `post list` selects only posts whose meta still holds the old key, so
+    re-running the script changes nothing. The two post types georg-bridge
+    writes the key on get their own query — `ctc_sermon` posts at any status
+    and audio `attachment`s (status `inherit`, which "any" excludes) — and
+    `post list` runs in an assignment, not the `for` line, so `set -e` stops
+    the script when a lookup fails instead of re-keying nothing.
     """
     lines = [
         "#!/bin/sh",
@@ -261,9 +264,14 @@ def _wp_rekey_script(changes: Sequence[_KeyChange]) -> str:
     for change in changes:
         lines += [
             f"# publication {change.publication_id} ({change.target_name})",
-            "for ID in $($WP post list --post_type=any --post_status=any"
+            'IDS="$($WP post list --post_type=ctc_sermon --post_status=any'
             f" --meta_key=_georg_publication_key --meta_value='{change.old_key}'"
-            " --field=ID); do",
+            ' --field=ID)"',
+            'IDS="$IDS $($WP post list --post_type=attachment'
+            " --post_status=inherit,private"
+            f" --meta_key=_georg_publication_key --meta_value='{change.old_key}'"
+            ' --field=ID)"',
+            "for ID in $IDS; do",
             f"  $WP post meta update \"$ID\" _georg_publication_key '{change.new_key}'",
             "done",
             "",
