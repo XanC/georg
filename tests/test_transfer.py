@@ -27,6 +27,7 @@ from georg.db.models import Job, Publication
 from georg.db.repositories import (
     ArtifactRepository,
     IdentityRepository,
+    PublicationRepository,
     SermonRepository,
     ServiceRepository,
 )
@@ -261,11 +262,57 @@ def test_import_refuses_existing_database(exported) -> None:
         import_bundle(exported.config, exported.bundle)
 
 
-def test_frozen_instance_cannot_export_again(exported) -> None:
-    with pytest.raises(GeorgError, match="already frozen"):
-        export_bundle(
-            exported.config,
-            exported.engine,
-            database_path(exported.config.data_dir),
-            exported.tmp_path / "second.georg",
+def test_resume_requeues_work_dropped_on_import(exported) -> None:
+    """Jobs are not exported; resume re-derives pending publishes and processing."""
+    item = SourceItem(
+        source_type="local_folder",
+        source_ref=str(exported.config.data_dir / "recordings" / "new-service"),
+        parts=(SourcePart(ref="x.wav", name="x.wav"),),
+        title="Not yet processed",
+        service_date=date(2026, 11, 8),
+        recorded_at=datetime(2026, 11, 8, 18, 0, tzinfo=UTC),
+    )
+    with exported.sessions.begin() as s:
+        service, _ = ServiceRepository(s).add_discovered(item)
+        sermons = SermonRepository(s)
+        revision = sermons.current_revision(exported.sermon_id)
+        PublicationRepository(s).prepare(
+            exported.sermon_id, "archive", revision.id, "georg:test:sermon-1:archive"
         )
+        queue = JobQueue(exported.engine)
+    queue.enqueue("publish", {"sermon_id": exported.sermon_id})
+
+    bundle = exported.tmp_path / "reexported.georg"
+    export_bundle(exported.config, exported.engine, database_path(exported.config.data_dir), bundle)
+    dst = exported.tmp_path / "moved" / "georg-data"
+    new_config = make_config(dst, exported.tmp_path / "new" / "recordings")
+    import_bundle(new_config, bundle)
+
+    engine = create_engine(database_path(dst))
+    try:
+        sessions = session_factory(engine)
+        with sessions() as s:
+            assert not s.scalars(select(Job)).all()
+        new_queue = JobQueue(engine)
+        target = FakeTarget(existing=ExternalRef(target="website", external_id="post-1"))
+        report = resume(new_config, sessions, queue=new_queue, targets={"website": target})
+        assert report.resumed
+        with sessions() as s:
+            jobs = {(j.kind, json.dumps(j.payload, sort_keys=True)) for j in s.scalars(select(Job))}
+        assert ("publish", f'{{"sermon_id": {exported.sermon_id}}}') in jobs
+        assert ("process", f'{{"service_id": {service.id}}}') in jobs
+    finally:
+        engine.dispose()
+
+
+def test_frozen_instance_exports_again_but_never_resumes(exported) -> None:
+    """A failed export leaves the source frozen; re-running is the recovery path."""
+    report = export_bundle(
+        exported.config,
+        exported.engine,
+        database_path(exported.config.data_dir),
+        exported.tmp_path / "second.georg",
+    )
+    assert report.bundle.is_file()
+    with pytest.raises(GeorgError, match="frozen"):
+        resume(exported.config, exported.sessions)

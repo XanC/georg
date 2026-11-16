@@ -23,8 +23,10 @@ This writes a tar containing:
 **Exporting freezes the source.** `instance_identity.state` becomes `frozen`:
 discovery and publishing there stop for good (the worker's `discover`/`publish`
 jobs and the web approve/publish endpoints all refuse it), so two deployments
-can never act on the same Drive folder or website. A frozen instance cannot be
-exported again or resumed.
+can never act on the same Drive folder or website. The freeze happens before
+the snapshot, after running jobs drain, so a publication committed mid-export
+is still in the bundle. A frozen instance may export again (recovery from a
+failed export) but can never resume.
 
 The bundle contains **no secrets and no `georg.toml`** — those never leave the
 source host. The manifest lists filesystem paths (input roots, model caches,

@@ -463,11 +463,12 @@ def _import(args: argparse.Namespace) -> int:
 
 def _resume(args: argparse.Namespace) -> int:
     from georg.db.engine import session_factory
+    from georg.jobs.queue import JobQueue
     from georg.transfer import resume
 
     config, engine = _open(args)
     try:
-        report = resume(config, session_factory(engine), force=args.force)
+        report = resume(config, session_factory(engine), queue=JobQueue(engine), force=args.force)
     finally:
         engine.dispose()
     if report.state == "active" and not report.resumed and not report.checked:
