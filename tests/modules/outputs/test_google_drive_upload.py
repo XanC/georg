@@ -89,6 +89,26 @@ def test_publish_creates_file_with_key_in_new_subfolder(drive: FakeDrive, tmp_pa
     assert start.headers["x-upload-content-length"] == str(len(uploaded.content))
 
 
+def test_rekey_restamps_the_file_once(drive: FakeDrive, tmp_path: Path) -> None:
+    out = make_output(drive)
+    ref = out.publish(request(tmp_path))
+    new_key = "georg:church-uuid:service:1:archive"
+
+    assert out.rekey(KEY, new_key) == ref.external_id
+    assert drive.files[ref.external_id].app_properties[KEY_PROPERTY] == new_key
+    assert out.find_existing(new_key) == ref
+    # Idempotent: already on the new key counts, even via the saved file id.
+    assert out.rekey(KEY, new_key) == ref.external_id
+    assert out.rekey("georg:other:service:9:archive", new_key, file_id=ref.external_id) == (
+        ref.external_id
+    )
+    # A file carrying an unrelated key is not touched; neither is a missing one.
+    other = drive.add("other.mp3", ARCHIVE, app_properties={KEY_PROPERTY: "georg:x:service:9:a"})
+    assert out.rekey("georg:other:service:9:archive", new_key, file_id=other.id) is None
+    # Nothing to migrate when no file carries either key.
+    assert make_output(FakeDrive()).rekey("georg:other:x:9:a", new_key) is None
+
+
 def test_existing_subfolder_is_reused(drive: FakeDrive, tmp_path: Path) -> None:
     folder = drive.folder("SPX 11.01.26", ARCHIVE)
     ref = make_output(drive, subfolder="SPX {mmddyy}").publish(request(tmp_path))

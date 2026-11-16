@@ -129,6 +129,15 @@ class FakeDrive:
                 data = item.content[:-1] if self.corrupt_downloads else item.content
                 return httpx.Response(200, content=data)
             return httpx.Response(200, json=item.resource(params.get("fields", "")))
+        if match and request.method == "PATCH":
+            item = self.files.get(match[1])
+            if item is None:
+                return httpx.Response(404, json={"error": {"code": 404, "message": "not found"}})
+            meta = json.loads(request.content)
+            if "name" in meta:
+                item.name = meta["name"]
+            item.app_properties.update(meta.get("appProperties", {}))
+            return httpx.Response(200, json=item.resource(params.get("fields", "")))
         return httpx.Response(400, json={"error": {"code": 400, "message": f"unhandled {url}"}})
 
     def _matches(self, item: FakeFile, query: str) -> bool:

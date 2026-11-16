@@ -7,6 +7,7 @@ boundaries (use `georg.db.session_factory`, whose sessions begin `IMMEDIATE`).
 
 import hashlib
 import json
+import uuid
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
@@ -33,6 +34,7 @@ from georg.db.models import (
     Approval,
     Artifact,
     AuditLog,
+    InstanceIdentity,
     Publication,
     Sermon,
     SermonRevision,
@@ -77,6 +79,22 @@ def _get[T](session: Session, model: type[T], ident: int) -> T:
     if obj is None:
         raise NotFoundError(f"{model.__name__} {ident} not found")
     return obj
+
+
+class IdentityRepository:
+    """The instance's permanent church UUID, generated once and never changed."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def church_id(self) -> str:
+        """The church's UUID; created on first read for databases that predate it."""
+        row = self.session.scalars(select(InstanceIdentity)).one_or_none()
+        if row is None:
+            row = InstanceIdentity(id=1, church_id=str(uuid.uuid4()))
+            self.session.add(row)
+            self.session.flush()
+        return row.church_id
 
 
 class UserRepository:
