@@ -12,7 +12,9 @@
 name: georg
 
 x-georg: &georg
-  image: georg:local
+  # georg:local is what `docker compose build` tags; published images come from
+  # ghcr.io/xanc/georg:<version> (docs/deploy-aws.md, "Upgrades").
+  image: ${GEORG_IMAGE:-georg:local}
   build:
     context: ..
     dockerfile: deploy/Dockerfile

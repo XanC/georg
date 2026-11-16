@@ -264,7 +264,18 @@ else needs to change.
 
 ## Upgrades
 
-On the instance:
+Two ways; see docs/upgrading.md for pinning, skipping releases and rollback.
+
+**From a published image** (preferred once GHCR images exist):
+
+```sh
+sudo /opt/georg/deploy/upgrade.sh 0.2.0   # or a major like 0
+```
+
+It pulls `ghcr.io/xanc/georg:<version>`, waits for running jobs, restarts web and
+worker, and rolls back to the previous image if the health check fails.
+
+**From the checkout** (as before — `GEORG_IMAGE` unset defaults to `georg:local`):
 
 ```sh
 sudo git -C /opt/georg fetch
@@ -274,7 +285,10 @@ sudo docker compose --env-file /run/georg/host.env build
 sudo systemctl restart georg
 ```
 
-Database migrations run when Georg starts. If boot or systemd files changed, also run
+Database migrations run when Georg starts; a consistent copy of the database is
+written to `/srv/georg/data/backups/` first (Litestream is unaffected). Georg
+refuses to start against a database migrated by a newer version. If boot or
+systemd files changed, also run
 `sudo install -m 0644 /opt/georg/deploy/aws/systemd/georg* /etc/systemd/system/ && sudo systemctl daemon-reload`.
 
 After upgrading a processor (e.g. a transcriber or boundary-detector fix), a service

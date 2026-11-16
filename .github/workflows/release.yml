@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+name: Release
+
+# Push a tag vX.Y.Z (matching georg.__version__, see docs/releasing.md) to build
+# deploy/Dockerfile and publish ghcr.io/xanc/georg:{X.Y.Z,X.Y,X}.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches the package version
+        id: version
+        run: |
+          tag="${VERSION#v}"
+          pkg="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/georg/__init__.py)"
+          proj="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
+          if [ "$tag" != "$pkg" ] || [ "$pkg" != "$proj" ]; then
+            echo "tag v$tag but georg.__version__=$pkg and pyproject version=$proj" >&2
+            exit 1
+          fi
+          {
+            echo "tags<<EOF"
+            echo "ghcr.io/xanc/georg:$tag"
+            echo "ghcr.io/xanc/georg:${tag%.*}"
+            echo "ghcr.io/xanc/georg:${tag%%.*}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push ghcr.io/xanc/georg
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          # Same extras deploy/compose.yaml builds by default.
+          build-args: GEORG_EXTRAS=classify whisper llm gdrive
+          tags: ${{ steps.version.outputs.tags }}

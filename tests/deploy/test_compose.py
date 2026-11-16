@@ -22,6 +22,10 @@ def test_services() -> None:
     assert "${GEORG_ROOT:-/srv/georg}/caddy/data:/data" in services["caddy"]["volumes"]
 
 
+def test_image_is_configurable_and_defaults_to_local_build() -> None:
+    assert _compose()["x-georg"]["image"] == "${GEORG_IMAGE:-georg:local}"
+
+
 def test_secrets_only_from_env_file() -> None:
     compose = _compose()
     for name, service in compose["services"].items():
