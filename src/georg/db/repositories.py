@@ -30,6 +30,7 @@ from georg.core.types import (
 )
 from georg.db.models import (
     ARTIFACT_KINDS,
+    INSTANCE_STATES,
     USER_ROLES,
     Approval,
     Artifact,
@@ -87,14 +88,28 @@ class IdentityRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def church_id(self) -> str:
-        """The church's UUID; created on first read for databases that predate it."""
+    def _row(self) -> InstanceIdentity:
         row = self.session.scalars(select(InstanceIdentity)).one_or_none()
         if row is None:
             row = InstanceIdentity(id=1, church_id=str(uuid.uuid4()))
             self.session.add(row)
             self.session.flush()
-        return row.church_id
+        return row
+
+    def church_id(self) -> str:
+        """The church's UUID; created on first read for databases that predate it."""
+        return self._row().church_id
+
+    def state(self) -> str:
+        """'active', 'paused' (imported, awaiting `georg resume`), or 'frozen'
+        (exported; discovery and publishing stopped for good)."""
+        return self._row().state
+
+    def set_state(self, state: str) -> None:
+        if state not in INSTANCE_STATES:
+            raise RepositoryError(f"unknown instance state {state!r}")
+        self._row().state = state
+        self.session.flush()
 
 
 class UserRepository:

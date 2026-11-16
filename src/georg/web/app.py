@@ -29,6 +29,7 @@ from georg.db.engine import session_factory
 from georg.db.models import Artifact, Publication, SermonRevision, Service
 from georg.db.repositories import (
     ArtifactRepository,
+    IdentityRepository,
     NotCurrentRevisionError,
     NotFoundError,
     PublicationRepository,
@@ -435,6 +436,17 @@ def create_app(
 
     # --- sermon review ----------------------------------------------------------------
 
+    def paused_notice(session: Session) -> str | None:
+        """A flash message when the instance can't publish or discover: a frozen
+        (exported) source never does either again, and an imported one waits for
+        `georg resume`."""
+        state = IdentityRepository(session).state()
+        if state == "frozen":
+            return "This instance was exported and is frozen; it cannot publish."
+        if state == "paused":
+            return "This instance is paused after import; run `georg resume` first."
+        return None
+
     def publish_payload(session: Session, sermon_id: int) -> dict[str, Any] | None:
         """The publish job for an approval: every output. A website that already holds the
         sermon gets only the fields changed since it last accepted a revision, and refuses
@@ -672,6 +684,10 @@ def create_app(
     ) -> Response:
         try:
             with sessions.begin() as session:
+                blocked = paused_notice(session)
+                if blocked is not None:
+                    _flash(request, blocked, "error")
+                    return _redirect(f"/sermons/{sermon_id}")
                 sermons = SermonRepository(session)
                 if sermons.revision(revision_id).sermon_id != sermon_id:
                     raise NotFoundError(f"revision {revision_id} not found")
@@ -716,6 +732,9 @@ def create_app(
         """Publish again, or (with `website`) update a website that already holds the
         sermon, skipping or overwriting `fields` edited there if the reviewer decided so."""
         payload: dict[str, Any] | None
+        if (blocked := paused_notice(session)) is not None:
+            _flash(request, blocked, "error")
+            return _redirect(f"/sermons/{sermon_id}")
         if not SermonRepository(session).is_approved(sermon_id):
             _flash(request, "Approve the current revision before publishing.", "error")
             return _redirect(f"/sermons/{sermon_id}")
@@ -769,8 +788,10 @@ def create_app(
         return render(request, "_jobs_table.html", jobs_context(), user=user)
 
     @app.post("/jobs/discover")
-    def check_recordings(request: Request, user: Editor) -> Response:
-        if active_jobs(DISCOVER):
+    def check_recordings(request: Request, user: Editor, session: DB) -> Response:
+        if (blocked := paused_notice(session)) is not None:
+            _flash(request, blocked, "error")
+        elif active_jobs(DISCOVER):
             _flash(request, "A check for new recordings is already queued.")
         else:
             queue.enqueue(DISCOVER, {})

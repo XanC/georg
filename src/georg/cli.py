@@ -422,6 +422,75 @@ def _migrate_publication_keys(args: argparse.Namespace) -> int:
     return 0
 
 
+def _export(args: argparse.Namespace) -> int:
+    from georg.db.engine import database_path
+    from georg.transfer import export_bundle
+
+    config, engine = _open(args)
+    try:
+        report = export_bundle(config, engine, database_path(config.data_dir), args.out)
+    finally:
+        engine.dispose()
+    print(f"wrote {report.bundle} (church {report.church_id})")
+    print(f"{report.artifacts} artifact file(s); {report.cells_rewritten} path(s) made relative")
+    if report.missing_artifacts:
+        print(f"warning: {len(report.missing_artifacts)} artifact(s) were missing from the store")
+    print("this instance is now frozen: discovery and publishing here stop for good")
+    return 0
+
+
+def _import(args: argparse.Namespace) -> int:
+    from georg.core.config import load_config
+    from georg.transfer import import_bundle
+
+    config = load_config(args.config)
+    report = import_bundle(config, args.bundle)
+    print(f"imported church {report.church_id}; {report.artifacts_restored} artifact(s) restored")
+    if report.missing_artifacts:
+        print(
+            f"warning: {len(report.missing_artifacts)} artifact(s) were not in the source "
+            "store and are not in the bundle"
+        )
+    if report.external_paths:
+        print("paths recorded in the bundle that may not exist on this host:")
+        for path in report.external_paths:
+            print(f"  {path}")
+    print(
+        "the instance is paused: write this host's georg.toml and secrets, then run `georg resume`"
+    )
+    return 0
+
+
+def _resume(args: argparse.Namespace) -> int:
+    from georg.db.engine import session_factory
+    from georg.transfer import resume
+
+    config, engine = _open(args)
+    try:
+        report = resume(config, session_factory(engine), force=args.force)
+    finally:
+        engine.dispose()
+    if report.state == "active" and not report.resumed and not report.checked:
+        print("this instance is already active")
+        return 0
+    for line in report.missing:
+        print(f"missing at target: {line}")
+    for line in report.unreachable:
+        print(f"target unreachable: {line}")
+    for line in report.unverifiable:
+        print(f"cannot verify: {line}")
+    if not report.resumed:
+        print(
+            f"georg: {report.problems} problem(s) checking {report.checked} "
+            "publication(s); not resuming (use --force to resume anyway)",
+            file=sys.stderr,
+        )
+        return 1
+    qualifier = " (forced)" if report.problems else ""
+    print(f"checked {report.checked} publication(s); instance resumed{qualifier}")
+    return 0
+
+
 WATCHDOG_POLL_SECONDS = 10.0
 """Upper bound on the idle poll while the watchdog is on, so the browser's one-minute
 shutdown warning is accurate to a few seconds."""
@@ -691,6 +760,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="call each target's find_existing on every publication's new key",
     )
     migrate_keys.set_defaults(handler=_migrate_publication_keys)
+
+    export = commands.add_parser(
+        "export",
+        help="write a portable bundle and freeze this instance",
+        description="Write one .georg tar (manifest, consistent database copy, artifact "
+        "files) that `georg import` restores on another host, whatever its filesystem "
+        "layout. Exporting freezes this instance: discovery and publishing here stop "
+        "for good, so two deployments never publish the same church. The configuration "
+        "and secrets are not in the bundle; the new host's operator writes georg.toml.",
+    )
+    export.add_argument("--out", type=Path, required=True, help="bundle file to write")
+    export.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    export.set_defaults(handler=_export)
+
+    imp = commands.add_parser(
+        "import",
+        help="restore a .georg bundle into an empty data dir",
+        description="Restore a bundle made by `georg export` into this config's "
+        "data_dir (which must not hold a database yet): the database, keeping the "
+        "church UUID and publication history, and the artifact files. A bundle from "
+        "a newer Georg is refused. The instance starts paused; `georg resume` "
+        "verifies the published objects at their targets and unpauses.",
+    )
+    imp.add_argument("bundle", type=Path, help=".georg bundle file")
+    imp.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    imp.set_defaults(handler=_import)
+
+    resume = commands.add_parser(
+        "resume",
+        help="verify publications and unpause an imported instance",
+        description="Check every published publication against its target's "
+        "find_existing(publication_key), then unpause discovery and publishing. "
+        "Missing or unreachable targets refuse the resume unless --force.",
+    )
+    resume.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    resume.add_argument(
+        "--force",
+        action="store_true",
+        help="resume even when publications are missing or targets unreachable",
+    )
+    resume.set_defaults(handler=_resume)
 
     db = commands.add_parser("db", help="manage the database")
     db_commands = db.add_subparsers(dest="db_command", metavar="COMMAND", required=True)

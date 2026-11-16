@@ -172,9 +172,13 @@ publications     id, sermon_id, target_name, revision_id, publication_key,
                  external_id, external_url, attempts, last_error, updated_at
                  UNIQUE(sermon_id, target_name)  -- one external object per target
 
-instance_identity  id (=1), church_id (uuid), created_at
+instance_identity  id (=1), church_id (uuid), created_at,
+                 state [active|paused|frozen]
                  -- one row; the church's permanent identity, carried into
-                    publication keys so the `instance` slug stays display-only
+                    publication keys so the `instance` slug stays display-only.
+                    `georg export` freezes the source (discovery and publishing
+                    stop for good); `georg import` starts the copy paused until
+                    `georg resume` verifies its publications (docs/moving-an-instance.md)
 ```
 
 Notes:
