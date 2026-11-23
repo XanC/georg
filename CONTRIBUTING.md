@@ -4,7 +4,7 @@ Thank you for helping. Georg is a small project; the process is deliberately lig
 
 ## License of contributions
 
-By submitting a contribution, you agree that it is licensed under the **GNU Affero General Public License, version 3 only** (`AGPL-3.0-only`), to the extent you hold rights in it. You keep any copyright you have; no copyright assignment or CLA is required.
+By submitting a contribution, you agree that it is licensed under the **GNU Affero General Public License, version 3 only** (`AGPL-3.0-only`), to the extent you hold rights in it; contributions to the WordPress plugin under `wordpress/` are licensed under GPL-2.0-or-later instead. You keep any copyright you have; no copyright assignment or CLA is required.
 
 Only submit code you have the right to contribute. Do not copy substantial code from other projects unless its license is compatible with AGPL-3.0 and you include the required attribution; mention it in the pull request.
 

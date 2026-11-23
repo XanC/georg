@@ -1,5 +1,5 @@
 <?php
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later
 /**
  * HMAC-SHA256 request signing (docs/wordpress.md). Pure PHP with no WordPress calls, so
  * tests/signing-test.php can run it from the command line.

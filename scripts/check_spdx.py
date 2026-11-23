@@ -6,8 +6,10 @@ from pathlib import Path
 
 HEADER = "# SPDX-License-Identifier: AGPL-3.0-only"
 PHP_HEADER = "// SPDX-License-Identifier: AGPL-3.0-only"
+# georg-bridge is GPL-2.0-or-later, like WordPress, so it can be listed on WordPress.org.
+WORDPRESS_HEADER = "// SPDX-License-Identifier: GPL-2.0-or-later"
 ROOTS = ("src", "tests", "scripts", "deploy", "contrib")
-PHP_ROOTS = ("wordpress", "contrib")
+PHP_ROOTS = {"wordpress": WORDPRESS_HEADER, "contrib": PHP_HEADER}
 
 
 def missing_header(root: Path) -> list[Path]:
@@ -17,10 +19,10 @@ def missing_header(root: Path) -> list[Path]:
             head = path.read_text(encoding="utf-8").splitlines()[:3]
             if HEADER not in head:
                 missing.append(path)
-    for top in PHP_ROOTS:
+    for top, header in PHP_ROOTS.items():
         for path in sorted((root / top).rglob("*.php")):
             head = path.read_text(encoding="utf-8").splitlines()[:3]
-            if PHP_HEADER not in head:
+            if header not in head:
                 missing.append(path)
     return missing
 
