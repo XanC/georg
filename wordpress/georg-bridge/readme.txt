@@ -4,7 +4,7 @@ Tags: sermons, church, rest-api
 Requires at least: 5.6
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.4.1
+Stable tag: 0.4.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,9 @@ than five minutes are refused). PHP's `upload_max_filesize` and `post_max_size` 
 exceed the largest sermon MP3.
 
 == Changelog ==
+
+= 0.4.2 =
+* Relicensed from AGPL-3.0-only to GPL-2.0-or-later, the same as WordPress. No code changes.
 
 = 0.4.1 =
 * Sermons written before 0.4.0 count as edited (every field) when `_edit_last` is a user
