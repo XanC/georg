@@ -71,7 +71,8 @@ exceed the largest sermon MP3.
 == Changelog ==
 
 = 0.4.2 =
-* Relicensed from AGPL-3.0-only to GPL-2.0-or-later, the same as WordPress. No code changes.
+* Relicensed from AGPL-3.0-only to GPL-2.0-or-later, the same as WordPress.
+* Fixes for the WordPress.org Plugin Check: direct-access guards in `includes/`, and lookups rely on `get_posts()`'s default `suppress_filters` instead of setting it. No behavior change.
 
 = 0.4.1 =
 * Sermons written before 0.4.0 count as edited (every field) when `_edit_last` is a user
