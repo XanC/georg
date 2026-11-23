@@ -8,7 +8,7 @@ Read this file, `README.md`, `CONTRIBUTING.md`, and `docs/architecture.md` befor
 - **Layout:** application code in `src/georg/`, tests in `tests/` mirroring the package path, design docs in `docs/`, ADRs in `docs/adr/`.
 - **Module boundaries:** input, processor, and output modules (`georg/modules/...`) implement the interfaces in `georg.core.contracts` and must not import the database, job queue, web layer, or other modules. Only the core (`pipeline`, `jobs`, `review`, `publish`) touches persistence.
 - **Do not change `georg.core.contracts` or the database schema** unless your issue says so. Propose interface changes in the issue or PR description.
-- **Every source file** starts with `# SPDX-License-Identifier: AGPL-3.0-only`. Never add copyright notices.
+- **Every source file** starts with `# SPDX-License-Identifier: AGPL-3.0-only`, except the WordPress plugin under `wordpress/`, which is GPL-2.0-or-later (`// SPDX-License-Identifier: GPL-2.0-or-later`) like WordPress itself. Never add copyright notices.
 - **Secrets** come only from environment variables or the configured secret store. Never commit credentials, real API keys, or private recordings. The reference scripts this project grew from contained plaintext credentials; never copy values from them.
 - **Tests** must not use the network or paid APIs. Use recorded responses or fakes. Generate test audio with FFmpeg (`lavfi` sources) rather than committing large media files.
 - **Style:** `ruff` formatting and lint rules, `mypy --strict`. Prefer small, typed, pure functions. No comments that merely restate code.

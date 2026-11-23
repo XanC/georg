@@ -5,8 +5,8 @@ Requires at least: 5.6
 Tested up to: 7.1
 Requires PHP: 7.4
 Stable tag: 0.4.1
-License: AGPL-3.0-only
-License URI: https://www.gnu.org/licenses/agpl-3.0.html
+License: GPLv2 or later
+License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
 REST endpoints that let Georg publish sermons into the Church Content plugin.
 

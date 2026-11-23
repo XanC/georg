@@ -1,5 +1,5 @@
 <?php
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later
 /**
  * Plugin Name:       Georg Bridge
  * Plugin URI:        https://github.com/XanC/georg
@@ -7,8 +7,8 @@
  * Version:           0.4.1
  * Requires at least: 5.6
  * Requires PHP:      7.4
- * License:           AGPL-3.0-only
- * License URI:       https://www.gnu.org/licenses/agpl-3.0.html
+ * License:           GPL-2.0-or-later
+ * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain:       georg-bridge
  *
  * @package GeorgBridge

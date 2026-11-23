@@ -1,5 +1,5 @@
 <?php
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later
 /**
  * Command-line tests for includes/sermon.php: `php tests/full-text-test.php`. Exits non-zero
  * on failure.
