@@ -7,6 +7,7 @@
  * @package GeorgBridge
  */
 
+define( 'ABSPATH', __DIR__ . '/' );
 require __DIR__ . '/../includes/sermon.php';
 
 $georg_failures = 0;

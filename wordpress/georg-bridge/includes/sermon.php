@@ -6,6 +6,10 @@
  * @package GeorgBridge
  */
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 /**
  * What to do with Church Content's "Full sermon text provided" meta for a request value.
  *

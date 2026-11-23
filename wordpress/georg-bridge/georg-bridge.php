@@ -4,7 +4,7 @@
  * Plugin Name:       Georg Bridge
  * Plugin URI:        https://github.com/XanC/georg
  * Description:       REST endpoints that let Georg upload sermon audio and create or update Church Content sermons.
- * Version:           0.4.1
+ * Version:           0.4.2
  * Requires at least: 5.6
  * Requires PHP:      7.4
  * License:           GPL-2.0-or-later
@@ -21,7 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 require_once __DIR__ . '/includes/signing.php';
 require_once __DIR__ . '/includes/sermon.php';
 
-define( 'GEORG_BRIDGE_VERSION', '0.4.1' );
+define( 'GEORG_BRIDGE_VERSION', '0.4.2' );
 define( 'GEORG_BRIDGE_NAMESPACE', 'georg/v1' );
 define( 'GEORG_BRIDGE_WRITTEN_META', '_georg_written' );
 define( 'GEORG_BRIDGE_KEY_META', '_georg_publication_key' );
@@ -367,7 +367,6 @@ function georg_bridge_find( $post_type, $key, $statuses ) {
 			'posts_per_page'   => 1,
 			'orderby'          => 'ID',
 			'order'            => 'ASC',
-			'suppress_filters' => true,
 			'no_found_rows'    => true,
 		)
 	);
@@ -414,7 +413,6 @@ function georg_bridge_file_in_use( $filename, $except ) {
 			'post__not_in'     => array( (int) $except ),
 			'fields'           => 'ids',
 			'posts_per_page'   => 1,
-			'suppress_filters' => true,
 			'no_found_rows'    => true,
 		)
 	);
@@ -577,7 +575,7 @@ function georg_bridge_store_audio( $request, $tmp ) {
 				return new WP_Error( 'georg_move_failed', __( 'Could not store the uploaded file.', 'georg-bridge' ), array( 'status' => 500 ) );
 			}
 			$stat = stat( dirname( $path ) );
-			chmod( $path, $stat['mode'] & 0000666 );
+			chmod( $path, $stat['mode'] & 0000666 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- same permissions core's _wp_handle_upload() sets.
 		}
 
 		require_once ABSPATH . 'wp-admin/includes/image.php';
